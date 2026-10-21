@@ -8,3 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Editor and OS files
+.DS_Store
+.ropeproject
+.pytest_cache

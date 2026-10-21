@@ -1,0 +1,53 @@
+# Example provcat configuration.
+# Copy it to ./provcat.yaml, or point PROVCAT_CONFIG at it.
+# The logical schemes keep the shapes from the provcat docs as found
+# (docs/URIs_and_Selectors.md in the first commit), and point them at lakeFS.
+
+stores:
+  # file, s3 and github exist without configuration. Add named stores here.
+  lakefs:
+    driver: s3
+    endpoint_url: ${oc.env:LAKEFS_S3_ENDPOINT,http://localhost:8000}
+    profile: lakefs          # keys in ~/.aws/credentials under [lakefs]
+
+cache:
+  root: ${oc.env:PROVCAT_CACHE,${oc.env:HOME}/.cache/provcat}
+
+schemes:
+  # data+table://org/domain/env/family/name[?at=branch:X|commit:X|stage:NAME]
+  data+table:
+    parts: [org, domain, env, family, name]
+    target: "lakefs://{family}-{name}-data/{ref}/{org}/{domain}/{env}/{family}/{name}"
+    ref: main
+
+  # experiment://org/team/env/project/pipeline
+  experiment:
+    parts: [org, team, env, project, pipeline]
+    target: "lakefs://exp-{project}/{ref}/{org}/{team}/{env}/mlflow/experiments/{project}/{pipeline}"
+    ref: main
+
+  # model://org/team/env/project/model_name?at=version:N
+  model:
+    parts: [org, team, env, project, model_name]
+    target: "lakefs://model-{model_name}/main/{org}/{team}/{env}/{project}/versions/v{version}"
+
+  # artifact+prompt://org/team/env/project/name
+  artifact+prompt:
+    parts: [org, team, env, project, name]
+    target: "lakefs://{project}-artifacts/{ref}/{org}/{team}/{env}/{project}/artifacts/prompt/{name}"
+    ref: main
+  artifact+card:
+    parts: [org, team, env, project, name]
+    target: "lakefs://{project}-artifacts/{ref}/{org}/{team}/{env}/{project}/artifacts/card/{name}"
+    ref: main
+
+  # code://owner/repo/path[?at=branch:X|tag:X|commit:X]
+  code:
+    parts: [owner, repo]
+    rest: path
+    target: "github://{owner}/{repo}/{path}"
+    pass_selector: true
+
+stages:
+  "data+table://acme/shared/prod/agreements/qa_outputs":
+    production: "commit:b8a2f9c123456"
