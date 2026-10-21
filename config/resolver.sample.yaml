@@ -1,0 +1,41 @@
+repos:
+  data:
+    template: "agreements-qa_outputs-data"
+  experiments:
+    template: "exp-proj-{project}"
+  models:
+    template: "model-{model_name}"
+  artifacts:
+    template: "proj-{project}-artifacts"
+
+paths:
+  experiment:
+    base: "{org}/{team}/{env}/mlflow/experiments/{project}/{pipeline}"
+  run:
+    base: "{project}/{pipeline}/{run_id}"
+  model:
+    base: "{org}/{team}/{env}/{project}/versions/v{version}"
+  data_table:
+    base: "{org}/{domain}/{env}/{family}/{name}"
+  artifact:
+    base: "{org}/{team}/{env}/{project}/artifacts/{type}/{name}"
+
+routing:
+  data+table:
+    repo_kind: "data"
+    path_kind: "data_table"
+  model:
+    repo_kind: "models"
+    path_kind: "model"
+  experiment:
+    repo_kind: "experiments"
+    path_kind: "experiment"
+  artifact+prompt:
+    repo_kind: "artifacts"
+    path_kind: "artifact"
+  artifact+card:
+    repo_kind: "artifacts"
+    path_kind: "artifact"
+  artifact+dataset-card:
+    repo_kind: "artifacts"
+    path_kind: "artifact"
