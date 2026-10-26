@@ -86,7 +86,7 @@ A driver class has four methods. Each method takes the cache.
 - **`list(uri, cache)`:** returns the entries directly inside a folder.
 - **`fetch(uri, cache)`:** returns a local path that holds the file or folder.
 
-To add a driver, write a subclass of `Store`, set `driver`, list its options in `option_names`, and decorate the class with `register_driver`. A store entry with `driver: <name>` then uses it.
+To add a driver, write a subclass of `Store`, set `driver`, give its options and their types in `option_types()`, and decorate the class with `register_driver`. A store entry with `driver: <name>` then uses it.
 
 ### The cache
 

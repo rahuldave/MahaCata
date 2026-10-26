@@ -101,6 +101,23 @@ def test_copied_cache_still_serves_offline(github, tmp_path):
     assert off.read("github://owner/repo/README.md") == b"hello B\n"
 
 
+def test_offline_needs_the_whole_cache_root(github, tmp_path):
+    # Tour review, finding 1: a mount without .provcat serves nothing offline.
+    import shutil
+
+    cat(github, tmp_path).fetch("github://owner/repo/README.md")
+    stores = {"stores": {"github": {"api_url": github.api_url}}}
+    part = tmp_path / "part"
+    shutil.copytree(tmp_path / "cache" / "github", part / "github")
+    off = Catalog(stores, cache_root=part, offline=True)
+    with pytest.raises(OfflineMiss):
+        off.read("github://owner/repo/README.md")
+    whole = tmp_path / "whole"
+    shutil.copytree(tmp_path / "cache", whole)
+    off = Catalog(stores, cache_root=whole, offline=True)
+    assert off.read("github://owner/repo/README.md") == b"hello B\n"
+
+
 def test_changed_cached_bytes_are_fetched_again(github, tmp_path):
     c = cat(github, tmp_path)
     p = c.fetch(f"github://owner/repo/README.md?at=commit:{SHA_A}")
