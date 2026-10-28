@@ -83,3 +83,29 @@ def test_data_folder_values(tmp_path, monkeypatch):
     assert LakefsBackend.data_folder("") is None
     assert LakefsBackend.data_folder("~/d") == (tmp_path / "d").resolve()
     assert LakefsBackend.data_folder("rel") == (tmp_path / "rel").resolve()
+
+
+def test_cleanup_all_runs_every_backend(data):
+    # Review of the isolation test, finding 1: B is cleaned up when A fails.
+    from object_store_suite import cleanup_all
+
+    a = backend(data, ["provcat-test-aaa"], fail={"provcat-test-aaa"})
+    b = backend(data, ["provcat-test-bbb"])
+    with pytest.raises(RuntimeError, match="provcat-test-aaa was not deleted"):
+        cleanup_all(a, b)
+    assert b.deleted == ["/repositories/provcat-test-bbb"]
+    assert not (data / "provcat-test-bbb").exists()
+
+
+def test_a_repository_that_was_never_made_is_skipped(data):
+    # Finding 6: the name is recorded before the create; a 404 on delete is fine.
+    import urllib.error
+
+    b = backend(data, ["provcat-test-new"])
+
+    def api(method, path, body=None):
+        raise urllib.error.HTTPError(path, 404, "Not Found", {}, None)
+
+    b._api = api
+    b.cleanup()  # no error, and nothing else is touched
+    assert (data / "provcat-test-aaa").exists()

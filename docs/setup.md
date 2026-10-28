@@ -218,3 +218,18 @@ Start lakeFS and save its keys as the profile `lakefs`, as above. The tests make
 ```
 PROVCAT_SYSTEM_LAKEFS=http://localhost:8000 PROVCAT_SYSTEM_LAKEFS_DATA=~/lakefs/data uv run pytest -m system
 ```
+
+To test isolation between orgs, run a second lakeFS:
+
+1. Give it its own configuration file, with its own port, for example `listen_address: "127.0.0.1:8001"`. Give it its own metadata, in a local database folder or its own Postgres database. Give it its own blockstore path.
+2. Start it with `lakefs run --config <file>`. Do not use `--quickstart` for either server. Every quickstart has the same fixed keys, so each server would accept the other's keys.
+3. Make its admin user through its setup API. `lakefs setup` cannot run while a server with a local database runs.
+
+   ```
+   curl -X POST -H 'Content-Type: application/json' -d '{"username": "admin"}' http://127.0.0.1:8001/api/v1/setup_lakefs
+   ```
+
+4. Save the access key and secret key from the reply as the profile `lakefs-b` in `~/.aws/credentials`.
+5. Set `PROVCAT_SYSTEM_LAKEFS_B=http://127.0.0.1:8001`, and `PROVCAT_SYSTEM_LAKEFS_B_DATA` to its blockstore path.
+
+`PROVCAT_SYSTEM_LAKEFS_PROFILE` and `PROVCAT_SYSTEM_LAKEFS_B_PROFILE` change the two profile names, which are `lakefs` and `lakefs-b` by default.

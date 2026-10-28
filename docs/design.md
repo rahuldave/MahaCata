@@ -156,7 +156,7 @@ A shared cache is not a boundary either. Its folders, such as `<cache>/lakefs-gl
 
 The keys keep tenants apart only if the server checks them. The open-source lakeFS has no access control. It answers 501 to the group and policy APIs, and every user can read every repository. With one open-source lakeFS, the stores for each org route the requests. They do not stop one org's keys from reading another org's repositories. To enforce the separation, use one of these:
 
-- **A lakeFS for each org.** Point each org's store at its own lakeFS server, with `endpoint_url`.
+- **A lakeFS for each org.** Point each org's store at its own lakeFS server, with `endpoint_url`. The system test `tests/system/test_lakefs_isolation.py` checks this with two real servers. Each org reads its own data, and its store finds no repository of the other org. Each server refuses the other server's keys, at the S3 gateway and at the API.
 - **lakeFS with access control.** lakeFS Cloud and lakeFS Enterprise can limit a user to its own repositories.
 
 These parts of tenancy are not built yet:

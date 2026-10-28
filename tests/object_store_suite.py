@@ -161,9 +161,11 @@ class LakefsBackend(S3Backend):
         return self._api("GET", f"/repositories/{repo}/refs/{ref}/commits?amount=1000")["results"]
 
     def make_bucket(self, name):
+        # Recorded first, so a create that times out after the server made
+        # the repository is still cleaned up.
+        self.created.append(name)
         self._api("POST", "/repositories", {"name": name, "storage_namespace": f"local://{name}",
                                              "default_branch": "main"})
-        self.created.append(name)
 
     @staticmethod
     def data_folder(value):
@@ -190,6 +192,8 @@ class LakefsBackend(S3Backend):
             try:
                 self._api("DELETE", f"/repositories/{name}")
             except Exception as e:
+                if getattr(e, "code", None) == 404:
+                    continue  # never made, so there is nothing to delete
                 problems.append(f"repository {name} was not deleted: {e}")
                 continue
             if data is None:
@@ -208,6 +212,18 @@ class LakefsBackend(S3Backend):
                     problems.append(f"{folder} was not deleted: {e}")
         if problems:
             raise RuntimeError("lakeFS cleanup: " + "; ".join(problems))
+
+
+def cleanup_all(*backends):
+    """Clean up every backend, even after one fails, and raise one error."""
+    problems = []
+    for b in backends:
+        try:
+            b.cleanup()
+        except Exception as e:
+            problems.append(str(e))
+    if problems:
+        raise RuntimeError("; ".join(problems))
 
 
 @pytest.fixture
