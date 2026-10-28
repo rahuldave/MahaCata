@@ -269,3 +269,32 @@ def test_api_errors_name_the_api(s3_endpoint, api, data, tmp_path):
     api.fail_with = 500
     with pytest.raises(StoreError, match="lakeFS API error 500"):
         cat(s3_endpoint, api, tmp_path).pin("lakefs://repo/main/x")
+
+
+def test_each_org_reads_with_its_own_keys(s3_endpoint, api, data, tmp_path, monkeypatch):
+    # Keys for each tenant: lakefs-{org} picks a store, and each store has its
+    # own profile, so the API and the gateway see that org's keys only.
+    creds = tmp_path / "credentials"
+    creds.write_text("[acme]\naws_access_key_id = ACMEKEY\naws_secret_access_key = acmesecret\n"
+                     "[globex]\naws_access_key_id = GLOBEXKEY\naws_secret_access_key = globexsecret\n")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(creds))
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "none"))
+    store = {"driver": "lakefs", "endpoint_url": s3_endpoint, "api_url": api.api_url}
+    cfg = {"stores": {"lakefs-acme": {**store, "profile": "acme"}, "lakefs-globex": {**store, "profile": "globex"}},
+           "schemes": {"t": {"parts": ["org", "env", "name"], "target": "lakefs-{org}://repo/{ref}/t/{name}",
+                             "ref": "{env}", "match": {"org": "[a-z0-9]{1,20}"}}}}
+    c = Catalog(cfg, cache_root=tmp_path / "cache")
+
+    def key(header):
+        return base64.b64decode(header.split()[1]).decode().split(":")[0]
+
+    api.auth.clear()
+    assert c.read(f"t://acme/main/a.csv?at=ts:{T1 + 1}") == b"first"
+    assert {key(h) for h in api.auth} == {"ACMEKEY"}
+    api.auth.clear()
+    assert c.read(f"t://globex/main/a.csv?at=ts:{T1 + 1}") == b"first"
+    assert {key(h) for h in api.auth} == {"GLOBEXKEY"}
+    api.auth.clear()
+    with pytest.raises(Exception, match="no store named 'lakefs-initech'"):
+        c.read("t://initech/main/a.csv")
+    assert api.auth == []  # refused before any request

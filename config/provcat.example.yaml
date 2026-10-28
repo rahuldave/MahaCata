@@ -5,8 +5,8 @@
 # the owner is on GitHub. For lakeFS, which has no orgs, each tenant gets its
 # own repositories, and each environment is a branch:
 #
-#   data+table://ORG/DOMAIN/ENV/...        -> lakefs://ORG-data-DOMAIN/ENV/tables/...
-#   model://ORG/TEAM/ENV/PROJECT/...       -> lakefs://ORG-ml-PROJECT/ENV/TEAM/models/...
+#   data+table://ORG/DOMAIN/ENV/...        -> lakefs-ORG://ORG-data-DOMAIN/ENV/tables/...
+#   model://ORG/TEAM/ENV/PROJECT/...       -> lakefs-ORG://ORG-ml-PROJECT/ENV/TEAM/models/...
 #   code://ORG/REPO/ENV/PATH               -> github://ORG/REPO/PATH, branch ENV
 #
 # lakeFS repository names have 3 to 63 lowercase letters, digits and "-",
@@ -18,11 +18,24 @@
 # example prod and dev.
 
 stores:
-  # file, s3 and github exist without configuration. Add named stores here.
+  # file, s3, github, gs and az exist without configuration. Add named stores here.
   lakefs:
     driver: lakefs           # S3 gateway for data, REST API for pins and ?at=ts:
     endpoint_url: ${oc.env:LAKEFS_S3_ENDPOINT,http://localhost:8000}
     profile: lakefs          # keys in ~/.aws/credentials under [lakefs]
+
+  # One store for each org, with that org's own keys. The logical schemes
+  # below name the store lakefs-{org}, so a logical URI of an org resolves only
+  # to that org's store. The admin store "lakefs" above reads every repository;
+  # leave it out of a tenant's configuration. See "Tenants" in docs/design.md.
+  lakefs-acme:
+    driver: lakefs
+    endpoint_url: ${oc.env:LAKEFS_S3_ENDPOINT,http://localhost:8000}
+    profile: lakefs-acme
+  lakefs-globex:
+    driver: lakefs
+    endpoint_url: ${oc.env:LAKEFS_S3_ENDPOINT,http://localhost:8000}
+    profile: lakefs-globex
 
 cache:
   root: ${oc.env:PROVCAT_CACHE,${oc.env:HOME}/.cache/provcat}
@@ -31,7 +44,7 @@ schemes:
   # data+table://org/domain/env/family/name[?at=branch:X|commit:X|stage:NAME|ts:TIME]
   data+table:
     parts: [org, domain, env, family, name]
-    target: "lakefs://{org}-data-{domain}/{ref}/tables/{family}/{name}"
+    target: "lakefs-{org}://{org}-data-{domain}/{ref}/tables/{family}/{name}"
     ref: "{env}"
     match:
       org: "[a-z0-9]{1,20}"
@@ -41,7 +54,7 @@ schemes:
   # experiment://org/team/env/project/pipeline
   experiment:
     parts: [org, team, env, project, pipeline]
-    target: "lakefs://{org}-ml-{project}/{ref}/{team}/experiments/{pipeline}"
+    target: "lakefs-{org}://{org}-ml-{project}/{ref}/{team}/experiments/{pipeline}"
     ref: "{env}"
     match: &ml_names
       org: "[a-z0-9]{1,20}"
@@ -51,19 +64,19 @@ schemes:
   # model://org/team/env/project/model_name?at=version:N
   model:
     parts: [org, team, env, project, model_name]
-    target: "lakefs://{org}-ml-{project}/{ref}/{team}/models/{model_name}/v{version}"
+    target: "lakefs-{org}://{org}-ml-{project}/{ref}/{team}/models/{model_name}/v{version}"
     ref: "{env}"
     match: *ml_names
 
   # artifact+prompt://org/team/env/project/name
   artifact+prompt:
     parts: [org, team, env, project, name]
-    target: "lakefs://{org}-ml-{project}/{ref}/{team}/prompts/{name}"
+    target: "lakefs-{org}://{org}-ml-{project}/{ref}/{team}/prompts/{name}"
     ref: "{env}"
     match: *ml_names
   artifact+card:
     parts: [org, team, env, project, name]
-    target: "lakefs://{org}-ml-{project}/{ref}/{team}/cards/{name}"
+    target: "lakefs-{org}://{org}-ml-{project}/{ref}/{team}/cards/{name}"
     ref: "{env}"
     match: *ml_names
 

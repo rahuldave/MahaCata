@@ -81,9 +81,7 @@ class LakefsStore(S3Store):
     def _authorization(self, uri: Uri) -> str:
         """Basic auth with the keys of the profile or the environment, read
         each time, so keys that refresh stay current."""
-        import boto3
-
-        creds = boto3.session.Session(profile_name=self.options.get("profile")).get_credentials()
+        creds = self._session().get_credentials()
         if creds is None:
             raise StoreError(f"{uri}: no keys for lakeFS; set a profile or AWS_ACCESS_KEY_ID")
         frozen = creds.get_frozen_credentials()

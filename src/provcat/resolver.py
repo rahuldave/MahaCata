@@ -56,6 +56,7 @@ from .uri import _SAFE, Selector, Uri, parse, parse_selector
 
 _NAME = re.compile(r"[a-z_][a-z0-9_]*")
 _REF_KINDS = ("branch", "tag", "commit")
+_STORE_VALUE = re.compile(r"[a-z0-9]+")
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,7 @@ class SchemeSpec:
     ref: str | None = None
     pass_selector: bool = False
     match: tuple[tuple[str, re.Pattern], ...] = ()
+    store_field: str | None = None  # the part that picks the store, as in lakefs-{org}
 
     @classmethod
     def from_config(cls, name: str, raw: object) -> SchemeSpec:
@@ -136,6 +138,26 @@ class SchemeSpec:
         if not isinstance(match, dict):
             raise ResolveError(f"{where}.match must be a mapping of part name to pattern")
         patterns = []
+        # A field in the store name picks the store, for example lakefs-{org}
+        # gives each org its own store and keys. The rules keep that safe:
+        # one field, next to fixed text with a "-", so no value can name a
+        # built-in store such as file or s3, and two values never give one
+        # name. At resolve time the value must also be lowercase letters and
+        # digits only (see _STORE_VALUE).
+        scheme_part = target.split("://", 1)[0]
+        scheme_fields = [f for _, f, _, _ in string.Formatter().parse(scheme_part) if f is not None]
+        store_field = None
+        if scheme_fields:
+            if len(scheme_fields) > 1:
+                raise ResolveError(f"{where}.target: the store name can hold one field, not {len(scheme_fields)}")
+            store_field = scheme_fields[0]
+            if store_field not in parts:
+                raise ResolveError(f"{where}.target: the store name can use only part names, not {{{store_field}}}")
+            if store_field not in match:
+                raise ResolveError(f"{where}.target: {{{store_field}}} picks the store, so it needs a match pattern")
+            if "-" not in scheme_part.replace("{" + store_field + "}", ""):
+                raise ResolveError(f"{where}.target: write the store name with fixed text and a '-', "
+                                   f"for example lakefs-{{{store_field}}}")
         for part, pattern in match.items():
             if part == raw.get("rest"):
                 raise ResolveError(f"{where}.match: {part!r} is the rest name, which cannot take a pattern")
@@ -146,7 +168,7 @@ class SchemeSpec:
             except re.error as e:
                 raise ResolveError(f"{where}.match.{part}: bad pattern: {e}") from None
         return cls(name, tuple(parts), target, raw.get("rest"), raw.get("ref"),
-                   bool(raw.get("pass_selector", False)), tuple(patterns))
+                   bool(raw.get("pass_selector", False)), tuple(patterns), store_field)
 
 
 class TemplateResolver(Resolver):
@@ -201,6 +223,9 @@ class TemplateResolver(Resolver):
         for part, pattern in spec.match:
             if not pattern.fullmatch(named[part]):
                 raise ResolveError(f"{uri}: {part} {named[part]!r} does not match {pattern.pattern}")
+        if spec.store_field and not _STORE_VALUE.fullmatch(named[spec.store_field]):
+            raise ResolveError(f"{uri}: {spec.store_field} {named[spec.store_field]!r} picks the store, "
+                               "so it must be lowercase letters and digits only")
         values: dict[str, str] = {k: q(v) for k, v in named.items()}
         if spec.rest:
             values[spec.rest] = "/".join(q(v) for v in given[n:])

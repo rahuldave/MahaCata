@@ -118,6 +118,16 @@ aws_access_key_id = <access key>
 aws_secret_access_key = <secret key>
 ```
 
+The example configuration also has one store for each org, `lakefs-acme` and `lakefs-globex`, each with its own profile. To use them, add a profile with each org's keys:
+
+```
+[lakefs-acme]
+aws_access_key_id = <acme access key>
+aws_secret_access_key = <acme secret key>
+```
+
+provcat stops with "no AWS profile named 'lakefs-acme'" when the profile is missing.
+
 The example provcat configuration has a store `lakefs` that uses this profile, with the endpoint `http://localhost:8000`. The environment variable `LAKEFS_S3_ENDPOINT` changes the endpoint.
 
 A lakeFS repository has its own storage. When you delete a repository, lakeFS keeps that storage. With the local blockstore, delete the folder of the repository under the blockstore path.

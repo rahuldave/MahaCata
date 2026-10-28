@@ -31,7 +31,7 @@ A **logical URI** has a scheme that the configuration defines, for example `data
 
 ```
 data+table://acme/shared/prod/agreements/qa_outputs?at=stage:production
-  -> lakefs://acme-data-shared/b8a2f9c123456/tables/agreements/qa_outputs
+  -> lakefs-acme://acme-data-shared/b8a2f9c123456/tables/agreements/qa_outputs
 
 code://octocat/Hello-World/master/README
   -> github://octocat/Hello-World/README?at=branch:master

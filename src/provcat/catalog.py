@@ -52,7 +52,8 @@ class Catalog:
             raise ResolveError(f"unknown scheme {u.scheme!r}; known: {', '.join(known)}")
         res = self.resolver.resolve(u)
         if res.physical.scheme not in self.stores:
-            raise ResolveError(f"{u} resolves to {res.physical}, whose scheme is not a store")
+            raise ResolveError(f"{u} resolves to {res.physical}, but there is no store named "
+                               f"{res.physical.scheme!r}; add one to the configuration")
         return res
 
     def _store(self, uri: str | Uri) -> tuple[Store, Uri]:

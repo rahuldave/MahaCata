@@ -174,17 +174,22 @@ def test_example_config_gives_each_org_its_own_repositories():
     cat = Catalog(YamlConfig(EXAMPLE).load(), cache_root="/nonexistent")
 
     def phys(u):
-        return str(cat.resolve(u).physical)
+        # The template alone, so that orgs without a store still show the mapping.
+        return str(cat.resolver.resolve(parse(u)).physical)
 
-    assert phys(TABLE) == "lakefs://acme-data-shared/prod/tables/agreements/qa_outputs"
-    assert phys(TABLE + "?at=stage:production") == "lakefs://acme-data-shared/b8a2f9c123456/tables/agreements/qa_outputs"
+    assert phys(TABLE) == "lakefs-acme://acme-data-shared/prod/tables/agreements/qa_outputs"
+    assert phys(TABLE + "?at=stage:production") == "lakefs-acme://acme-data-shared/b8a2f9c123456/tables/agreements/qa_outputs"
     assert phys("data+table://globex/shared/dev/agreements/qa_outputs") == (
-        "lakefs://globex-data-shared/dev/tables/agreements/qa_outputs")
-    assert phys("model://acme/ml/prod/churn/xgb?at=version:3") == "lakefs://acme-ml-churn/prod/ml/models/xgb/v3"
-    assert phys("model://globex/ml/prod/churn/xgb?at=version:3") == "lakefs://globex-ml-churn/prod/ml/models/xgb/v3"
+        "lakefs-globex://globex-data-shared/dev/tables/agreements/qa_outputs")
+    assert phys("model://acme/ml/prod/churn/xgb?at=version:3") == "lakefs-acme://acme-ml-churn/prod/ml/models/xgb/v3"
+    assert phys("model://globex/ml/prod/churn/xgb?at=version:3") == "lakefs-globex://globex-ml-churn/prod/ml/models/xgb/v3"
     assert phys("artifact+prompt://acme/teams/prod/credit/default_v1") == (
-        "lakefs://acme-ml-credit/prod/teams/prompts/default_v1")
+        "lakefs-acme://acme-ml-credit/prod/teams/prompts/default_v1")
     # The env is the GitHub branch, and a selector replaces it.
+    # The example has stores for acme and globex only; any other org is refused.
+    assert str(cat.resolve(TABLE).physical).startswith("lakefs-acme://")
+    with pytest.raises(ResolveError, match="no store named 'lakefs-initech'"):
+        cat.resolve("data+table://initech/shared/prod/f/n")
     assert phys("code://rahuldave/x/prod/README.md") == "github://rahuldave/x/README.md?at=branch:prod"
     assert phys("code://rahuldave/x/prod/src/a.py?at=tag:v1") == "github://rahuldave/x/src/a.py?at=tag:v1"
     assert phys("code://rahuldave/x/prod") == "github://rahuldave/x?at=branch:prod"
@@ -204,9 +209,9 @@ def test_example_config_gives_each_org_its_own_repositories():
     # Tenant review, findings 1 and 2: no two names give one repository.
     with pytest.raises(ResolveError, match="org 'a-b' does not match"):
         phys("data+table://a-b/c/prod/f/n")
-    assert phys("data+table://a/b-c/prod/f/n").startswith("lakefs://a-data-b-c/")
-    assert phys("data+table://acme/churn/prod/models/x").startswith("lakefs://acme-data-churn/")
-    assert phys("model://acme/tables/prod/churn/x?at=version:3").startswith("lakefs://acme-ml-churn/")
+    assert phys("data+table://a/b-c/prod/f/n").startswith("lakefs-a://a-data-b-c/")
+    assert phys("data+table://acme/churn/prod/models/x").startswith("lakefs-acme://acme-data-churn/")
+    assert phys("model://acme/tables/prod/churn/x?at=version:3").startswith("lakefs-acme://acme-ml-churn/")
     with pytest.raises(ResolveError, match="does not match"):
         phys("model://acme/t/prod/Churn/x?at=version:3")
     # Second tenant review, findings 1 and 2: lengths and branch names stay
@@ -279,5 +284,47 @@ def test_catalog_refuses_scheme_clash_and_dangling_targets():
     with pytest.raises(Exception, match="both stores and logical"):
         Catalog({"schemes": {"s3": {"parts": ["a"], "target": "file:///x"}}})
     cat = Catalog({"schemes": {"x": {"parts": ["a"], "target": "nostore://a/b"}}})
-    with pytest.raises(ResolveError, match="not a store"):
+    with pytest.raises(ResolveError, match="no store named .nostore."):
         cat.resolve("x://v")
+
+
+def test_a_store_per_org():
+    # Keys for each tenant: the org picks its store, so each org has its own keys.
+    from provcat import Catalog
+
+    cfg = {"stores": {"lakefs-acme": {"driver": "lakefs", "endpoint_url": "http://x"}},
+           "schemes": {"t": {"parts": ["org", "name"], "target": "lakefs-{org}://{org}-data/main/{name}",
+                             "match": {"org": "[a-z0-9]{1,20}"}}}}
+    c = Catalog(cfg)
+    assert str(c.resolve("t://acme/x").physical) == "lakefs-acme://acme-data/main/x"
+    # An org without a store is refused, so it can never borrow another org's keys.
+    with pytest.raises(ResolveError, match="no store named 'lakefs-globex'; add one"):
+        c.resolve("t://globex/x")
+
+
+def test_a_field_in_the_store_name_needs_a_pattern():
+    # Without a pattern, an org named "file" or "s3" could reach a built-in store.
+    with pytest.raises(ResolveError, match=r"\{org\} picks the store, so it needs a match pattern"):
+        TemplateResolver({"t": {"parts": ["org", "name"], "target": "{org}://bucket/{name}"}})
+    with pytest.raises(ResolveError, match="only part names"):
+        TemplateResolver({"t": {"parts": ["org"], "target": "lakefs-{ref}://b/{org}", "ref": "main"}})
+
+
+@pytest.mark.parametrize("target, match, error", [
+    # Review of keys for each tenant, finding 2: a value cannot name a built-in store.
+    ("{org}://bucket/{n}", {"org": ".+"}, "fixed text and a '-'"),
+    # Finding 3: two fields side by side could give one name for two values.
+    ("lakefs-{org}{n}://b/x", {"org": "[a-z]+", "n": "[a-z]+"}, "one field, not 2"),
+])
+def test_unsafe_store_names_are_refused_at_load(target, match, error):
+    with pytest.raises(ResolveError, match=error):
+        TemplateResolver({"t": {"parts": ["org", "n"], "target": target, "match": match}})
+
+
+def test_a_store_value_must_be_plain_even_with_a_loose_pattern():
+    # Finding 3: a "-" in the value could reach a store meant for another org.
+    res = TemplateResolver({"t": {"parts": ["org", "n"], "target": "lakefs-{org}://b/{n}",
+                                  "match": {"org": "[a-z-]+"}}}).resolve
+    assert str(res(parse("t://acme/x")).physical) == "lakefs-acme://b/x"
+    with pytest.raises(ResolveError, match="lowercase letters and digits only"):
+        res(parse("t://ac-me/x"))

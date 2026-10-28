@@ -119,18 +119,20 @@ The org is the tenant. It is the first part of every logical URI in the example 
 
 | Logical URI | Physical URI |
 |---|---|
-| `data+table://ORG/DOMAIN/ENV/FAMILY/NAME` | `lakefs://ORG-data-DOMAIN/ENV/tables/FAMILY/NAME` |
-| `experiment://ORG/TEAM/ENV/PROJECT/PIPELINE` | `lakefs://ORG-ml-PROJECT/ENV/TEAM/experiments/PIPELINE` |
-| `model://ORG/TEAM/ENV/PROJECT/NAME?at=version:N` | `lakefs://ORG-ml-PROJECT/ENV/TEAM/models/NAME/vN` |
-| `artifact+prompt://ORG/TEAM/ENV/PROJECT/NAME` | `lakefs://ORG-ml-PROJECT/ENV/TEAM/prompts/NAME` |
-| `artifact+card://ORG/TEAM/ENV/PROJECT/NAME` | `lakefs://ORG-ml-PROJECT/ENV/TEAM/cards/NAME` |
+| `data+table://ORG/DOMAIN/ENV/FAMILY/NAME` | `lakefs-ORG://ORG-data-DOMAIN/ENV/tables/FAMILY/NAME` |
+| `experiment://ORG/TEAM/ENV/PROJECT/PIPELINE` | `lakefs-ORG://ORG-ml-PROJECT/ENV/TEAM/experiments/PIPELINE` |
+| `model://ORG/TEAM/ENV/PROJECT/NAME?at=version:N` | `lakefs-ORG://ORG-ml-PROJECT/ENV/TEAM/models/NAME/vN` |
+| `artifact+prompt://ORG/TEAM/ENV/PROJECT/NAME` | `lakefs-ORG://ORG-ml-PROJECT/ENV/TEAM/prompts/NAME` |
+| `artifact+card://ORG/TEAM/ENV/PROJECT/NAME` | `lakefs-ORG://ORG-ml-PROJECT/ENV/TEAM/cards/NAME` |
 | `code://ORG/REPO/ENV/PATH` | `github://ORG/REPO/PATH?at=branch:ENV` |
 
 lakeFS has no orgs, so each org gets its own repositories, named `ORG-data-DOMAIN` or `ORG-ml-PROJECT`. Each environment is a branch of the repository. For code, the environment is the GitHub branch, and the org is the GitHub owner. The `code` patterns follow the GitHub rules for owners, repositories and branch names, so an org there can have `-` and capital letters.
 
 GitHub ignores case in owner names, so `Octocat` and `octocat` are two logical names for one owner, with two cache folders. A branch name with `/`, such as `feature/x`, cannot be one segment. Name it with a selector, for example `code://ORG/REPO/main/PATH?at=branch:feature/x`.
 
-The `code` shape changed from `code://ORG/REPO/PATH`. An old URI still resolves, but its first path segment becomes the env. So rewrite old `code` URIs with an env. So two orgs never share a repository, a branch or a commit history, and lakeFS permissions can differ for each repository.
+The `code` shape changed from `code://ORG/REPO/PATH`. An old URI still resolves, but its first path segment becomes the env. So rewrite old `code` URIs with an env.
+
+So two orgs never share a lakeFS repository, a branch or a commit history.
 
 In the lakeFS schemes, the `match` patterns keep the names apart and valid for lakeFS:
 
@@ -141,9 +143,24 @@ In the lakeFS schemes, the `match` patterns keep the names apart and valid for l
 
 The environment part picks the branch only when the URI has no `branch:`, `tag:` or `commit:`. A URI such as `...prod/...?at=branch:dev` reads the branch `dev`. Use `commit:` or `stage:` to fix a version, and keep `branch:` for work on a branch outside the environments. A stage pointer belongs to one full URI, so each environment needs its own stage entries.
 
+In the lakeFS schemes, each org also reads with its own keys. The template names the store `lakefs-{org}`, and the configuration has one store for each org, each with its own AWS profile. A logical URI of one org resolves only to that org's store. A logical URI of an org with no store fails, because it names a store that does not exist. `code://` URIs are different, because every org reads GitHub through the one `github` store.
+
+The rules for a field in a store name keep this mapping safe:
+
+- **One field.** The store name holds one field, next to fixed text with a `-`, as in `lakefs-{org}`. So no value can make a built-in name such as `file` or `s3`.
+- **A plain value.** The value must match its `match` pattern, and must be lowercase letters and digits only. So two different values never give one store name.
+
+The mapping is not access control. provcat does not know who runs it, and a physical URI, such as `lakefs-globex://...`, skips the mapping. The real boundary is the keys that a reader holds. Give each tenant a configuration with only its own store, and only its own profile in its AWS files. The example configuration also has the admin store `lakefs`, which reads every repository. Leave it out of a tenant's configuration.
+
+A shared cache is not a boundary either. Its folders, such as `<cache>/lakefs-globex/...`, are plain files. Give each tenant its own cache. Pins live under the store name, so a pin made through the `lakefs` store is not found through `lakefs-acme`.
+
+The keys keep tenants apart only if the server checks them. The open-source lakeFS has no access control. It answers 501 to the group and policy APIs, and every user can read every repository. With one open-source lakeFS, the stores for each org route the requests. They do not stop one org's keys from reading another org's repositories. To enforce the separation, use one of these:
+
+- **A lakeFS for each org.** Point each org's store at its own lakeFS server, with `endpoint_url`.
+- **lakeFS with access control.** lakeFS Cloud and lakeFS Enterprise can limit a user to its own repositories.
+
 These parts of tenancy are not built yet:
 
-- **Keys for each tenant.** All tenants read through one store with one profile. To give each org its own keys, add a store for each org, for example `lakefs-acme`.
 - **A configuration for each tenant.** All tenants share one configuration. An etcd prefix for each org, for example `etcd://host/provcat/acme`, works today but has no tooling.
 
 ### The lakeFS driver

@@ -275,3 +275,16 @@ def test_azure_failed_sign_in_shows_its_cause(monkeypatch, tmp_path):
     c = _azure(monkeypatch, tmp_path, container)
     with pytest.raises(StoreError, match="could not sign in .AADSTS700082"):
         c.stat("az://acct/ctr/key")
+
+
+def test_a_missing_profile_names_the_store(tmp_path, monkeypatch):
+    # Review of keys for each tenant, finding 5: no raw traceback.
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "none"))
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "none"))
+    cfg = {"stores": {"lakefs-acme": {"driver": "lakefs", "endpoint_url": "http://127.0.0.1:9",
+                                      "profile": "lakefs-acme"}}}
+    c = Catalog(cfg, cache_root=tmp_path)
+    with pytest.raises(StoreError, match="store lakefs-acme: no AWS profile named 'lakefs-acme'"):
+        c.pin("lakefs-acme://repo/main/x")
+    with pytest.raises(StoreError, match="no AWS profile named 'lakefs-acme'"):
+        c.read("lakefs-acme://repo/main/x?at=ts:2025-01-01")

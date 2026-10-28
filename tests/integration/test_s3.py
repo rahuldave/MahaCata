@@ -281,7 +281,8 @@ def test_example_schemes_keep_each_org_apart(s3_endpoint, bucket, tmp_path):
     from provcat import YamlConfig
 
     cfg = YamlConfig(Path(__file__).parents[2] / "config" / "provcat.example.yaml").load()
-    cfg["stores"]["lakefs"] = {"driver": "s3", "endpoint_url": s3_endpoint}
+    for org in ("acme", "globex"):
+        cfg["stores"][f"lakefs-{org}"] = {"driver": "s3", "endpoint_url": s3_endpoint}
     for org in ("acme", "globex"):
         bucket.create_bucket(Bucket=f"{org}-data-shared")
         for env in ("prod", "dev"):
@@ -291,7 +292,7 @@ def test_example_schemes_keep_each_org_apart(s3_endpoint, bucket, tmp_path):
     for org in ("acme", "globex"):
         for env in ("prod", "dev"):
             folder = c.fetch(f"data+table://{org}/shared/{env}/agreements/qa")
-            assert folder == tmp_path / "cache" / "lakefs" / f"{org}-data-shared" / env / "tables" / "agreements" / "qa"
+            assert folder == tmp_path / "cache" / f"lakefs-{org}" / f"{org}-data-shared" / env / "tables" / "agreements" / "qa"
             assert (folder / "part-0.csv").read_bytes() == f"{org} {env}".encode()
 
 

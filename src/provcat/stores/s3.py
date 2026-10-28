@@ -46,13 +46,24 @@ class S3Store(ObjectStore):
 
         o = self.options
         style = o.get("addressing_style") or ("path" if o.get("endpoint_url") else "auto")
-        session = boto3.session.Session(profile_name=o.get("profile"))
+        session = self._session()
         return session.client(
             "s3",
             endpoint_url=o.get("endpoint_url"),
             region_name=o.get("region", "us-east-1"),
             config=Config(s3={"addressing_style": style}, retries={"max_attempts": 3}),
         )
+
+    def _session(self):
+        """A boto3 session with the store's profile, or a clear error."""
+        import boto3
+        from botocore.exceptions import ProfileNotFound
+
+        try:
+            return boto3.session.Session(profile_name=self.options.get("profile"))
+        except ProfileNotFound:
+            raise StoreError(f"store {self.name}: no AWS profile named {self.options.get('profile')!r}; "
+                             "add it to ~/.aws/credentials") from None
 
     def locate(self, uri: Uri) -> tuple[str, str]:
         if uri.selector is not None:

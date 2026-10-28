@@ -149,7 +149,7 @@ The org is the tenant. It is the first part of every logical URI, as the owner i
 schemes:
   data+table:
     parts: [org, domain, env, family, name]
-    target: "lakefs://{org}-data-{domain}/{ref}/tables/{family}/{name}"
+    target: "lakefs-{org}://{org}-data-{domain}/{ref}/tables/{family}/{name}"
     ref: "{env}"
     match:
       org: "[a-z0-9]{1,20}"
@@ -175,10 +175,10 @@ Resolve the stage.
 $ uv run provc --config $C resolve 'data+table://acme/shared/prod/agreements/qa_outputs?at=stage:production'
 {
   "logical": "data+table://acme/shared/prod/agreements/qa_outputs?at=stage:production",
-  "physical": "lakefs://acme-data-shared/b8a2f9c123456/tables/agreements/qa_outputs",
+  "physical": "lakefs-acme://acme-data-shared/b8a2f9c123456/tables/agreements/qa_outputs",
   "via": [
     "stage:production -> commit:b8a2f9c123456",
-    "data+table template -> lakefs://acme-data-shared/b8a2f9c123456/tables/agreements/qa_outputs"
+    "data+table template -> lakefs-acme://acme-data-shared/b8a2f9c123456/tables/agreements/qa_outputs"
   ]
 }
 ```
@@ -191,22 +191,24 @@ A `version:` selector fills `{version}` instead, and `{ref}` keeps its default. 
 $ uv run provc --config $C resolve 'model://acme/ml/prod/churn/xgb?at=version:3'
 {
   "logical": "model://acme/ml/prod/churn/xgb?at=version:3",
-  "physical": "lakefs://acme-ml-churn/prod/ml/models/xgb/v3",
+  "physical": "lakefs-acme://acme-ml-churn/prod/ml/models/xgb/v3",
   "via": [
-    "model template -> lakefs://acme-ml-churn/prod/ml/models/xgb/v3"
+    "model template -> lakefs-acme://acme-ml-churn/prod/ml/models/xgb/v3"
   ]
 }
 ```
 
-The scheme `lakefs` in both answers is a store, not a driver. The configuration defines it as the `lakefs` driver with the lakeFS endpoint:
+The scheme `lakefs-acme` in both answers is a store, not a driver. The template names the store `lakefs-{org}`, so each org reads through its own store, with its own keys. The configuration defines the store for `acme` as the `lakefs` driver with the lakeFS endpoint:
 
 ```yaml
 stores:
-  lakefs:
+  lakefs-acme:
     driver: lakefs
     endpoint_url: ${oc.env:LAKEFS_S3_ENDPOINT,http://localhost:8000}
-    profile: lakefs
+    profile: lakefs-acme
 ```
+
+A logical URI of an org with no store fails. For example, `data+table://initech/...` fails with "there is no store named 'lakefs-initech'".
 
 A **driver** is a class that reads one kind of storage. A **store** is a driver with options and a name. The name becomes a URI scheme. The `lakefs` driver is the S3 driver plus the lakeFS REST API, which turns a branch or a time into a commit. So `?at=ts:2026-10-01` on a lakeFS URI reads the branch as it was on that day.
 
