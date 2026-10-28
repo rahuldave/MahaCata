@@ -82,6 +82,11 @@ class S3Store(Store):
             code = str(e.response.get("Error", {}).get("Code", ""))
             if code in ("404", "NoSuchKey", "NoSuchBucket", "NotFound"):
                 raise NotFound(f"{uri}: not found ({code})") from e
+            if code in ("400", "BadRequest") and uri.segments and self.options.get("endpoint_url"):
+                # The lakeFS S3 gateway answers a branch or commit that does not
+                # exist with a bare 400. Other servers can send 400 too, so hedge.
+                raise StoreError(f"{uri}: S3 error {code}; if this store is lakeFS, the branch or commit "
+                                 f"{uri.segments[0]!r} may not exist: {e}") from e
             raise StoreError(f"{uri}: S3 error {code}: {e}") from e
         except BotoCoreError as e:
             raise StoreError(f"{uri}: {e}") from e

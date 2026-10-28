@@ -278,3 +278,53 @@ def test_example_schemes_keep_each_org_apart(s3_endpoint, bucket, tmp_path):
             folder = c.fetch(f"data+table://{org}/shared/{env}/agreements/qa")
             assert folder == tmp_path / "cache" / "lakefs" / f"{org}-data-shared" / env / "tables" / "agreements" / "qa"
             assert (folder / "part-0.csv").read_bytes() == f"{org} {env}".encode()
+
+
+def test_bad_request_names_the_missing_lakefs_ref(s3_endpoint, bucket, tmp_path, monkeypatch):
+    # Real lakeFS answers a missing branch with a bare 400 BadRequest.
+    from botocore.exceptions import ClientError
+
+    from provcat.errors import StoreError
+
+    c = cat(s3_endpoint, tmp_path)
+    store = c.stores["lakefs"]
+
+    class Client:
+        def list_objects_v2(self, **kw):
+            raise ClientError({"Error": {"Code": "BadRequest", "Message": "400 BadRequest"}}, "ListObjectsV2")
+
+    monkeypatch.setattr(store, "_client", Client())
+    with pytest.raises(StoreError, match="branch or commit 'staging' may not exist"):
+        c.list("lakefs://repo/staging/tables")
+
+
+def _bad_request_client(code):
+    from botocore.exceptions import ClientError
+
+    class Client:
+        def head_object(self, **kw):
+            raise ClientError({"Error": {"Code": code}}, "HeadObject")
+
+        def list_objects_v2(self, **kw):
+            raise ClientError({"Error": {"Code": code}}, "ListObjectsV2")
+
+    return Client()
+
+
+def test_bad_request_hint_covers_head_and_only_lakefs_like_stores(s3_endpoint, tmp_path, monkeypatch):
+    # Review of the 400 hint: a HEAD gives a bare "400"; plain AWS and the
+    # bucket root get the plain message.
+    from provcat.errors import StoreError
+
+    c = cat(s3_endpoint, tmp_path)
+    monkeypatch.setattr(c.stores["lakefs"], "_client", _bad_request_client("400"))
+    with pytest.raises(StoreError, match="'staging' may not exist"):
+        c.stat("lakefs://repo/staging/x.csv")
+    with pytest.raises(StoreError) as e:
+        c.list("lakefs://repo")
+    assert "lakeFS" not in str(e.value)
+    aws = Catalog({}, cache_root=tmp_path / "cache2")
+    monkeypatch.setattr(aws.stores["s3"], "_client", _bad_request_client("400"))
+    with pytest.raises(StoreError) as e:
+        aws.stat("s3://my-bucket/reports/q1.parquet")
+    assert "lakeFS" not in str(e.value)
