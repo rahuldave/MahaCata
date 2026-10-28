@@ -50,7 +50,7 @@ provcat follows the Perl `URI` module, in which the scheme of a URI picks the cl
 |---|---|---|
 | `ConfigSource` | `YamlConfig`, `EtcdConfig`, `EmptyConfig` | `src/provcat/config.py` |
 | `Resolver` | `TemplateResolver` | `src/provcat/resolver.py` |
-| `Store` | `LocalStore`, `S3Store`, `GithubStore` | `src/provcat/stores/` |
+| `Store` | `LocalStore`, `GithubStore`, and the object stores `S3Store`, `GcsStore`, `AzureStore` | `src/provcat/stores/` |
 | Cache | `LocalCache` | `src/provcat/cache.py` |
 
 `Catalog` in `src/provcat/catalog.py` joins them. It loads a configuration, makes one store for each entry in `stores`, and makes the resolver from `schemes` and `stages`. A store name and a logical scheme cannot be the same.
@@ -88,6 +88,15 @@ A driver class has four methods. Each method takes the cache.
 - **`fetch(uri, cache)`:** returns a local path that holds the file or folder.
 
 To add a driver, write a subclass of `Store`, set `driver`, give its options and their types in `option_types()`, and decorate the class with `register_driver`. A store entry with `driver: <name>` then uses it.
+
+S3, Google Cloud Storage and Azure Blob Storage share one base class, `ObjectStore` in `src/provcat/stores/objects.py`. It holds stat, list, folder fetch, the cache and offline mode. A driver for one more object store gives only four primitives:
+
+- **`locate(uri)`:** the bucket and the key that a URI names.
+- **`_head`:** the size and version of one object.
+- **`_pages`:** the pages of a listing, with folder prefixes and objects.
+- **`_get`:** writes the bytes of one object, and returns their version.
+
+Each driver uses its cloud's Python SDK, never a command-line tool. The version of a file is the ETag on S3 and Azure, and the generation on GCS. The GCS and Azure SDKs are optional extras, so the drivers import them only when a store is used. An ADLS Gen2 account keeps folders as marker blobs, and the Azure driver leaves them out of listings.
 
 ### The cache
 
@@ -151,7 +160,6 @@ These parts of tenancy are not built yet:
 
 ## Next steps
 
-- **ADLS:** add a driver for Azure Data Lake Storage for the Azure deployment. It follows the S3 driver, with `abfs://container/path` URIs and the `azure-storage-file-datalake` package.
 - **Timestamps:** support `ts:` selectors, which need a list of lakeFS commits.
 - **Writes:** bring back the lakeFS branch, commit and merge commands from the first commit, as a separate interface.
 - **Containers:** mount the cache read-only into containers, and run `provc --offline` inside them.

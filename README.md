@@ -2,7 +2,7 @@
 
 provcat turns a catalog URI into a local path. A catalog URI names a dataset, a model, a prompt or some code in words that stay the same when the storage changes. provcat resolves the URI to a physical location, downloads the object into a local cache, and returns the path.
 
-The first commit of this repository is the provcat code as it was found in `~/Catalog/provcat`. Read [docs/tour.md](docs/tour.md) for a guided tour with commands to run. Read [docs/design.md](docs/design.md) for what that code did, what changed and how the parts fit together.
+The first commit of this repository is the provcat code as it was found in `~/Catalog/provcat`. Read [docs/tour.md](docs/tour.md) for a guided tour with commands to run. Read [docs/setup.md](docs/setup.md) to install lakeFS, etcd and the tools that the tests need. Read [docs/design.md](docs/design.md) for what that code did, what changed and how the parts fit together.
 
 ## Install and run
 
@@ -13,6 +13,15 @@ uv sync
 uv run provc --help
 uv run pytest
 ```
+
+The base package reads local files, GitHub, S3 and lakeFS. Google Cloud Storage and Azure each need an extra, which installs that cloud's Python SDK:
+
+```
+pip install 'provcat[gcs]'
+pip install 'provcat[azure]'
+```
+
+`uv sync` installs both for development.
 
 ## Catalog URIs
 
@@ -39,15 +48,23 @@ In the example configuration, the org is the tenant and the first part of every 
 
 ## Stores
 
-A store is a named instance of a driver. The stores `file`, `s3` and `github` exist without configuration. The configuration can add more, for example a store `lakefs` that uses the S3 driver with the lakeFS endpoint.
+A store is a named instance of a driver. The stores `file`, `s3`, `github`, `gs` and `az` exist without configuration. So a logical scheme cannot use one of those five names. The configuration can add more, for example a store `lakefs` that uses the S3 driver with the lakeFS endpoint.
 
 | Driver | URI | What it does |
 |---|---|---|
 | `file` | `file:///abs/path` | Returns the local path. It does not copy into the cache. Option `root` confines the store to one folder. |
 | `s3` | `s3://bucket/key` | Reads AWS S3 or any S3-compatible server, for example MinIO or the lakeFS S3 gateway. Options are `endpoint_url`, `region`, `profile` and `addressing_style`. |
 | `github` | `github://owner/repo/path?at=branch:main` | Reads a file or a folder of a GitHub repository at a commit. Options are `api_url`, `token_env`, `use_gh_cli` and `timeout`. |
+| `gcs` | `gs://bucket/key` | Reads Google Cloud Storage. Options are `project`, `endpoint_url` and `anonymous`. Needs the `gcs` extra. |
+| `azure` | `az://account/container/key` | Reads Azure Blob Storage and ADLS Gen2. Options are `account_url` and `connection_string_env`. Needs the `azure` extra. |
 
-The S3 driver takes credentials from the usual AWS places, which are the environment, a profile and an instance role. Do not put keys in the provcat configuration. The GitHub driver reads a token from `GITHUB_TOKEN` or `GH_TOKEN`. If neither is set, it runs `gh auth token`.
+Each cloud driver uses that cloud's Python SDK and takes credentials from the usual places:
+
+- **S3:** the environment, a profile or an instance role.
+- **GCS:** Application Default Credentials.
+- **Azure:** `DefaultAzureCredential`, for example `az login`, or a connection string in the environment variable that `connection_string_env` names.
+
+Do not put keys in the provcat configuration. The GitHub driver reads a token from `GITHUB_TOKEN` or `GH_TOKEN`. If neither is set, it runs `gh auth token`.
 
 ## Configuration
 
@@ -56,7 +73,7 @@ provcat reads its configuration from the first of these sources that exists:
 1. The `--config` option of `provc`.
 2. The environment variable `PROVCAT_CONFIG`.
 3. The file `provcat.yaml` in the current folder.
-4. The built-in defaults, which have the three stores and no logical schemes.
+4. The built-in defaults, which have the five stores and no logical schemes.
 
 A source that starts with `etcd://host:port/prefix` is etcd. Any other source is a YAML file. [config/provcat.example.yaml](config/provcat.example.yaml) has every section and the logical schemes from the old provcat docs. A value can read the environment with `${oc.env:NAME,default}`.
 
@@ -93,9 +110,36 @@ provcat stores a GitHub file under its commit, so the file never goes stale. pro
 
 ## Tests
 
-The tests use a fake GitHub API, the moto S3 server and a fake etcd gateway, so they need no network. Two live tests run only if you set an environment variable:
+The tests are in three folders, and each test gets the marker of its folder:
+
+| Folder | Marker | What the tests use |
+|---|---|---|
+| `tests/unit` | `unit` | Only the code and temporary files. |
+| `tests/integration` | `integration` | Servers on this machine: a fake GitHub API and a fake etcd in the test process, moto for S3, and emulators in Docker for GCS and Azure. |
+| `tests/system` | `system` | Real services on the network. |
+
+`uv run pytest` runs the unit and integration tests. They need no network. The GCS and Azure tests need Docker and two images. If an image is missing, those tests skip and name the image to pull:
 
 ```
-PROVCAT_TEST_GITHUB=1 uv run pytest -m live
-PROVCAT_TEST_ETCD=localhost:2379 uv run pytest -m live
+docker pull fsouza/fake-gcs-server:1.52.2
+docker pull mcr.microsoft.com/azure-storage/azurite:3.35.0
+```
+
+`tests/object_store_suite.py` holds one set of tests for every object store. The integration tests run it against moto, fake-gcs-server and Azurite. The system tests run it against real AWS, GCS, Azure and lakeFS. Each system test makes its own bucket and deletes it afterwards. It uses the cloud's Python SDK, or the REST API for lakeFS.
+
+Run the system tests with `-m system`. [docs/setup.md](docs/setup.md) shows how to set up each service. Each service runs only if you set its variable:
+
+| Variable | Service |
+|---|---|
+| `PROVCAT_SYSTEM_AWS=1` | AWS S3 with the default credentials. `PROVCAT_SYSTEM_AWS_PROFILE` picks a profile. |
+| `PROVCAT_SYSTEM_GCS=<project>` | Google Cloud Storage, with Application Default Credentials. |
+| `PROVCAT_SYSTEM_AZURE=<subscription id>` | Azure. The tests make a resource group with one ADLS Gen2 account, and delete the group afterwards. They need `uv sync --group system`. |
+| `PROVCAT_SYSTEM_LAKEFS=<url>` | lakeFS, with the keys of the AWS profile `lakefs`. lakeFS keeps the storage of each deleted repository, so delete those folders by hand. |
+| `PROVCAT_SYSTEM_GITHUB=1` | github.com. |
+| `PROVCAT_SYSTEM_ETCD=<host:port>` | etcd. |
+
+For example:
+
+```
+PROVCAT_SYSTEM_AWS=1 uv run pytest -m system
 ```

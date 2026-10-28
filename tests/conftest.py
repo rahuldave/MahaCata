@@ -1,4 +1,14 @@
-"""Fake servers for the tests: GitHub, S3 (moto) and the etcd HTTP gateway."""
+"""Shared fixtures, and the three kinds of test.
+
+- tests/unit: no servers. Only the code, temporary files and monkeypatching.
+- tests/integration: servers on this machine. Fakes for GitHub and etcd run in
+  the test process, moto runs S3, and emulators in Docker run GCS and Azure.
+- tests/system: real services on the network, such as github.com, AWS, GCS,
+  Azure, lakeFS and etcd. Each test skips unless its environment variable is
+  set, and "pytest" leaves the folder out unless you ask for it with -m system.
+
+Each test gets the marker of its folder, so "pytest -m unit" runs one kind.
+"""
 import base64
 import io
 import json
@@ -8,7 +18,22 @@ from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from pathlib import Path
+
 import pytest
+
+KINDS = ("unit", "integration", "system")
+
+
+def pytest_collection_modifyitems(config, items):
+    here = Path(__file__).parent
+    for item in items:
+        try:
+            kind = item.path.relative_to(here).parts[0]
+        except ValueError:
+            continue
+        if kind in KINDS:
+            item.add_marker(kind)
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
@@ -204,3 +229,69 @@ def s3_endpoint(monkeypatch):
     host, port = server.get_host_and_port()
     yield f"http://{host}:{port}"
     server.stop()
+
+
+# Cloud emulators in Docker, one container per test session. A test that needs
+# one skips when Docker or the image is missing.
+
+GCS_IMAGE = "fsouza/fake-gcs-server:1.52.2"
+AZURITE_IMAGE = "mcr.microsoft.com/azure-storage/azurite:3.35.0"
+# The fixed, public key of the Azurite development account.
+AZURITE_KEY = "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _container(image: str, port: int, inner: int, *args: str):
+    import shutil
+    import subprocess
+    import time
+    import urllib.request
+
+    if not shutil.which("docker"):
+        pytest.skip("Docker is not installed")
+    have = subprocess.run(["docker", "image", "inspect", image], capture_output=True)
+    if have.returncode:
+        pytest.skip(f"pull the emulator first: docker pull {image}")
+    cid = subprocess.run(["docker", "run", "-d", "--rm", "-p", f"127.0.0.1:{port}:{inner}", image, *args],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    for _ in range(100):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1)
+            break
+        except urllib.error.HTTPError:
+            break  # the server answered
+        except OSError:
+            time.sleep(0.1)
+    return cid
+
+
+def _stop(cid: str) -> None:
+    import subprocess
+
+    subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
+
+
+@pytest.fixture(scope="session")
+def gcs_endpoint():
+    port = _free_port()
+    cid = _container(GCS_IMAGE, port, 4443, "-scheme", "http", "-port", "4443",
+                     "-public-host", f"127.0.0.1:{port}", "-external-url", f"http://127.0.0.1:{port}")
+    yield f"http://127.0.0.1:{port}"
+    _stop(cid)
+
+
+@pytest.fixture(scope="session")
+def azurite_connection():
+    port = _free_port()
+    cid = _container(AZURITE_IMAGE, port, 10000, "azurite-blob", "--blobHost", "0.0.0.0",
+                     "--skipApiVersionCheck", "--loose")
+    yield ("DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;"
+           f"AccountKey={AZURITE_KEY};BlobEndpoint=http://127.0.0.1:{port}/devstoreaccount1;")
+    _stop(cid)

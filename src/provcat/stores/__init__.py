@@ -97,6 +97,7 @@ def make_store(name: str, raw: dict, *, offline: bool = False) -> Store:
     return cls(name, options, offline=offline)
 
 
-DEFAULT_STORES = {"file": {"driver": "file"}, "s3": {"driver": "s3"}, "github": {"driver": "github"}}
+DEFAULT_STORES = {"file": {"driver": "file"}, "s3": {"driver": "s3"}, "github": {"driver": "github"},
+                  "gs": {"driver": "gcs"}, "az": {"driver": "azure"}}
 
-from . import github, local, s3  # noqa: E402,F401  (registers the drivers)
+from . import azure, gcs, github, local, s3  # noqa: E402,F401  (registers the drivers)

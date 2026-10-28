@@ -4,7 +4,7 @@ import pytest
 
 from provcat import Catalog, ResolveError, TemplateResolver, YamlConfig, parse
 
-EXAMPLE = Path(__file__).parent.parent / "config" / "provcat.example.yaml"
+EXAMPLE = Path(__file__).parents[2] / "config" / "provcat.example.yaml"
 
 SCHEMES = {
     "data+table": {

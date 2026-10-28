@@ -20,6 +20,21 @@ def cat(endpoint, tmp_path, offline=False):
     return Catalog(cfg, cache_root=tmp_path / "cache", offline=offline)
 
 
+
+
+def _bad_request_client(code):
+    from botocore.exceptions import ClientError
+
+    class Client:
+        def head_object(self, **kw):
+            raise ClientError({"Error": {"Code": code}}, "HeadObject")
+
+        def list_objects_v2(self, **kw):
+            raise ClientError({"Error": {"Code": code}}, "ListObjectsV2")
+
+    return Client()
+
+
 def test_fetch_file_and_refetch_after_change(s3_endpoint, bucket, tmp_path):
     c = cat(s3_endpoint, tmp_path)
     p = c.fetch("lakefs://repo/main/data/a.txt")
@@ -265,7 +280,7 @@ def test_example_schemes_keep_each_org_apart(s3_endpoint, bucket, tmp_path):
 
     from provcat import YamlConfig
 
-    cfg = YamlConfig(Path(__file__).parent.parent / "config" / "provcat.example.yaml").load()
+    cfg = YamlConfig(Path(__file__).parents[2] / "config" / "provcat.example.yaml").load()
     cfg["stores"]["lakefs"] = {"driver": "s3", "endpoint_url": s3_endpoint}
     for org in ("acme", "globex"):
         bucket.create_bucket(Bucket=f"{org}-data-shared")
@@ -296,19 +311,6 @@ def test_bad_request_names_the_missing_lakefs_ref(s3_endpoint, bucket, tmp_path,
     monkeypatch.setattr(store, "_client", Client())
     with pytest.raises(StoreError, match="branch or commit 'staging' may not exist"):
         c.list("lakefs://repo/staging/tables")
-
-
-def _bad_request_client(code):
-    from botocore.exceptions import ClientError
-
-    class Client:
-        def head_object(self, **kw):
-            raise ClientError({"Error": {"Code": code}}, "HeadObject")
-
-        def list_objects_v2(self, **kw):
-            raise ClientError({"Error": {"Code": code}}, "ListObjectsV2")
-
-    return Client()
 
 
 def test_bad_request_hint_covers_head_and_only_lakefs_like_stores(s3_endpoint, tmp_path, monkeypatch):

@@ -133,13 +133,6 @@ def test_odd_replies_are_store_errors(github, tmp_path, monkeypatch):
         cat(github, tmp_path).pin("github://owner/repo")
 
 
-def test_zero_timeout_is_refused():
-    from provcat import ConfigError
-
-    with pytest.raises(ConfigError, match="more than 0"):
-        Catalog({"stores": {"github": {"timeout": 0}}})
-
-
 def test_ref_kind_is_enforced(github, tmp_path):
     # Finding 6: ?at=tag:main pinned the branch main.
     c = cat(github, tmp_path)
@@ -196,37 +189,6 @@ def test_token_is_not_sent_to_another_host(github, github2, tmp_path, monkeypatc
     assert github2.headers_seen and not any("Authorization" in h for h in github2.headers_seen)
 
 
-def test_https_to_http_redirect_drops_the_token():
-    import urllib.request
-    from provcat.stores.github import _DropAuthOnHostChange
-
-    req = urllib.request.Request("https://h.example/x", headers={"Authorization": "Bearer t"})
-    h = _DropAuthOnHostChange()
-    same = h.redirect_request(req, None, 302, "Found", {}, "https://h.example/y")
-    down = h.redirect_request(req, None, 302, "Found", {}, "http://h.example/y")
-    assert same.get_header("Authorization") == "Bearer t"
-    assert down.get_header("Authorization") is None
-
-
-def test_gh_cli_is_asked_for_the_api_host(monkeypatch):
-    # Finding 11: gh gave the github.com token for any api_url.
-    from provcat.stores.github import GithubStore
-
-    calls = []
-
-    class Done:
-        returncode, stdout = 0, "tok\n"
-
-    monkeypatch.setattr("provcat.stores.github.shutil.which", lambda _: "/bin/gh")
-    monkeypatch.setattr("provcat.stores.github.subprocess.run", lambda args, **kw: calls.append(args) or Done())
-    for name in ("GITHUB_TOKEN", "GH_TOKEN"):
-        monkeypatch.delenv(name, raising=False)
-    assert GithubStore("github", {"api_url": "https://ghe.example.com/api/v3"}).token == "tok"
-    assert GithubStore("github", {}).token == "tok"
-    assert calls == [["gh", "auth", "token", "--hostname", "ghe.example.com"],
-                     ["gh", "auth", "token", "--hostname", "github.com"]]
-
-
 def test_offline_uses_the_last_pinned_commit(github, tmp_path):
     cat(github, tmp_path).fetch("github://owner/repo/README.md")
     github.hits.clear()
@@ -258,11 +220,3 @@ def test_missing_things(github, tmp_path):
         c.fetch("github:///repo/x")
     with pytest.raises(UriError):
         c.fetch("github://owner/repo/x?at=version:3")
-
-
-@pytest.mark.live
-@pytest.mark.skipif(not os.environ.get("PROVCAT_TEST_GITHUB"), reason="set PROVCAT_TEST_GITHUB=1 to call github.com")
-def test_live_github(tmp_path):
-    c = Catalog(cache_root=tmp_path)
-    assert b"Hello" in c.read("github://octocat/Hello-World/README?at=branch:master")
-    assert (c.fetch("github://octocat/Hello-World?at=branch:master") / "README").is_file()

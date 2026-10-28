@@ -13,6 +13,15 @@ dependencies = [
 [project.scripts]
 provc = "provcat.cli:main"
 
+[project.optional-dependencies]
+gcs = [
+    "google-cloud-storage>=3.17.1",
+]
+azure = [
+    "azure-identity>=1.27.0",
+    "azure-storage-blob>=12.31.0",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -22,12 +31,22 @@ packages = ["src/provcat"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not system'"
 markers = [
-    "live: talks to a real service; set the environment variable named in the test to run it",
+    "unit: no servers; only the code and temporary files",
+    "integration: servers on this machine, such as moto and the cloud emulators",
+    "system: real services on the network; set the environment variable named in the test",
 ]
 
 [dependency-groups]
 dev = [
+    "azure-identity>=1.27.0",
+    "azure-storage-blob>=12.31.0",
+    "google-cloud-storage>=3.17.1",
     "moto[server]>=5.2.4",
     "pytest>=9.1.1",
+]
+system = [
+    "azure-mgmt-resource>=26.0.0",
+    "azure-mgmt-storage>=25.3.0",
 ]
