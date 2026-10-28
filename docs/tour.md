@@ -106,13 +106,13 @@ A logical URI names a thing, and the configuration says where the thing lives. T
 ```yaml
 schemes:
   code:
-    parts: [owner, repo]
+    parts: [org, repo]
     rest: path
-    target: "github://{owner}/{repo}/{path}"
+    target: "github://{org}/{repo}/{path}"
     pass_selector: true
 ```
 
-In the scheme, the first part of the URI is `owner` and the second is `repo`. Every segment after them goes into `path`. The `target` is a template for the physical URI. `pass_selector: true` copies the `?at=` part onto the physical URI.
+In the scheme, the first part of the URI is `org` and the second is `repo`. Every segment after them goes into `path`. The `target` is a template for the physical URI. `pass_selector: true` copies the `?at=` part onto the physical URI.
 
 Resolve a `code` URI.
 
@@ -136,9 +136,27 @@ $ uv run provc --config $C cat 'code://octocat/Hello-World/README?at=branch:mast
 Hello World!
 ```
 
-## Step 3: Use stages and versions
+## Step 3: Use tenants, stages and versions
 
-The rest of the example configuration maps the schemes of the old provcat onto lakeFS. lakeFS is a store with git-like branches over S3. Its S3 gateway reads `s3://repository/branch-or-commit/path`. You do not need lakeFS for this step, because `resolve` does not read any data.
+The rest of the example configuration maps the logical schemes of the old provcat onto a new lakeFS layout. lakeFS is a store with git-like branches over S3. Its S3 gateway reads `s3://repository/branch-or-commit/path`. You do not need lakeFS for this step, because `resolve` does not read any data.
+
+The org is the tenant. It is the first part of every logical URI, as the owner is on GitHub. lakeFS has no orgs, so each org gets its own repositories, and each environment is a branch:
+
+```yaml
+schemes:
+  data+table:
+    parts: [org, domain, env, family, name]
+    target: "lakefs://{org}-data-{domain}/{ref}/tables/{family}/{name}"
+    ref: "{env}"
+    match:
+      org: "[a-z0-9]{1,20}"
+      env: "[a-z0-9][a-z0-9_-]{0,19}"
+      domain: "[a-z0-9][a-z0-9-]{0,36}"
+```
+
+So `data+table://acme/shared/prod/agreements/qa_outputs` reads the repository `acme-data-shared` on the branch `prod`. The same names for the org `globex` read `globex-data-shared`. The ML schemes use repositories named `{org}-ml-{project}`.
+
+The `match` patterns refuse a name that lakeFS does not allow as a repository or a branch, or that could run into another name. They also keep each repository name within the 63 characters that lakeFS allows. An org has no `-`, so the first `-` in a repository name always ends the org. Two orgs never share a repository, a branch or a commit history.
 
 A **stage** is a name, such as `production`, that points at a fixed version of one thing. The `stages` section of the configuration holds the pointers:
 
@@ -154,25 +172,25 @@ Resolve the stage.
 $ uv run provc --config $C resolve 'data+table://acme/shared/prod/agreements/qa_outputs?at=stage:production'
 {
   "logical": "data+table://acme/shared/prod/agreements/qa_outputs?at=stage:production",
-  "physical": "lakefs://agreements-qa_outputs-data/b8a2f9c123456/acme/shared/prod/agreements/qa_outputs",
+  "physical": "lakefs://acme-data-shared/b8a2f9c123456/tables/agreements/qa_outputs",
   "via": [
     "stage:production -> commit:b8a2f9c123456",
-    "data+table template -> lakefs://agreements-qa_outputs-data/b8a2f9c123456/acme/shared/prod/agreements/qa_outputs"
+    "data+table template -> lakefs://acme-data-shared/b8a2f9c123456/tables/agreements/qa_outputs"
   ]
 }
 ```
 
-**What happened:** the resolver looked up `production` for this URI and found `commit:b8a2f9c123456`. The commit filled `{ref}`, which is the second part of a lakeFS path. Without a selector, `{ref}` takes the default `main` from the scheme. To move `production` to a new commit, change one line in the configuration.
+**What happened:** the resolver looked up `production` for this URI and found `commit:b8a2f9c123456`. The commit filled `{ref}`, which is the second part of a lakeFS path. Without a selector, `{ref}` takes the default `{env}` from the scheme, which is the branch `prod` here. To move `production` to a new commit, change one line in the configuration.
 
-A `version:` selector fills `{version}` instead. The `model` scheme uses it.
+A `version:` selector fills `{version}` instead, and `{ref}` keeps its default. The `model` scheme uses it.
 
 ```
 $ uv run provc --config $C resolve 'model://acme/ml/prod/churn/xgb?at=version:3'
 {
   "logical": "model://acme/ml/prod/churn/xgb?at=version:3",
-  "physical": "lakefs://model-xgb/main/acme/ml/prod/churn/versions/v3",
+  "physical": "lakefs://acme-ml-churn/prod/ml/models/xgb/v3",
   "via": [
-    "model template -> lakefs://model-xgb/main/acme/ml/prod/churn/versions/v3"
+    "model template -> lakefs://acme-ml-churn/prod/ml/models/xgb/v3"
   ]
 }
 ```

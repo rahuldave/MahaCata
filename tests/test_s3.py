@@ -256,3 +256,25 @@ def test_recorded_etag_is_the_one_downloaded(s3_endpoint, bucket, tmp_path, monk
     monkeypatch.setattr(S3Store, "stat", real)
     p = c.fetch("lakefs://repo/main/top.txt")
     assert p.read_bytes() == b"T2"
+
+
+def test_example_schemes_keep_each_org_apart(s3_endpoint, bucket, tmp_path):
+    # The org is the tenant: the same names for two orgs read two repositories,
+    # and the environment picks the branch.
+    from pathlib import Path
+
+    from provcat import YamlConfig
+
+    cfg = YamlConfig(Path(__file__).parent.parent / "config" / "provcat.example.yaml").load()
+    cfg["stores"]["lakefs"] = {"driver": "s3", "endpoint_url": s3_endpoint}
+    for org in ("acme", "globex"):
+        bucket.create_bucket(Bucket=f"{org}-data-shared")
+        for env in ("prod", "dev"):
+            bucket.put_object(Bucket=f"{org}-data-shared", Key=f"{env}/tables/agreements/qa/part-0.csv",
+                              Body=f"{org} {env}".encode())
+    c = Catalog(cfg, cache_root=tmp_path / "cache")
+    for org in ("acme", "globex"):
+        for env in ("prod", "dev"):
+            folder = c.fetch(f"data+table://{org}/shared/{env}/agreements/qa")
+            assert folder == tmp_path / "cache" / "lakefs" / f"{org}-data-shared" / env / "tables" / "agreements" / "qa"
+            assert (folder / "part-0.csv").read_bytes() == f"{org} {env}".encode()

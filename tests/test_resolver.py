@@ -157,12 +157,93 @@ def test_resolved_value_cannot_climb():
         r(TABLE + "?at=branch:..")
 
 
-def test_example_config_resolves_original_provcat_uris():
+def test_example_config_gives_each_org_its_own_repositories():
     cat = Catalog(YamlConfig(EXAMPLE).load(), cache_root="/nonexistent")
-    assert cat.resolve(TABLE + "?at=stage:production").physical.segments[0] == "commit:b8a2f9c123456".split(":")[1]
-    assert str(cat.resolve("artifact+prompt://acme/teams/prod/proj-credit-agreements/default_v1").physical) == (
-        "lakefs://proj-credit-agreements-artifacts/main/acme/teams/prod/proj-credit-agreements/artifacts/prompt/default_v1")
-    assert cat.resolve("code://rahuldave/x/README.md").physical.scheme == "github"
+
+    def phys(u):
+        return str(cat.resolve(u).physical)
+
+    assert phys(TABLE) == "lakefs://acme-data-shared/prod/tables/agreements/qa_outputs"
+    assert phys(TABLE + "?at=stage:production") == "lakefs://acme-data-shared/b8a2f9c123456/tables/agreements/qa_outputs"
+    assert phys("data+table://globex/shared/dev/agreements/qa_outputs") == (
+        "lakefs://globex-data-shared/dev/tables/agreements/qa_outputs")
+    assert phys("model://acme/ml/prod/churn/xgb?at=version:3") == "lakefs://acme-ml-churn/prod/ml/models/xgb/v3"
+    assert phys("model://globex/ml/prod/churn/xgb?at=version:3") == "lakefs://globex-ml-churn/prod/ml/models/xgb/v3"
+    assert phys("artifact+prompt://acme/teams/prod/credit/default_v1") == (
+        "lakefs://acme-ml-credit/prod/teams/prompts/default_v1")
+    assert phys("code://rahuldave/x/README.md") == "github://rahuldave/x/README.md"
+    # Tenant review, findings 1 and 2: no two names give one repository.
+    with pytest.raises(ResolveError, match="org 'a-b' does not match"):
+        phys("data+table://a-b/c/prod/f/n")
+    assert phys("data+table://a/b-c/prod/f/n").startswith("lakefs://a-data-b-c/")
+    assert phys("data+table://acme/churn/prod/models/x").startswith("lakefs://acme-data-churn/")
+    assert phys("model://acme/tables/prod/churn/x?at=version:3").startswith("lakefs://acme-ml-churn/")
+    with pytest.raises(ResolveError, match="does not match"):
+        phys("model://acme/t/prod/Churn/x?at=version:3")
+    # Second tenant review, findings 1 and 2: lengths and branch names stay
+    # valid for lakeFS.
+    org, longest = "o" * 20, phys("data+table://{}/{}/prod/f/n".format("o" * 20, "d" * 37))
+    assert len(longest.split("/")[2]) == 63
+    assert len(phys("model://{}/t/prod/{}/x?at=version:1".format(org, "p" * 39)).split("/")[2]) == 63
+    for bad in ("data+table://{}/d/prod/f/n".format("o" * 21), "data+table://acme/{}/prod/f/n".format("d" * 38),
+                "model://acme/t/prod/{}/x?at=version:1".format("p" * 40),
+                "data+table://acme/shared/pr%20od/f/n", "model://acme/t/Prod/p/x?at=version:1"):
+        with pytest.raises(ResolveError, match="does not match"):
+            phys(bad)
+
+
+def test_ref_default_can_name_parts():
+    schemes = {"t": {"parts": ["org", "env", "name"], "target": "lakefs://{org}/{ref}/{name}/v{version}",
+                     "ref": "{env}"}}
+    res = TemplateResolver(schemes).resolve
+    assert str(res(parse("t://acme/dev/x?at=version:2")).physical) == "lakefs://acme/dev/x/v2"
+    with pytest.raises(ResolveError, match="version"):
+        res(parse("t://acme/dev/x"))
+    with pytest.raises(ResolveError, match="version"):
+        res(parse("t://acme/dev/x?at=commit:abc"))
+
+
+def test_pass_selector_passes_the_part_default_or_only_the_version():
+    # Tenant review, finding 5: the name promised a version case.
+    schemes = {"c": {"parts": ["org", "env"], "rest": "path", "target": "github://{org}/{env}/{path}",
+                     "ref": "{env}", "pass_selector": True}}
+    res = TemplateResolver(schemes).resolve
+    assert str(res(parse("c://o/main/a.txt")).physical) == "github://o/main/a.txt?at=branch:main"
+    assert str(res(parse("c://o/main/a.txt?at=version:3")).physical) == "github://o/main/a.txt?at=version:3"
+
+
+def test_ref_template_values_are_encoded_once():
+    # Tenant review, finding 5: a part that fills the default branch is encoded
+    # once, and cannot add a segment or a selector.
+    schemes = {"t": {"parts": ["org", "env", "name"], "target": "lakefs://{org}/{ref}/{name}", "ref": "{env}"}}
+    res = TemplateResolver(schemes).resolve
+    assert res(parse("t://a/50%25/x")).physical.segments == ("50%", "x")
+    assert res(parse("t://a/de%3Fat%3Dx/x")).physical.segments == ("de?at=x", "x")
+    assert res(parse("t://a/de%3Fat%3Dx/x")).physical.selector is None
+
+
+def test_match_patterns():
+    schemes = {"t": {"parts": ["org", "name"], "target": "file:///{org}/{name}", "match": {"org": "[a-z]+"}}}
+    res = TemplateResolver(schemes).resolve
+    assert str(res(parse("t://abc/x")).physical) == "file:///abc/x"
+    with pytest.raises(ResolveError, match="org 'ab1' does not match"):
+        res(parse("t://ab1/x"))
+    # Second tenant review, finding 3: an empty value that is not a mapping is refused.
+    for bad in ({"nope": "x"}, {"org": 3}, {"org": "("}, ["org"], [], "", 0, False):
+        with pytest.raises(ResolveError, match="match"):
+            TemplateResolver({"t": {**schemes["t"], "match": bad}})
+    assert TemplateResolver({"t": {**schemes["t"], "match": None}}).handles("t")
+    # Finding 4: the rest name gets its own message.
+    with pytest.raises(ResolveError, match="rest name"):
+        TemplateResolver({"c": {"parts": ["o"], "rest": "path", "target": "file:///{o}/{path}",
+                                "match": {"path": "x"}}})
+
+
+@pytest.mark.parametrize("ref", ["{path}", "{ref}", "{version}", "{env!r}", "{env:>3}", "{env.x}", "{", ""])
+def test_bad_ref_templates(ref):
+    with pytest.raises(ResolveError, match="ref"):
+        TemplateResolver({"c": {"parts": ["org", "env"], "rest": "path",
+                                "target": "lakefs://{org}/{ref}/{path}", "ref": ref}})
 
 
 def test_catalog_refuses_scheme_clash_and_dangling_targets():

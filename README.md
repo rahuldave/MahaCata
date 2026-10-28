@@ -22,11 +22,13 @@ A **logical URI** has a scheme that the configuration defines, for example `data
 
 ```
 data+table://acme/shared/prod/agreements/qa_outputs?at=stage:production
-  -> lakefs://agreements-qa_outputs-data/b8a2f9c123456/acme/shared/prod/agreements/qa_outputs
+  -> lakefs://acme-data-shared/b8a2f9c123456/tables/agreements/qa_outputs
 
 code://octocat/Hello-World/README?at=branch:master
   -> github://octocat/Hello-World/README?at=branch:master
 ```
+
+In the example configuration, the org is the tenant and the first part of every logical URI, as the owner is on GitHub. Each org gets its own lakeFS repositories, and each environment is a branch. Read the section "Tenants" in [docs/design.md](docs/design.md).
 
 | Selector | Meaning |
 |---|---|

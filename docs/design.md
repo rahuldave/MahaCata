@@ -70,8 +70,9 @@ Each logical scheme has these settings:
 - **`parts`:** names for the first part and each segment, in order.
 - **`rest`:** an optional name that takes all extra segments, joined with `/`.
 - **`target`:** a physical URI with `{name}` fields. A field can be a part name, the rest name, `ref`, `version` or `at`.
-- **`ref`:** the default for `{ref}` when the URI has no selector.
-- **`pass_selector`:** if true, the physical URI gets the selector that the resolver used. A stage becomes the selector it points at. A scheme with a `ref` default passes `branch:<ref>` when the URI has no selector.
+- **`ref`:** the default branch for `{ref}` when the URI has no `branch:`, `tag:` or `commit:`. It can name parts, for example `"{env}"`, so that each environment is a branch. A `version:` selector keeps the default.
+- **`pass_selector`:** if true, the physical URI gets the selector that the resolver used. A stage becomes the selector it points at. A scheme with a `ref` default passes `branch:<ref>` when the URI has no selector. With `version:`, only the version is passed.
+- **`match`:** an optional regular expression for each part. provcat refuses a URI whose part does not match the whole expression.
 
 A template can use only plain `{name}` fields, and only the names in the list above. provcat checks the fields when it loads the configuration. It refuses attribute access, indexes and format specs.
 
@@ -102,6 +103,35 @@ Some disks, for example the default disks of macOS and Windows, store `Guide.md`
 The GitHub driver checks the kind of a ref through the git refs API, so `tag:main` reads the tag and not the branch. It follows an annotated tag to its commit. It fetches a folder as one tarball of the commit. It skips links, devices and names with `..` in the tarball, and unpacks with the Python `data` filter. Offline mode serves a file inside a folder that was fetched whole. The token goes only to the host of `api_url`, and `gh auth token` is asked for that host.
 
 The S3 driver fetches a folder object by object, and then deletes cached files whose objects no longer exist. It removes the folder marker first, and writes it again only after the whole folder is current. It refuses a folder that holds keys no URI can name, for example `a//b`. It records the ETag that came with the downloaded bytes. It does not send `If-Match`, because S3-compatible servers do not all support it.
+
+## Tenants
+
+The org is the tenant. It is the first part of every logical URI in the example configuration, as the owner is on GitHub. The mapping keeps the data of each org apart:
+
+| Logical URI | Physical URI |
+|---|---|
+| `data+table://ORG/DOMAIN/ENV/FAMILY/NAME` | `lakefs://ORG-data-DOMAIN/ENV/tables/FAMILY/NAME` |
+| `experiment://ORG/TEAM/ENV/PROJECT/PIPELINE` | `lakefs://ORG-ml-PROJECT/ENV/TEAM/experiments/PIPELINE` |
+| `model://ORG/TEAM/ENV/PROJECT/NAME?at=version:N` | `lakefs://ORG-ml-PROJECT/ENV/TEAM/models/NAME/vN` |
+| `artifact+prompt://ORG/TEAM/ENV/PROJECT/NAME` | `lakefs://ORG-ml-PROJECT/ENV/TEAM/prompts/NAME` |
+| `artifact+card://ORG/TEAM/ENV/PROJECT/NAME` | `lakefs://ORG-ml-PROJECT/ENV/TEAM/cards/NAME` |
+| `code://ORG/REPO/PATH` | `github://ORG/REPO/PATH` |
+
+lakeFS has no orgs, so each org gets its own repositories, named `ORG-data-DOMAIN` or `ORG-ml-PROJECT`. Each environment is a branch of the repository. So two orgs never share a repository, a branch or a commit history, and lakeFS permissions can differ for each repository.
+
+The `match` patterns keep the names apart and valid for lakeFS:
+
+- **Org:** 1 to 20 lowercase letters and digits. It has no `-`, so the first `-` in a repository name always ends the org.
+- **Kind:** the word `data` or `ml` after the org keeps a domain and a project with the same name apart.
+- **Domain or project:** lowercase letters, digits and `-`, as lakeFS requires. The length limits keep each repository name within 63 characters.
+- **Environment:** 1 to 20 lowercase letters, digits, `_` and `-`, so that it is a valid lakeFS branch name.
+
+The environment part picks the branch only when the URI has no `branch:`, `tag:` or `commit:`. A URI such as `...prod/...?at=branch:dev` reads the branch `dev`. Use `commit:` or `stage:` to fix a version, and keep `branch:` for work on a branch outside the environments. A stage pointer belongs to one full URI, so each environment needs its own stage entries.
+
+These parts of tenancy are not built yet:
+
+- **Keys for each tenant.** All tenants read through one store with one profile. To give each org its own keys, add a store for each org, for example `lakefs-acme`.
+- **A configuration for each tenant.** All tenants share one configuration. An etcd prefix for each org, for example `etcd://host/provcat/acme`, works today but has no tooling.
 
 ## Known limits
 

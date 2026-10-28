@@ -6,12 +6,13 @@ reads the ``schemes`` and ``stages`` sections of the configuration::
     schemes:
       data+table:
         parts: [org, domain, env, family, name]   # names for authority + segments
-        target: "lakefs://{org}-{family}/{ref}/{domain}/{env}/{name}"
-        ref: main                                  # default for {ref}
+        target: "lakefs://{org}-{domain}/{ref}/tables/{family}/{name}"
+        ref: "{env}"                               # default for {ref}; may name parts
+        match: {org: "[a-z0-9]+", domain: "[a-z0-9]+"}   # each part must match
       code:
-        parts: [owner, repo]
+        parts: [org, repo]
         rest: path              # extra segments are joined into {path}
-        target: "github://{owner}/{repo}/{path}"
+        target: "github://{org}/{repo}/{path}"
         pass_selector: true     # hand ?at= on to the physical URI
 
     stages:
@@ -21,7 +22,7 @@ reads the ``schemes`` and ``stages`` sections of the configuration::
 Selectors on a logical URI:
 
 - ``branch:X``, ``tag:X``, ``commit:X`` set ``{ref}`` to X.
-- ``version:N`` sets ``{version}`` to N.
+- ``version:N`` sets ``{version}`` to N. ``{ref}`` keeps its default.
 - ``stage:NAME`` looks up NAME in ``stages`` and uses the selector stored there.
 - ``ts:...`` is refused for now.
 
@@ -32,7 +33,12 @@ before it goes into the template, so a value can never add a path segment or a
 
 With ``pass_selector``, the physical URI gets the selector that the resolver
 used: a stage becomes the selector it points at, and a scheme with a ``ref``
-default passes ``branch:<ref>`` when the URI has no selector.
+default passes ``branch:<ref>`` when the URI has no selector. With ``version:``,
+only the version is passed.
+
+``match`` gives a regular expression for a part. A URI whose part does not
+match the whole expression is refused, so that names such as lakeFS
+repository names stay valid and cannot run together.
 """
 from __future__ import annotations
 
@@ -72,13 +78,14 @@ class SchemeSpec:
     rest: str | None = None
     ref: str | None = None
     pass_selector: bool = False
+    match: tuple[tuple[str, re.Pattern], ...] = ()
 
     @classmethod
     def from_config(cls, name: str, raw: object) -> SchemeSpec:
         where = f"schemes.{name}"
         if not isinstance(raw, dict):
             raise ResolveError(f"{where} must be a mapping")
-        unknown = set(raw) - {"parts", "target", "rest", "ref", "pass_selector"}
+        unknown = set(raw) - {"parts", "target", "rest", "ref", "pass_selector", "match"}
         if unknown:
             raise ResolveError(f"{where}: unknown keys {sorted(unknown)}")
         parts = raw.get("parts")
@@ -107,10 +114,36 @@ class SchemeSpec:
                 raise ResolveError(f"{where}.target: unknown field {{{field_name}}}; known: {sorted(allowed)}")
         if not isinstance(raw.get("pass_selector", False), bool):
             raise ResolveError(f"{where}.pass_selector must be true or false")
-        if raw.get("ref") is not None and not isinstance(raw["ref"], str):
-            raise ResolveError(f"{where}.ref must be a string")
+        ref = raw.get("ref")
+        if ref is not None:
+            if not isinstance(ref, str) or not ref:
+                raise ResolveError(f"{where}.ref must be a non-empty string")
+            try:
+                ref_fields = list(string.Formatter().parse(ref))
+            except ValueError as e:
+                raise ResolveError(f"{where}.ref is not a valid template: {e}") from None
+            for _, field_name, spec, conv in ref_fields:
+                if field_name is None:
+                    continue
+                if not _NAME.fullmatch(field_name) or spec or conv or field_name not in parts:
+                    raise ResolveError(f"{where}.ref: fields must be part names, got {{{field_name}}}")
+        match = raw.get("match")
+        if match is None:
+            match = {}
+        if not isinstance(match, dict):
+            raise ResolveError(f"{where}.match must be a mapping of part name to pattern")
+        patterns = []
+        for part, pattern in match.items():
+            if part == raw.get("rest"):
+                raise ResolveError(f"{where}.match: {part!r} is the rest name, which cannot take a pattern")
+            if part not in parts or not isinstance(pattern, str):
+                raise ResolveError(f"{where}.match: {part!r} must be a part name with a pattern")
+            try:
+                patterns.append((part, re.compile(pattern)))
+            except re.error as e:
+                raise ResolveError(f"{where}.match.{part}: bad pattern: {e}") from None
         return cls(name, tuple(parts), target, raw.get("rest"), raw.get("ref"),
-                   bool(raw.get("pass_selector", False)))
+                   bool(raw.get("pass_selector", False)), tuple(patterns))
 
 
 class TemplateResolver(Resolver):
@@ -161,7 +194,11 @@ class TemplateResolver(Resolver):
         def q(v: str) -> str:
             return quote(v, safe=_SAFE.replace("&", ""))
 
-        values: dict[str, str] = {k: q(v) for k, v in zip(spec.parts, given)}
+        named = dict(zip(spec.parts, given))
+        for part, pattern in spec.match:
+            if not pattern.fullmatch(named[part]):
+                raise ResolveError(f"{uri}: {part} {named[part]!r} does not match {pattern.pattern}")
+        values: dict[str, str] = {k: q(v) for k, v in named.items()}
         if spec.rest:
             values[spec.rest] = "/".join(q(v) for v in given[n:])
 
@@ -171,15 +208,18 @@ class TemplateResolver(Resolver):
             target = self._stage(uri, sel.value)
             via.append(f"stage:{sel.value} -> {target}")
             sel = target
-        if sel is None and spec.ref is not None:
-            sel = Selector("branch", spec.ref)
+        if sel and sel.kind not in _REF_KINDS and sel.kind != "version":
+            raise ResolveError(f"selector kind {sel.kind!r} is not supported")
+        # The default branch can name parts, for example "{env}", so that each
+        # environment is its own branch. A version selector keeps the default.
+        default = Selector("branch", spec.ref.format_map(named)) if spec.ref is not None else None
+        ref_sel = sel if sel and sel.kind in _REF_KINDS else default
+        if ref_sel:
+            values["ref"] = q(ref_sel.value)
+        if sel and sel.kind == "version":
+            values["version"] = q(sel.value)
+        sel = sel or default
         if sel:
-            if sel.kind in _REF_KINDS:
-                values["ref"] = q(sel.value)
-            elif sel.kind == "version":
-                values["version"] = q(sel.value)
-            else:
-                raise ResolveError(f"selector kind {sel.kind!r} is not supported")
             values["at"] = q(str(sel))
 
         try:
