@@ -146,6 +146,25 @@ These parts of tenancy are not built yet:
 - **Keys for each tenant.** All tenants read through one store with one profile. To give each org its own keys, add a store for each org, for example `lakefs-acme`.
 - **A configuration for each tenant.** All tenants share one configuration. An etcd prefix for each org, for example `etcd://host/provcat/acme`, works today but has no tooling.
 
+### The lakeFS driver
+
+The `lakefs` driver is the S3 driver plus the lakeFS REST API. Data comes through the S3 gateway, where the first key segment is a ref. A ref is a branch, a tag or a commit. The REST API answers what the gateway cannot:
+
+- **Pin.** `pin` turns `lakefs://repo/main/path` into `lakefs://repo/<commit>/path`. The commit is the head of the branch. Data that is not committed shows on the branch, but not on the pinned URI.
+- **Time.** `lakefs://repo/main/path?at=ts:TIME` names the newest commit of `main` made at or before TIME. stat, ls and fetch pin it first, and then read that commit. A time in the future is refused, because its commit could still change.
+- **Refs.** The API says whether a ref exists. So `ls` of an empty branch gives `[]`, and a missing branch or repository gives an error that names it. `ls lakefs://repo` lists the branches.
+
+A logical URI keeps its default branch with `ts:`, and the resolver passes `?at=ts:TIME` on to the physical URI. So `data+table://acme/shared/prod/...?at=ts:2026-10-01` reads branch `prod` as it was on that day. A stage can point at a time, for example `audit: "ts:2026-03-31T23:59:59Z"`.
+
+Each pin goes into the cache, so `--offline` uses the commit that the last online pin found. A pin of a time less than 10 minutes ago is not kept. A commit under way, or a server clock that runs behind, can still add a commit before that time.
+
+A time search reads the first-parent log of the branch, 1000 commits a page, from the newest commit back. The first-parent log holds the commits of the branch itself. A commit of a feature branch that was merged in is left out, because the branch never pointed at it. The search takes the first commit made at or before TIME. lakeFS records when each commit was made, not where a branch pointed, so the answer can differ from the history in two cases:
+
+- **A reset.** A branch that was reset to an older commit pointed at that commit with no new commit to show it.
+- **A set date.** The lakeFS commit API can set the date of a commit, so a commit can claim an earlier time.
+
+The API takes the same keys as the S3 gateway. provcat never follows a redirect from the API, because a redirect would send the keys to the host that it names.
+
 ## Known limits
 
 | Limit | What to do |
@@ -157,9 +176,10 @@ These parts of tenancy are not built yet:
 | Lock files under `.provcat/locks` are never deleted. | Delete them when no provcat process runs. |
 | A folder and a folder inside it can be fetched at the same time, under different locks. | Avoid it. If a fetch fails with an error, run it again. |
 | A `${oc.env:...}` value in etcd reads the environment of each reader. | Let only trusted people write to the etcd prefix. |
+| `ts:` works on lakeFS only. GitHub refuses it. | Pin a GitHub ref with `commit:`. |
+| A `ts:` search reads at most 100,000 commits of a branch. | Use `commit:` or a stage for older versions. |
 
 ## Next steps
 
-- **Timestamps:** support `ts:` selectors, which need a list of lakeFS commits.
 - **Writes:** bring back the lakeFS branch, commit and merge commands from the first commit, as a separate interface.
 - **Containers:** mount the cache read-only into containers, and run `provc --offline` inside them.

@@ -24,7 +24,9 @@ Selectors on a logical URI:
 - ``branch:X``, ``tag:X``, ``commit:X`` set ``{ref}`` to X.
 - ``version:N`` sets ``{version}`` to N. ``{ref}`` keeps its default.
 - ``stage:NAME`` looks up NAME in ``stages`` and uses the selector stored there.
-- ``ts:...`` is refused for now.
+- ``ts:TIME`` keeps ``{ref}`` at its default, and goes on to the physical URI
+  as ``?at=ts:TIME``, with or without ``pass_selector``. Only the store can say
+  which commit a branch had at TIME, so the lakefs driver resolves it.
 
 Template variables are the part names, the rest name, ``ref``, ``version`` and
 ``at`` (the whole selector as ``kind:value``). Each value is percent-encoded
@@ -49,6 +51,7 @@ from dataclasses import dataclass, field
 from urllib.parse import quote
 
 from .errors import ResolveError, UriError
+from .timestamps import parse_ts
 from .uri import _SAFE, Selector, Uri, parse, parse_selector
 
 _NAME = re.compile(r"[a-z_][a-z0-9_]*")
@@ -208,10 +211,15 @@ class TemplateResolver(Resolver):
             target = self._stage(uri, sel.value)
             via.append(f"stage:{sel.value} -> {target}")
             sel = target
-        if sel and sel.kind not in _REF_KINDS and sel.kind != "version":
+        if sel and sel.kind not in _REF_KINDS and sel.kind not in ("version", "ts"):
             raise ResolveError(f"selector kind {sel.kind!r} is not supported")
+        if sel and sel.kind == "ts":
+            try:
+                parse_ts(sel.value)
+            except UriError as e:
+                raise ResolveError(f"{uri}: {e}") from None
         # The default branch can name parts, for example "{env}", so that each
-        # environment is its own branch. A version selector keeps the default.
+        # environment is its own branch. A version or ts selector keeps the default.
         default = Selector("branch", spec.ref.format_map(named)) if spec.ref is not None else None
         ref_sel = sel if sel and sel.kind in _REF_KINDS else default
         if ref_sel:
@@ -234,9 +242,9 @@ class TemplateResolver(Resolver):
             physical = parse(text)
         except UriError as e:
             raise ResolveError(f"{uri} resolves to a bad URI {text!r}: {e}") from e
-        if spec.pass_selector and sel is not None:
+        if sel is not None and (spec.pass_selector or sel.kind == "ts"):
             if physical.selector is not None:
-                raise ResolveError(f"{spec.name}: target already has ?at=, so pass_selector cannot add one")
+                raise ResolveError(f"{spec.name}: target already has ?at=, so the selector {sel} cannot be added")
             physical = physical.with_selector(sel)
         via.append(f"{spec.name} template -> {physical}")
         return Resolution(uri, physical, tuple(via))

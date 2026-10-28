@@ -198,17 +198,17 @@ $ uv run provc --config $C resolve 'model://acme/ml/prod/churn/xgb?at=version:3'
 }
 ```
 
-The scheme `lakefs` in both answers is a store, not a driver. The configuration defines it as the S3 driver with the lakeFS endpoint:
+The scheme `lakefs` in both answers is a store, not a driver. The configuration defines it as the `lakefs` driver with the lakeFS endpoint:
 
 ```yaml
 stores:
   lakefs:
-    driver: s3
+    driver: lakefs
     endpoint_url: ${oc.env:LAKEFS_S3_ENDPOINT,http://localhost:8000}
     profile: lakefs
 ```
 
-A **driver** is a class that reads one kind of storage. A **store** is a driver with options and a name. The name becomes a URI scheme, so `lakefs://` and `s3://` share one driver but talk to different servers.
+A **driver** is a class that reads one kind of storage. A **store** is a driver with options and a name. The name becomes a URI scheme. The `lakefs` driver is the S3 driver plus the lakeFS REST API, which turns a branch or a time into a commit. So `?at=ts:2026-10-01` on a lakeFS URI reads the branch as it was on that day.
 
 ## Step 4: Read from an S3-compatible server
 

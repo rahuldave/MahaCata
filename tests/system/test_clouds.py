@@ -24,7 +24,9 @@ import uuid
 import pytest
 
 from object_store_suite import *  # noqa: F401,F403  (the tests and backends)
-from object_store_suite import AzureBackend, GcsBackend, LakefsBackend, S3Backend
+from provcat import NotFound
+
+from object_store_suite import AzureBackend, GcsBackend, LakefsBackend, S3Backend, cat
 
 
 def _need(var):
@@ -81,3 +83,69 @@ def backend(request, monkeypatch):
                           os.environ.get("PROVCAT_SYSTEM_LAKEFS_DATA"))
     yield b
     b.cleanup()
+
+
+@pytest.fixture
+def lakefs(monkeypatch):
+    b = LakefsBackend(_need("PROVCAT_SYSTEM_LAKEFS"), os.environ.get("PROVCAT_SYSTEM_LAKEFS_PROFILE", "lakefs"),
+                      os.environ.get("PROVCAT_SYSTEM_LAKEFS_DATA"))
+    yield b
+    b.cleanup()
+
+
+def test_lakefs_pins_and_times(lakefs, tmp_path):
+    """Two real commits: ts: between them reads the first, pin reads the
+    second, and the branch also shows what is not committed."""
+    import time
+    from datetime import UTC, datetime
+
+    repo = "provcat-test-" + uuid.uuid4().hex[:12]
+    lakefs.make_bucket(repo)
+    first_commit_of_repo = lakefs.log(repo, "main")[-1]["id"]
+    lakefs.put(repo, "main/t/a.csv", b"v1")
+    c1 = lakefs.commit(repo, "main", "v1")
+    time.sleep(2.1)
+    between = datetime.now(UTC).isoformat(timespec="seconds")
+    time.sleep(2.1)
+    lakefs.put(repo, "main/t/a.csv", b"v2")
+    c2 = lakefs.commit(repo, "main", "v2")
+    lakefs.put(repo, "main/t/a.csv", b"v3, not committed")
+    lakefs.branch(repo, "fresh", first_commit_of_repo)
+
+    c = cat(lakefs, tmp_path)
+    uri = lakefs.uri(repo, "main/t/a.csv")
+    assert c.read(uri) == b"v3, not committed"
+    assert str(c.pin(uri)) == lakefs.uri(repo, f"{c2}/t/a.csv")
+    assert c.read(str(c.pin(uri))) == b"v2"
+    assert c.read(f"{uri}?at=ts:{between.replace('+', '%2B')}") == b"v1"
+    assert str(c.pin(f"{uri}?at=ts:{between.replace('+', '%2B')}")) == lakefs.uri(repo, f"{c1}/t/a.csv")
+    assert c.list(lakefs.uri(repo, "fresh")) == []
+    with pytest.raises(NotFound, match="no branch, tag or commit 'nosuch'"):
+        c.list(lakefs.uri(repo, "nosuch"))
+
+
+def test_lakefs_ts_ignores_merged_commits(lakefs, tmp_path):
+    """A feature commit made before a merge is not on main until the merge."""
+    import time
+    from datetime import UTC, datetime
+
+    repo = "provcat-test-" + uuid.uuid4().hex[:12]
+    lakefs.make_bucket(repo)
+    lakefs.put(repo, "main/a.csv", b"main v1")
+    m = lakefs.commit(repo, "main", "main v1")
+    lakefs.branch(repo, "feature", "main")
+    time.sleep(2.1)
+    lakefs.put(repo, "feature/a.csv", b"feature v1")
+    lakefs.commit(repo, "feature", "feature v1")
+    time.sleep(2.1)
+    between = datetime.now(UTC).isoformat(timespec="seconds").replace("+", "%2B")
+    time.sleep(2.1)
+    lakefs.merge(repo, "feature", "main")
+
+    c = cat(lakefs, tmp_path)
+    uri = lakefs.uri(repo, "main/a.csv")
+    assert c.read(uri) == b"feature v1"  # after the merge
+    assert str(c.pin(f"{uri}?at=ts:{between}")) == lakefs.uri(repo, f"{m}/a.csv")
+    assert c.read(f"{uri}?at=ts:{between}") == b"main v1"
+    assert sorted(str(e.uri) for e in c.list(lakefs.uri(repo))) == [lakefs.uri(repo, "feature"),
+                                                                    lakefs.uri(repo, "main")]

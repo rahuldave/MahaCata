@@ -44,16 +44,17 @@ In the example configuration, the org is the tenant and the first part of every 
 | `branch:X`, `tag:X`, `commit:X` | Use the git or lakeFS ref X. |
 | `version:N` | Fill `{version}` in the template, for a model version. |
 | `stage:NAME` | Look up NAME in the `stages` section and use the selector stored there. |
-| `ts:TIME` | Refused for now. |
+| `ts:TIME` | Use the newest commit of the branch made at or before TIME. TIME is a date, a date and time, or Unix seconds. The `lakefs` driver resolves it. |
 
 ## Stores
 
-A store is a named instance of a driver. The stores `file`, `s3`, `github`, `gs` and `az` exist without configuration. So a logical scheme cannot use one of those five names. The configuration can add more, for example a store `lakefs` that uses the S3 driver with the lakeFS endpoint.
+A store is a named instance of a driver. The stores `file`, `s3`, `github`, `gs` and `az` exist without configuration. So a logical scheme cannot use one of those five names. The configuration can add more, for example a store `lakefs` that uses the `lakefs` driver with the lakeFS endpoint.
 
 | Driver | URI | What it does |
 |---|---|---|
 | `file` | `file:///abs/path` | Returns the local path. It does not copy into the cache. Option `root` confines the store to one folder. |
 | `s3` | `s3://bucket/key` | Reads AWS S3 or any S3-compatible server, for example MinIO or the lakeFS S3 gateway. Options are `endpoint_url`, `region`, `profile` and `addressing_style`. |
+| `lakefs` | `lakefs://repo/ref/path?at=ts:TIME` | Reads lakeFS through its S3 gateway, and asks its REST API for commits. `pin` turns a branch or a time into a commit. `ls` of an empty branch gives `[]`, and `ls lakefs://repo` lists the branches. Options are those of `s3`, plus `api_url`. |
 | `github` | `github://owner/repo/path?at=branch:main` | Reads a file or a folder of a GitHub repository at a commit. Options are `api_url`, `token_env`, `use_gh_cli` and `timeout`. |
 | `gcs` | `gs://bucket/key` | Reads Google Cloud Storage. Options are `project`, `endpoint_url` and `anonymous`. Needs the `gcs` extra. |
 | `azure` | `az://account/container/key` | Reads Azure Blob Storage and ADLS Gen2. Options are `account_url` and `connection_string_env`. Needs the `azure` extra. |

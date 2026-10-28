@@ -20,7 +20,7 @@
 stores:
   # file, s3 and github exist without configuration. Add named stores here.
   lakefs:
-    driver: s3
+    driver: lakefs           # S3 gateway for data, REST API for pins and ?at=ts:
     endpoint_url: ${oc.env:LAKEFS_S3_ENDPOINT,http://localhost:8000}
     profile: lakefs          # keys in ~/.aws/credentials under [lakefs]
 
@@ -28,7 +28,7 @@ cache:
   root: ${oc.env:PROVCAT_CACHE,${oc.env:HOME}/.cache/provcat}
 
 schemes:
-  # data+table://org/domain/env/family/name[?at=branch:X|commit:X|stage:NAME]
+  # data+table://org/domain/env/family/name[?at=branch:X|commit:X|stage:NAME|ts:TIME]
   data+table:
     parts: [org, domain, env, family, name]
     target: "lakefs://{org}-data-{domain}/{ref}/tables/{family}/{name}"

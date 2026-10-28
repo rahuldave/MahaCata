@@ -125,6 +125,7 @@ class LakefsBackend(S3Backend):
 
     def __init__(self, endpoint, profile, data_dir=None):
         super().__init__(endpoint, profile)
+        self.store["lake"]["driver"] = "lakefs"
         self.endpoint = endpoint
         self.data_dir = self.data_folder(data_dir)
         creds = self.client._request_signer._credentials.get_frozen_credentials()
@@ -141,7 +142,23 @@ class LakefsBackend(S3Backend):
                                      headers={"Authorization": "Basic " + self.auth,
                                               "Content-Type": "application/json"})
         with urllib.request.urlopen(req) as resp:
-            return resp.status
+            text = resp.read()
+            try:
+                return json.loads(text) if text else None
+            except ValueError:
+                return text.decode()
+
+    def commit(self, repo, branch, message):
+        return self._api("POST", f"/repositories/{repo}/branches/{branch}/commits", {"message": message})["id"]
+
+    def branch(self, repo, name, source):
+        self._api("POST", f"/repositories/{repo}/branches", {"name": name, "source": source})
+
+    def merge(self, repo, source, destination):
+        return self._api("POST", f"/repositories/{repo}/refs/{source}/merge/{destination}", {})
+
+    def log(self, repo, ref):
+        return self._api("GET", f"/repositories/{repo}/refs/{ref}/commits?amount=1000")["results"]
 
     def make_bucket(self, name):
         self._api("POST", "/repositories", {"name": name, "storage_namespace": f"local://{name}",

@@ -55,9 +55,22 @@ def test_version():
         r("model://acme/t/prod/p/m")
 
 
-def test_ts_is_refused():
+def test_ts_keeps_the_default_ref_and_goes_to_the_store():
+    res = r(TABLE + "?at=ts:2026-01-01")
+    assert res.physical.segments[0] == "main"  # the default ref still picks the branch
+    assert str(res.physical.selector) == "ts:2026-01-01"  # even without pass_selector
+    assert str(r("code://o/r/a.txt?at=ts:1793200661").physical) == "github://o/r/a.txt?at=ts:1793200661"
+    with pytest.raises(ResolveError, match="not a date"):
+        r(TABLE + "?at=ts:yesterday")
     with pytest.raises(ResolveError, match="not supported"):
-        r(TABLE + "?at=ts:2026-01-01")
+        r(TABLE + "?at=when:now")
+
+
+def test_a_stage_can_point_at_a_time():
+    stages = {TABLE: {"audit": "ts:2026-03-31T23:59:59Z"}}
+    res = TemplateResolver(SCHEMES, stages).resolve(parse(TABLE + "?at=stage:audit"))
+    assert str(res.physical.selector) == "ts:2026-03-31T23:59:59Z"
+    assert res.via[0] == "stage:audit -> ts:2026-03-31T23:59:59Z"
 
 
 def test_empty_first_part():
