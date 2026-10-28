@@ -171,7 +171,23 @@ def test_example_config_gives_each_org_its_own_repositories():
     assert phys("model://globex/ml/prod/churn/xgb?at=version:3") == "lakefs://globex-ml-churn/prod/ml/models/xgb/v3"
     assert phys("artifact+prompt://acme/teams/prod/credit/default_v1") == (
         "lakefs://acme-ml-credit/prod/teams/prompts/default_v1")
-    assert phys("code://rahuldave/x/README.md") == "github://rahuldave/x/README.md"
+    # The env is the GitHub branch, and a selector replaces it.
+    assert phys("code://rahuldave/x/prod/README.md") == "github://rahuldave/x/README.md?at=branch:prod"
+    assert phys("code://rahuldave/x/prod/src/a.py?at=tag:v1") == "github://rahuldave/x/src/a.py?at=tag:v1"
+    assert phys("code://rahuldave/x/prod") == "github://rahuldave/x?at=branch:prod"
+    with pytest.raises(ResolveError, match="does not match"):
+        phys("code://rahuldave/x")
+    with pytest.raises(ResolveError, match="org '-bad' does not match"):
+        phys("code://-bad/x/prod/a")
+    # Review of the code env, findings 2 and 3: GitHub and git name rules.
+    for bad in ("code://bad-/x/main/a", "code://a--b/x/main/a", "code://{}/x/main/a".format("a" * 40),
+                "code://o/r/main..x/a", "code://o/r/main.lock/a", "code://o/r/main./a", "code://o/r/@/a"):
+        with pytest.raises(ResolveError, match="does not match"):
+            phys(bad)
+    for good in ("code://{}/x/main/a".format("a" * 39), "code://o/r/_wip/a", "code://o/r/v1.2+build/a"):
+        assert phys(good).startswith("github://")
+    # Finding 4: a branch with "/" goes in the selector.
+    assert phys("code://o/r/main/a?at=branch:feature/x") == "github://o/r/a?at=branch:feature/x"
     # Tenant review, findings 1 and 2: no two names give one repository.
     with pytest.raises(ResolveError, match="org 'a-b' does not match"):
         phys("data+table://a-b/c/prod/f/n")

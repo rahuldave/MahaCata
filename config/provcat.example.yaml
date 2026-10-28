@@ -7,7 +7,7 @@
 #
 #   data+table://ORG/DOMAIN/ENV/...        -> lakefs://ORG-data-DOMAIN/ENV/tables/...
 #   model://ORG/TEAM/ENV/PROJECT/...       -> lakefs://ORG-ml-PROJECT/ENV/TEAM/models/...
-#   code://ORG/REPO/PATH                   -> github://ORG/REPO/PATH
+#   code://ORG/REPO/ENV/PATH               -> github://ORG/REPO/PATH, branch ENV
 #
 # lakeFS repository names have 3 to 63 lowercase letters, digits and "-",
 # and branch names have letters, digits, "_" and "-". The match patterns
@@ -67,12 +67,21 @@ schemes:
     ref: "{env}"
     match: *ml_names
 
-  # code://org/repo/path[?at=branch:X|tag:X|commit:X]
+  # code://org/repo/env/path[?at=branch:X|tag:X|commit:X]
+  # The env is the GitHub branch, as it is the lakeFS branch for data.
   code:
-    parts: [org, repo]
+    parts: [org, repo, env]
     rest: path
     target: "github://{org}/{repo}/{path}"
+    ref: "{env}"
     pass_selector: true
+    # GitHub names: an owner has 1 to 39 letters, digits and single inner "-".
+    # The env is a git branch name without "/". Name a branch with "/" by a
+    # selector: code://org/repo/main/path?at=branch:feature/x
+    match:
+      org: '(?=.{1,39}\Z)[A-Za-z0-9](?:-?[A-Za-z0-9])*'
+      repo: '[A-Za-z0-9._-]{1,100}'
+      env: '(?!.*\.\.)(?!.*\.lock\Z)(?!.*\.\Z)(?!@\Z)[A-Za-z0-9_@+][A-Za-z0-9._+@-]{0,99}'
 
 stages:
   "data+table://acme/shared/prod/agreements/qa_outputs":

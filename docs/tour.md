@@ -29,7 +29,7 @@ You need Python 3.13, [uv](https://docs.astral.sh/uv/) and a GitHub login for `g
 Every command takes a URI and sends it through the same parts, in the same order. The picture below shows the parts. The names in brackets are the files that hold them.
 
 ```
-   "code://octocat/Hello-World/README?at=branch:master"
+   "code://octocat/Hello-World/master/README"
                      |
                      v
    +-------------------------------+
@@ -106,20 +106,23 @@ A logical URI names a thing, and the configuration says where the thing lives. T
 ```yaml
 schemes:
   code:
-    parts: [org, repo]
+    parts: [org, repo, env]
     rest: path
     target: "github://{org}/{repo}/{path}"
+    ref: "{env}"
     pass_selector: true
 ```
 
-In the scheme, the first part of the URI is `org` and the second is `repo`. Every segment after them goes into `path`. The `target` is a template for the physical URI. `pass_selector: true` copies the `?at=` part onto the physical URI.
+In the scheme, the parts of the URI are `org`, `repo` and `env`, in that order. Every segment after them goes into `path`. The `target` is a template for the physical URI. The `env` is the branch, through `ref: "{env}"`. `pass_selector: true` puts that branch on the physical URI as `?at=branch:...`.
+
+The scheme also has `match` patterns that refuse names GitHub does not allow. A branch name with `/`, such as `feature/x`, cannot be one segment. Name it with a selector, as in `code://octocat/Hello-World/master/README?at=branch:feature/x`. The env must still be there and match its pattern.
 
 Resolve a `code` URI.
 
 ```
-$ uv run provc --config $C resolve 'code://octocat/Hello-World/README?at=branch:master'
+$ uv run provc --config $C resolve 'code://octocat/Hello-World/master/README'
 {
-  "logical": "code://octocat/Hello-World/README?at=branch:master",
+  "logical": "code://octocat/Hello-World/master/README",
   "physical": "github://octocat/Hello-World/README?at=branch:master",
   "via": [
     "code template -> github://octocat/Hello-World/README?at=branch:master"
@@ -127,12 +130,12 @@ $ uv run provc --config $C resolve 'code://octocat/Hello-World/README?at=branch:
 }
 ```
 
-**What happened:** `TemplateResolver.resolve` matched the parts to names, filled the template, and parsed the result as a URI. The `via` list records each step. The resolver percent-encodes every value before it fills the template. So a value can never add a path segment or a second `?at=`.
+**What happened:** `TemplateResolver.resolve` matched the parts to names, made the branch from `env`, filled the template, and parsed the result as a URI. A selector such as `?at=tag:v1` replaces the branch. The `via` list records each step. The resolver percent-encodes every value before it fills the template. So a value can never add a path segment or a second `?at=`.
 
 Every other command takes the logical URI too. `fetch` and `cat` resolve it first, then do what Step 1 showed.
 
 ```
-$ uv run provc --config $C cat 'code://octocat/Hello-World/README?at=branch:master'
+$ uv run provc --config $C cat 'code://octocat/Hello-World/master/README'
 Hello World!
 ```
 
@@ -156,7 +159,7 @@ schemes:
 
 So `data+table://acme/shared/prod/agreements/qa_outputs` reads the repository `acme-data-shared` on the branch `prod`. The same names for the org `globex` read `globex-data-shared`. The ML schemes use repositories named `{org}-ml-{project}`.
 
-The `match` patterns refuse a name that lakeFS does not allow as a repository or a branch, or that could run into another name. They also keep each repository name within the 63 characters that lakeFS allows. An org has no `-`, so the first `-` in a repository name always ends the org. Two orgs never share a repository, a branch or a commit history.
+In the lakeFS schemes, the `match` patterns refuse a name that lakeFS does not allow, or that could run into another name. They also keep each repository name within the 63 characters that lakeFS allows. An org has no `-`, so the first `-` in a repository name always ends the org. Two orgs never share a repository, a branch or a commit history.
 
 A **stage** is a name, such as `production`, that points at a fixed version of one thing. The `stages` section of the configuration holds the pointers:
 
@@ -282,14 +285,14 @@ S3 has no commits, so an S3 path can change under the same name. Online, provcat
 The cache has readable paths, so a program in a container can read the files directly. To use provcat inside the container, mount the whole cache folder, `.provcat` included. Then run provcat with `--offline`. It reads only the cache.
 
 ```
-$ uv run provc --offline --config $C fetch 'code://octocat/Hello-World/README?at=branch:master'
+$ uv run provc --offline --config $C fetch 'code://octocat/Hello-World/master/README'
 /tmp/provcat-tour/github/octocat/Hello-World/7fd1a60b01f91b314f59955a4e4d4e80d8edf11d/README
 ```
 
 **What happened:** offline, provcat cannot ask GitHub where `master` points. It read the ref record from Step 1 and used that commit. A branch that was never pinned fails with a clear error:
 
 ```
-$ uv run provc --offline --config $C fetch 'code://octocat/Hello-World/README?at=branch:test'
+$ uv run provc --offline --config $C fetch 'code://octocat/Hello-World/test/README'
 provc: github://octocat/Hello-World/README?at=branch:test: offline, and branch:test was never pinned
 ```
 

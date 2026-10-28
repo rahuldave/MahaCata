@@ -115,11 +115,15 @@ The org is the tenant. It is the first part of every logical URI in the example 
 | `model://ORG/TEAM/ENV/PROJECT/NAME?at=version:N` | `lakefs://ORG-ml-PROJECT/ENV/TEAM/models/NAME/vN` |
 | `artifact+prompt://ORG/TEAM/ENV/PROJECT/NAME` | `lakefs://ORG-ml-PROJECT/ENV/TEAM/prompts/NAME` |
 | `artifact+card://ORG/TEAM/ENV/PROJECT/NAME` | `lakefs://ORG-ml-PROJECT/ENV/TEAM/cards/NAME` |
-| `code://ORG/REPO/PATH` | `github://ORG/REPO/PATH` |
+| `code://ORG/REPO/ENV/PATH` | `github://ORG/REPO/PATH?at=branch:ENV` |
 
-lakeFS has no orgs, so each org gets its own repositories, named `ORG-data-DOMAIN` or `ORG-ml-PROJECT`. Each environment is a branch of the repository. So two orgs never share a repository, a branch or a commit history, and lakeFS permissions can differ for each repository.
+lakeFS has no orgs, so each org gets its own repositories, named `ORG-data-DOMAIN` or `ORG-ml-PROJECT`. Each environment is a branch of the repository. For code, the environment is the GitHub branch, and the org is the GitHub owner. The `code` patterns follow the GitHub rules for owners, repositories and branch names, so an org there can have `-` and capital letters.
 
-The `match` patterns keep the names apart and valid for lakeFS:
+GitHub ignores case in owner names, so `Octocat` and `octocat` are two logical names for one owner, with two cache folders. A branch name with `/`, such as `feature/x`, cannot be one segment. Name it with a selector, for example `code://ORG/REPO/main/PATH?at=branch:feature/x`.
+
+The `code` shape changed from `code://ORG/REPO/PATH`. An old URI still resolves, but its first path segment becomes the env. So rewrite old `code` URIs with an env. So two orgs never share a repository, a branch or a commit history, and lakeFS permissions can differ for each repository.
+
+In the lakeFS schemes, the `match` patterns keep the names apart and valid for lakeFS:
 
 - **Org:** 1 to 20 lowercase letters and digits. It has no `-`, so the first `-` in a repository name always ends the org.
 - **Kind:** the word `data` or `ml` after the org keeps a domain and a project with the same name apart.
