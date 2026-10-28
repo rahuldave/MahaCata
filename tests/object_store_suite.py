@@ -6,6 +6,7 @@ gives its own ``backend`` fixture. A backend makes buckets, writes and deletes
 objects with the cloud's Python SDK, and names URIs for the store "lake".
 """
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -122,9 +123,10 @@ class LakefsBackend(S3Backend):
     """lakeFS through its S3 gateway. A bucket is a repository whose default
     branch is main, so the suite's keys "main/..." are paths on branch main."""
 
-    def __init__(self, endpoint, profile):
+    def __init__(self, endpoint, profile, data_dir=None):
         super().__init__(endpoint, profile)
         self.endpoint = endpoint
+        self.data_dir = self.data_folder(data_dir)
         creds = self.client._request_signer._credentials.get_frozen_credentials()
         import base64
 
@@ -146,9 +148,49 @@ class LakefsBackend(S3Backend):
                                              "default_branch": "main"})
         self.created.append(name)
 
+    @staticmethod
+    def data_folder(value):
+        """The local blockstore path of lakeFS, or None. lakeFS keeps the
+        storage of a deleted repository, so cleanup deletes the folders it
+        made there."""
+        return Path(value).expanduser().resolve() if value else None
+
     def cleanup(self):
+        """Delete every repository this run made, and its storage folder.
+
+        It tries every name, even after a failure, and raises one error at the
+        end that lists every problem. It deletes only a real folder named
+        provcat-test-..., directly inside the data folder."""
+        import shutil
+
+        problems = []
+        data = self.data_dir
+        if data is not None and not data.is_dir():
+            problems.append(f"{data} is not a folder, so no storage folder was deleted; "
+                            "set PROVCAT_SYSTEM_LAKEFS_DATA to the blockstore path of lakeFS")
+            data = None
         for name in self.created:
-            self._api("DELETE", f"/repositories/{name}")
+            try:
+                self._api("DELETE", f"/repositories/{name}")
+            except Exception as e:
+                problems.append(f"repository {name} was not deleted: {e}")
+                continue
+            if data is None:
+                continue
+            folder = data / name
+            if not name.startswith("provcat-test-") or folder.parent != data:
+                problems.append(f"{name!r} is not a name this suite makes, so it was left")
+            elif folder.is_symlink():
+                problems.append(f"{folder} is a link, so it was left")
+            elif not folder.is_dir():
+                problems.append(f"{folder} is missing; is {data} the blockstore path of lakeFS?")
+            else:
+                try:
+                    shutil.rmtree(folder)
+                except OSError as e:
+                    problems.append(f"{folder} was not deleted: {e}")
+        if problems:
+            raise RuntimeError("lakeFS cleanup: " + "; ".join(problems))
 
 
 @pytest.fixture

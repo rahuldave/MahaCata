@@ -86,6 +86,22 @@ For lasting use, keep the metadata in Postgres.
 
 Use the `127.0.0.1` port of the container, not its Docker host name. On OrbStack, a name such as `some-postgres.orb.local` can stop working while the container runs. A port on `127.0.0.1` keeps working.
 
+### Start lakeFS with the script
+
+After the first start, `scripts/lakefs_local.py` starts lakeFS again in one command. It needs these things:
+
+- **A container.** The Postgres container from step 1 must exist. The script starts it, and does not make it.
+- **One folder.** The folder must hold the `lakefs` program and its configuration, named `config.yaml`.
+- **The port.** Give the port that the container publishes on `127.0.0.1`.
+
+```
+uv run python scripts/lakefs_local.py --lakefs-dir <folder> --container lakefs-postgres --port 5432
+```
+
+The script waits until Postgres answers, and then runs lakeFS in the foreground. Ctrl+C, `kill` or closing the terminal asks lakeFS to stop, and waits up to 30 seconds for it. Then the script stops the container, but only if the script started it. The exit code is the exit code of lakeFS.
+
+The script reads the connection string from `config.yaml`. It changes only the host and port, to `127.0.0.1` and the port of the container. It passes the result in the environment variable `LAKEFS_DATABASE_POSTGRES_CONNECTION_STRING`, so it never changes `config.yaml`. Its messages never show the connection string or a line of the file. If the password has a `/`, `?` or `#` that is not percent-encoded, the script stops and asks you to encode it.
+
 ### Make keys and save them
 
 With Postgres, make the first admin user. The command prints an access key and a secret key.
@@ -104,7 +120,7 @@ aws_secret_access_key = <secret key>
 
 The example provcat configuration has a store `lakefs` that uses this profile, with the endpoint `http://localhost:8000`. The environment variable `LAKEFS_S3_ENDPOINT` changes the endpoint.
 
-A lakeFS repository has its own storage. When you delete a repository, lakeFS keeps that storage. With the local blockstore, delete the folder of the repository under the blockstore path by hand.
+A lakeFS repository has its own storage. When you delete a repository, lakeFS keeps that storage. With the local blockstore, delete the folder of the repository under the blockstore path.
 
 ## Run etcd
 
@@ -187,8 +203,8 @@ If `az` says that the request is malformed, the saved login is stale. Run `az ac
 
 ### lakeFS
 
-Start lakeFS and save its keys as the profile `lakefs`, as above. The tests make repositories named `provcat-test-...` with the local blockstore, and delete them at the end. lakeFS keeps their storage folders, so delete those by hand.
+Start lakeFS and save its keys as the profile `lakefs`, as above. The tests make repositories named `provcat-test-...` with the local blockstore, and delete them at the end. lakeFS keeps the storage folder of each one. Set `PROVCAT_SYSTEM_LAKEFS_DATA` to the blockstore path, and the tests delete those folders too. They delete only a folder that they made, inside that path.
 
 ```
-PROVCAT_SYSTEM_LAKEFS=http://localhost:8000 uv run pytest -m system
+PROVCAT_SYSTEM_LAKEFS=http://localhost:8000 PROVCAT_SYSTEM_LAKEFS_DATA=~/lakefs/data uv run pytest -m system
 ```

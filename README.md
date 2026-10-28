@@ -134,7 +134,7 @@ Run the system tests with `-m system`. [docs/setup.md](docs/setup.md) shows how 
 | `PROVCAT_SYSTEM_AWS=1` | AWS S3 with the default credentials. `PROVCAT_SYSTEM_AWS_PROFILE` picks a profile. |
 | `PROVCAT_SYSTEM_GCS=<project>` | Google Cloud Storage, with Application Default Credentials. |
 | `PROVCAT_SYSTEM_AZURE=<subscription id>` | Azure. The tests make a resource group with one ADLS Gen2 account, and delete the group afterwards. They need `uv sync --group system`. |
-| `PROVCAT_SYSTEM_LAKEFS=<url>` | lakeFS, with the keys of the AWS profile `lakefs`. lakeFS keeps the storage of each deleted repository, so delete those folders by hand. |
+| `PROVCAT_SYSTEM_LAKEFS=<url>` | lakeFS, with the keys of the AWS profile `lakefs`. Set `PROVCAT_SYSTEM_LAKEFS_DATA` to its blockstore path, and the tests also delete the storage folders that they made. |
 | `PROVCAT_SYSTEM_GITHUB=1` | github.com. |
 | `PROVCAT_SYSTEM_ETCD=<host:port>` | etcd. |
 

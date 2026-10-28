@@ -14,6 +14,9 @@ the test fails. Everything is made and deleted with the Python SDKs.
   DefaultAzureCredential, for example az login.
 - PROVCAT_SYSTEM_LAKEFS=<url>: lakeFS, for example http://localhost:8000, with
   the keys of the AWS profile PROVCAT_SYSTEM_LAKEFS_PROFILE (default lakefs).
+  PROVCAT_SYSTEM_LAKEFS_DATA names the local blockstore path of lakeFS. With
+  it, cleanup also deletes the storage folder of each repository it made,
+  because lakeFS keeps that folder when a repository is deleted.
 """
 import os
 import uuid
@@ -74,6 +77,7 @@ def backend(request, monkeypatch):
         b.hns = True
     else:
         b = LakefsBackend(_need("PROVCAT_SYSTEM_LAKEFS"),
-                          os.environ.get("PROVCAT_SYSTEM_LAKEFS_PROFILE", "lakefs"))
+                          os.environ.get("PROVCAT_SYSTEM_LAKEFS_PROFILE", "lakefs"),
+                          os.environ.get("PROVCAT_SYSTEM_LAKEFS_DATA"))
     yield b
     b.cleanup()
