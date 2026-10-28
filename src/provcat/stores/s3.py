@@ -130,8 +130,9 @@ class S3Store(Store):
 
     def list(self, uri: Uri, cache: LocalCache) -> list[Entry]:
         self._online(uri)
-        entries = []
+        entries, seen = [], False
         for prefix, out in self._pages(uri, Delimiter="/"):
+            seen = seen or bool(out.get("CommonPrefixes") or out.get("Contents"))
             for p in out.get("CommonPrefixes", []):
                 child = self._child(uri, p["Prefix"][len(prefix):].rstrip("/"))
                 if child:
@@ -141,6 +142,16 @@ class S3Store(Store):
                 child = self._child(uri, rel) if rel else None
                 if child:
                     entries.append(Entry(child, "file", o["Size"], o["ETag"].strip('"')))
+        bucket, key = self.locate(uri)
+        if not seen and key:
+            # S3 lists a missing prefix as empty. A folder with any key below it,
+            # even a marker or a key no URI can name, still lists as []. Only a
+            # prefix with nothing below it is an error, as in the other stores.
+            try:
+                self._call(uri, "head_object", Bucket=bucket, Key=key)
+            except StoreError:
+                raise NotFound(f"{uri}: no object and no folder") from None
+            raise NotFound(f"{uri}: is a file, not a folder")
         return entries
 
     def walk(self, uri: Uri) -> list[Entry]:

@@ -843,6 +843,7 @@ source = { editable = "." }
 dependencies = [
     { name = "boto3" },
     { name = "omegaconf" },
+    { name = "pyyaml" },
 ]
 
 [package.dev-dependencies]
@@ -855,6 +856,7 @@ dev = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.40.44" },
     { name = "omegaconf", specifier = ">=2.3.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
 ]
 
 [package.metadata.requires-dev]

@@ -12,7 +12,7 @@ ConfigSource is the interface. ``load()`` returns the configuration with every
 it as written, with the ``${...}`` left in. ``config push`` copies the raw form,
 so each reader of a shared etcd fills in its own environment.
 
-YamlConfig reads a YAML file through OmegaConf. EtcdConfig keeps each section as
+YamlConfig reads a YAML file with PyYAML. EtcdConfig keeps each section as
 JSON under ``<prefix>/<section>`` and talks to the etcd v3 HTTP gateway, so it
 needs no etcd client library. ``save()`` replaces all sections in one etcd
 transaction, and deletes the sections that the new configuration does not have.

@@ -55,6 +55,51 @@ def test_stat_and_list(s3_endpoint, bucket, tmp_path):
         ("lakefs://repo/main/data/sub", "folder"), ("lakefs://repo/main/data/a.txt", "file")]
 
 
+def test_list_of_a_missing_path_or_a_file_is_not_found(s3_endpoint, bucket, tmp_path):
+    # S3 lists a missing prefix as empty; provcat must not print [] for a typo.
+    c = cat(s3_endpoint, tmp_path)
+    with pytest.raises(NotFound, match="no object and no folder"):
+        c.list("lakefs://repo/main/nosuch")
+    with pytest.raises(NotFound, match="not a folder"):
+        c.list("lakefs://repo/main/top.txt")
+    bucket.put_object(Bucket="repo", Key="main/empty/", Body=b"")
+    assert c.list("lakefs://repo/main/empty") == []
+    bucket.create_bucket(Bucket="bare")
+    assert c.list("lakefs://bare") == []
+
+
+def test_list_of_a_folder_needs_no_object_read(s3_endpoint, bucket, tmp_path, monkeypatch):
+    # Review of the list fix, finding 2: a credential that may list but not read
+    # objects must still list an empty folder.
+    from provcat.errors import StoreError
+    from provcat.stores.s3 import S3Store
+
+    bucket.put_object(Bucket="repo", Key="main/empty/", Body=b"")
+    real = S3Store._call
+
+    def no_head(self, uri, method, **kw):
+        if method == "head_object":
+            raise StoreError("S3 error 403: Forbidden")
+        return real(self, uri, method, **kw)
+
+    monkeypatch.setattr(S3Store, "_call", no_head)
+    assert cat(s3_endpoint, tmp_path).list("lakefs://repo/main/empty") == []
+
+
+def test_list_of_odd_folders_is_not_an_error(s3_endpoint, bucket, tmp_path):
+    # Review of the list fix, findings 3 and 4: keys no URI can name, and a key
+    # that is both a file and a folder, still make a folder.
+    c = cat(s3_endpoint, tmp_path)
+    bucket.put_object(Bucket="repo", Key="main/odd//x", Body=b"x")
+    assert c.list("lakefs://repo/main/odd") == []
+    bucket.put_object(Bucket="repo", Key="main/both", Body=b"f")
+    bucket.put_object(Bucket="repo", Key="main/both/", Body=b"")
+    assert c.list("lakefs://repo/main/both") == []
+    bucket.put_object(Bucket="repo", Key="main/both2", Body=b"f")
+    bucket.put_object(Bucket="repo", Key="main/both2//z", Body=b"z")
+    assert c.list("lakefs://repo/main/both2") == []
+
+
 def test_offline(s3_endpoint, bucket, tmp_path):
     cat(s3_endpoint, tmp_path).fetch("lakefs://repo/main/top.txt")
     off = cat("http://127.0.0.1:9", tmp_path, offline=True)
