@@ -31,11 +31,54 @@ You do not need the `aws` command. The AWS SDK reads `~/.aws/credentials` and `~
 
 lakeFS is a server that keeps git-like branches and commits over object storage. provcat reads it through its S3 gateway.
 
-1. Download the lakeFS binary for your machine from the [lakeFS releases](https://github.com/treeverse/lakeFS/releases).
-2. Unpack it, and put `lakefs` on your `PATH`.
+1. Build lakeFS 1.86.0 from source, as the next section shows.
+2. Put `lakefs` on your `PATH`, or give its path to the script with `--lakefs`.
 3. Choose how lakeFS keeps its metadata, as the next sections show.
 4. Get the keys of an admin user.
 5. Save the keys as an AWS profile named `lakefs`.
+
+### Build lakeFS 1.86.0 from source
+
+Use lakeFS 1.86.0, and no later version. It is the last release under the Apache 2.0 license, and the last with pluggable access control:
+
+- **The license.** lakeFS 1.87.0 moved to the Business Source License 1.1, which is not an open-source license.
+- **Access control.** lakeFS 1.87.0 removed the external authorization server and its reference server, the access-list server. With them, one lakeFS can keep each org to its own repositories. Since 1.77.0, a user who lists repositories sees only the ones their policies let them list. The filter works only with an external authorization server, not with the built-in one.
+
+Build it from source, so the code is there to change. You need Git, Node.js and Go 1.23 or later. Go downloads the Go 1.26.4 that lakeFS needs.
+
+```
+git clone --branch v1.86.0 --single-branch https://github.com/treeverse/lakeFS.git ~/Projects/lakeFS
+cd ~/Projects/lakeFS
+git switch -c provcat
+export GOTOOLCHAIN=go1.26.4
+make gen-ui gen-code
+git checkout webui/package-lock.json
+make build-binaries VERSION=1.86.0
+(cd contrib/auth/acl && go build -o ../../../acl-server ./cmd/acl)
+echo /acl-server >> .git/info/exclude
+```
+
+The build makes three programs in `~/Projects/lakeFS`:
+
+- `lakefs`, the server.
+- `lakectl`, its command-line client.
+- `acl-server`, the reference access-list server.
+
+Skip `make build` and `make gen`. They also build the clients for other languages, which needs Docker images that provcat does not use.
+
+`make gen-ui` changes `webui/package-lock.json`. The `git checkout` puts it back before `make build-binaries`, which stamps the version. With any change in the working tree, the version ends in `.with.local.changes`. The `.gitignore` of lakeFS covers `lakefs` and `lakectl` but not `acl-server`, so the last line keeps it out of `git status`.
+
+`make gen-code` downloads Go tools such as `goimports`, so it needs the network.
+
+Check the version:
+
+```
+./lakefs --version
+```
+
+It prints `lakefs version 1.86.0-` and the short hash of the commit, `36fad6476` for the tag itself. After you commit a change on the `provcat` branch, the hash changes.
+
+lakeFS 1.70.1 and 1.86.0 use the same database schema, version 4, so 1.86.0 opens a 1.70.1 database with no migration. Back up the database before the switch all the same, for example with `pg_dump`. To check a database, run `lakefs --config <file> migrate version`.
 
 ### Run lakeFS without a database
 
@@ -91,11 +134,13 @@ Use the `127.0.0.1` port of the container, not its Docker host name. On OrbStack
 After the first start, `scripts/lakefs_local.py` starts lakeFS again in one command. It needs these things:
 
 - **A container.** The Postgres container from step 1 must exist. The script starts it, and does not make it.
-- **One folder.** The folder must hold the `lakefs` program and its configuration, named `config.yaml`.
+- **The program.** `--lakefs` gives the `lakefs` program, as a path or as a name on your `PATH`. The default is `~/Projects/lakeFS/lakefs`, the build from source.
+- **A folder.** `--lakefs-dir` gives the folder with the configuration, named `config.yaml`. lakeFS runs in this folder, so relative paths in the configuration start there. The default is `~/Catalog/lakefs`.
+- **Relative paths.** A relative `--lakefs` or `--lakefs-dir` starts from the folder you run the script in.
 - **The port.** Give the port that the container publishes on `127.0.0.1`.
 
 ```
-uv run python scripts/lakefs_local.py --lakefs-dir <folder> --container lakefs-postgres --port 5432
+uv run python scripts/lakefs_local.py --lakefs <program> --lakefs-dir <folder> --container lakefs-postgres --port 5432
 ```
 
 The script waits until Postgres answers, and then runs lakeFS in the foreground. Ctrl+C, `kill` or closing the terminal asks lakeFS to stop, and waits up to 30 seconds for it. Then the script stops the container, but only if the script started it. The exit code is the exit code of lakeFS.

@@ -62,18 +62,20 @@ def test_a_yaml_error_does_not_show_the_password(tmp_path):
 
 @pytest.fixture
 def world(tmp_path):
-    """A lakeFS folder with a fake lakefs, a fake docker on the PATH, and a
-    port that answers like Postgres."""
+    """A lakeFS config folder, a fake lakefs in a folder of its own, a fake
+    docker on the PATH, and a port that answers like Postgres."""
     home = tmp_path / "lakefs"
     home.mkdir()
     (home / "config.yaml").write_text(
         f'database:\n  postgres:\n    connection_string: "postgresql://postgres:{SECRET}@pg:5432/"\n')
     log = tmp_path / "log"
-    lakefs = home / "lakefs"
+    lakefs = tmp_path / "build" / "lakefs"
+    lakefs.parent.mkdir()
     lakefs.write_text(textwrap.dedent(f"""\
         #!{sys.executable}
         import os, signal, sys, time
         log = open({str(log)!r}, "a")
+        log.write("cwd " + os.getcwd() + " config " + sys.argv[2] + "\\n")
         log.write("lakefs " + os.environ["LAKEFS_DATABASE_POSTGRES_CONNECTION_STRING"].split("@")[1] + "\\n")
         log.flush()
         def stop(signum, frame):
@@ -114,7 +116,8 @@ def world(tmp_path):
 def start(world, **extra):
     home, port, env, log = world
     env = dict(env, **extra)
-    return subprocess.Popen([sys.executable, str(SCRIPT), "--lakefs-dir", str(home), "--port", str(port),
+    return subprocess.Popen([sys.executable, str(SCRIPT), "--lakefs", str(home.parent / "build" / "lakefs"),
+                             "--lakefs-dir", str(home), "--port", str(port),
                              "--wait", "2"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
 
@@ -172,3 +175,69 @@ def test_a_missing_container_shows_dockers_message(world):
     proc = start(world, FAKE_NO_CONTAINER="1")
     out, err = proc.communicate(timeout=20)
     assert proc.returncode == 1 and "No such object: lakefs-postgres" in err
+
+
+def test_the_program_and_the_config_folder_are_given_apart(world):
+    # lakeFS built from source lives apart from its config.yaml, and runs in the config folder.
+    home, log = world[0], world[3]
+    proc = start(world, FAKE_LAKEFS_EXIT="0")
+    proc.communicate(timeout=20)
+    assert f"cwd {home.resolve()} config {home / 'config.yaml'}" in log.read_text()
+
+
+def test_a_missing_program_is_named(world, tmp_path):
+    home, port, env, log = world
+    out = subprocess.run([sys.executable, str(SCRIPT), "--lakefs", str(tmp_path / "nope"), "--lakefs-dir", str(home),
+                          "--port", str(port)], env=env, capture_output=True, text=True)
+    assert out.returncode and f"no lakefs program at {(tmp_path / 'nope').resolve()}" in out.stderr
+    assert not log.exists()  # neither docker nor lakefs ran
+
+
+def run_in(world, cwd, *args, **extra):
+    home, port, env, log = world
+    return subprocess.run([sys.executable, str(SCRIPT), *args, "--port", str(port), "--wait", "2"],
+                          cwd=cwd, env=dict(env, FAKE_LAKEFS_EXIT="0", **extra), capture_output=True, text=True)
+
+
+def test_relative_paths_start_from_the_current_folder(world, tmp_path):
+    # Review findings 1 and 2: a relative --lakefs once ran from the config
+    # folder or the PATH, and a relative --lakefs-dir doubled in --config.
+    home, log = world[0], world[3]
+    decoy = home / "lakefs"  # an old lakeFS left in the config folder must not run
+    decoy.write_text(f"#!{sys.executable}\nopen({str(log)!r}, 'a').write('DECOY\\n')\n")
+    decoy.chmod(0o755)
+    out = run_in(world, tmp_path, "--lakefs", "build/lakefs", "--lakefs-dir", "lakefs")
+    assert out.returncode == 0, out.stderr
+    text = log.read_text()
+    assert "DECOY" not in text
+    assert f"cwd {home.resolve()} config {home.resolve() / 'config.yaml'}" in text
+
+
+def test_a_dot_slash_program_is_not_looked_up_on_the_path(world, tmp_path):
+    out = run_in(world, tmp_path / "build", "--lakefs", "./lakefs", "--lakefs-dir", str(world[0]),
+                 PATH=f"{tmp_path / 'bin'}")  # only the fake docker is on the PATH
+    assert out.returncode == 0, out.stderr
+    assert "lakefs 127.0.0.1:" in world[3].read_text()
+
+
+def test_a_bare_name_is_looked_up_on_the_path(world, tmp_path):
+    env_path = f"{tmp_path / 'build'}{os.pathsep}{world[2]['PATH']}"
+    out = run_in(world, tmp_path, "--lakefs", "lakefs", "--lakefs-dir", str(world[0]), PATH=env_path)
+    assert out.returncode == 0, out.stderr
+    assert "lakefs 127.0.0.1:" in world[3].read_text()
+    missing = run_in(world, tmp_path, "--lakefs", "lakefs", "--lakefs-dir", str(world[0]))
+    assert missing.returncode and "no lakefs program named lakefs on the PATH" in missing.stderr
+
+
+def test_a_program_that_is_not_executable_is_named(world, tmp_path):
+    # Review finding 3: this was a PermissionError traceback.
+    program = tmp_path / "build" / "lakefs"
+    program.chmod(0o644)
+    out = run_in(world, tmp_path, "--lakefs", str(program), "--lakefs-dir", str(world[0]))
+    assert out.returncode and f"{program.resolve()} is not executable" in out.stderr
+    assert "Traceback" not in out.stderr and not world[3].exists()
+
+
+def test_a_folder_is_not_a_program(world, tmp_path):
+    out = run_in(world, tmp_path, "--lakefs", str(tmp_path / "build"), "--lakefs-dir", str(world[0]))
+    assert out.returncode and "no lakefs program at" in out.stderr

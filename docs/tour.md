@@ -45,7 +45,7 @@ Every command takes a URI and sends it through the same parts, in the same order
                      v
    +-------------------------------+
    | pick store by scheme          |  file -> LocalStore, s3 -> S3Store,
-   |              (catalog.py)     |  github -> GithubStore, lakefs -> S3Store
+   |              (catalog.py)     |  github -> GithubStore, lakefs -> LakefsStore
    +-------------------------------+
                      |
                      v
