@@ -123,7 +123,15 @@ class LakefsBackend(S3Backend):
     """lakeFS through its S3 gateway. A bucket is a repository whose default
     branch is main, so the suite's keys "main/..." are paths on branch main."""
 
-    def __init__(self, endpoint, profile, data_dir=None):
+    prefix = "provcat-test-"  # the start of every repository name that cleanup deletes
+
+    def __init__(self, endpoint, profile, data_dir=None, prefix=None):
+        if prefix is not None:
+            # With access control an org may only make names that start with
+            # the org, as in acme-provcat-test-...
+            if not prefix.endswith("provcat-test-"):
+                raise ValueError(f"prefix {prefix!r} must end with provcat-test-")
+            self.prefix = prefix
         super().__init__(endpoint, profile)
         self.store["lake"]["driver"] = "lakefs"
         self.endpoint = endpoint
@@ -179,7 +187,8 @@ class LakefsBackend(S3Backend):
 
         It tries every name, even after a failure, and raises one error at the
         end that lists every problem. It deletes only a real folder named
-        provcat-test-..., directly inside the data folder."""
+        with the prefix, provcat-test-... by default, directly inside the data
+        folder."""
         import shutil
 
         problems = []
@@ -199,7 +208,7 @@ class LakefsBackend(S3Backend):
             if data is None:
                 continue
             folder = data / name
-            if not name.startswith("provcat-test-") or folder.parent != data:
+            if not name.startswith(self.prefix) or folder.parent != data:
                 problems.append(f"{name!r} is not a name this suite makes, so it was left")
             elif folder.is_symlink():
                 problems.append(f"{folder} is a link, so it was left")

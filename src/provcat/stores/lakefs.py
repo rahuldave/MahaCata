@@ -73,6 +73,25 @@ class LakefsStore(S3Store):
         if not uri.authority or not uri.segments:
             raise UriError(f"{uri}: write {uri.scheme}://repository/ref/path")
 
+    def _call(self, uri: Uri, method: str, **kw):
+        """The S3 call. With access control, the gateway answers a repository
+        that does not exist with 403, as it answers one the keys may not read,
+        so on a 403 the API says which."""
+        try:
+            return super()._call(uri, method, **kw)
+        except StoreError as e:
+            response = getattr(e.__cause__, "response", None) or {}
+            code = str(response.get("Error", {}).get("Code", ""))
+            if self.offline or code not in ("403", "AccessDenied") or not uri.authority:
+                raise
+            try:
+                self._api(uri, f"/repositories/{quote(uri.authority, safe='')}")
+            except NotFound:
+                raise NotFound(f"{uri}: lakeFS at {self._api_url()} has no repository {uri.authority!r}") from None
+            except StoreError:
+                pass  # the API refuses too, so the 403 stands
+            raise e
+
     # The REST API
 
     def _api_url(self) -> str:
@@ -103,6 +122,15 @@ class LakefsStore(S3Store):
             if e.code == 404:
                 raise NotFound(f"{uri}: lakeFS found nothing at {path} ({body})") from None
             if e.code in (401, 403):
+                # With access control, lakeFS knows the keys but their policies
+                # do not allow the action; its message names the action.
+                try:
+                    message = str(json.loads(body).get("message", ""))
+                except (ValueError, AttributeError):
+                    message = ""
+                if message.startswith("insufficient permissions"):
+                    raise StoreError(f"{uri}: lakeFS does not allow these keys to do this ({e.code}): "
+                                     f"{message[:200]}") from None
                 raise StoreError(f"{uri}: lakeFS refused the keys ({e.code})") from None
             raise StoreError(f"{uri}: lakeFS API error {e.code}: {body}") from None
         except (urllib.error.URLError, OSError) as e:

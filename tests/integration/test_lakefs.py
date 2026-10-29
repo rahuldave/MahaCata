@@ -30,6 +30,7 @@ class FakeLakefs:
         self.queries = []
         self.redirect_to = None
         self.fail_with = None
+        self.fail_message = "broken"
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -44,7 +45,7 @@ class FakeLakefs:
                     self.end_headers()
                     return
                 if fake.fail_with:
-                    return self.reply(fake.fail_with, {"message": "broken"})
+                    return self.reply(fake.fail_with, {"message": fake.fail_message})
                 url = urlsplit(self.path)
                 parts = [unquote(p) for p in url.path.split("/")]
                 q = parse_qs(url.query)
@@ -263,11 +264,74 @@ def test_the_repository_root_lists_branches(s3_endpoint, api, data, tmp_path):
         c.list("lakefs://other")
 
 
+def _gateway_403(monkeypatch, code="403"):
+    """The S3 gateway of lakeFS with access control: 403 for every read."""
+    from botocore.exceptions import ClientError
+
+    from provcat.errors import StoreError
+    from provcat.stores.s3 import S3Store
+
+    def call(self, uri, method, **kw):
+        error = ClientError({"Error": {"Code": code, "Message": "Forbidden"}}, method)
+        raise StoreError(f"{uri}: S3 error 403: {error}") from error
+
+    monkeypatch.setattr(S3Store, "_call", call)
+
+
+@pytest.mark.parametrize("code", ["403", "AccessDenied"])
+def test_a_403_for_a_missing_repository_is_not_found(s3_endpoint, api, tmp_path, monkeypatch, code):
+    # With access control, the gateway answers a missing repository with 403;
+    # the API tells that it is missing.
+    _gateway_403(monkeypatch, code)
+    with pytest.raises(NotFound, match="has no repository 'other'"):
+        cat(s3_endpoint, api, tmp_path).read("lakefs://other/main/t/a.csv")
+
+
+@pytest.mark.parametrize("api_code", [None, 401])
+def test_a_403_for_a_repository_that_exists_stands(s3_endpoint, api, tmp_path, monkeypatch, api_code):
+    # The repository exists, or the API refuses too: the keys may not read it.
+    from provcat.errors import StoreError
+
+    _gateway_403(monkeypatch)
+    api.fail_with = api_code
+    with pytest.raises(StoreError, match="S3 error 403") as e:
+        cat(s3_endpoint, api, tmp_path).read("lakefs://repo/main/t/a.csv")
+    assert not isinstance(e.value, NotFound)
+
+
+def test_a_403_offline_asks_no_api(s3_endpoint, api, tmp_path, monkeypatch):
+    # Offline, the 403 stands, and nothing goes to the API.
+    from provcat.errors import StoreError
+    from provcat.uri import parse
+
+    _gateway_403(monkeypatch)
+    store = cat(s3_endpoint, api, tmp_path, offline=True).stores["lakefs"]
+    with pytest.raises(StoreError, match="S3 error 403") as e:
+        store._call(parse("lakefs://other/main/t/a.csv"), "head_object", Bucket="other", Key="main/t/a.csv")
+    assert not isinstance(e.value, NotFound)
+    assert api.auth == []
+
+
 def test_api_errors_name_the_api(s3_endpoint, api, data, tmp_path):
     from provcat.errors import StoreError
 
     api.fail_with = 500
     with pytest.raises(StoreError, match="lakeFS API error 500"):
+        cat(s3_endpoint, api, tmp_path).pin("lakefs://repo/main/x")
+
+
+@pytest.mark.parametrize("message, want", [
+    # lakeFS with access control knows the keys, but a policy refuses the action.
+    ("insufficient permissions: not allowed to fs:ReadRepository",
+     r"does not allow these keys to do this \(401\): insufficient permissions: not allowed to fs:ReadRepository"),
+    # Keys that lakeFS does not know.
+    ("error authenticating request", r"refused the keys \(401\)"),
+])
+def test_a_refusal_says_whether_the_keys_or_the_policy_failed(s3_endpoint, api, data, tmp_path, message, want):
+    from provcat.errors import StoreError
+
+    api.fail_with, api.fail_message = 401, message
+    with pytest.raises(StoreError, match=want):
         cat(s3_endpoint, api, tmp_path).pin("lakefs://repo/main/x")
 
 

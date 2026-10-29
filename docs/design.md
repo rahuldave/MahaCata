@@ -154,10 +154,39 @@ The mapping is not access control. provcat does not know who runs it, and a phys
 
 A shared cache is not a boundary either. Its folders, such as `<cache>/lakefs-globex/...`, are plain files. Give each tenant its own cache. Pins live under the store name, so a pin made through the `lakefs` store is not found through `lakefs-acme`.
 
-The keys keep tenants apart only if the server checks them. The open-source lakeFS has no access control. It answers 501 to the group and policy APIs, and every user can read every repository. With one open-source lakeFS, the stores for each org route the requests. They do not stop one org's keys from reading another org's repositories. To enforce the separation, use one of these:
+The keys keep tenants apart only if the server checks them. lakeFS with its default settings has no access control. It answers 501 to the group and policy APIs, and every user can read every repository. With one open-source lakeFS, the stores for each org route the requests. They do not stop one org's keys from reading another org's repositories. To enforce the separation, use one of these:
 
 - **A lakeFS for each org.** Point each org's store at its own lakeFS server, with `endpoint_url`. The system test `tests/system/test_lakefs_isolation.py` checks this with two real servers. Each org reads its own data, and its store finds no repository of the other org. Each server refuses the other server's keys, at the S3 gateway and at the API.
-- **lakeFS with access control.** lakeFS Cloud and lakeFS Enterprise can limit a user to its own repositories.
+- **One patched lakeFS 1.86.0 with the access-list server.** lakeFS 1.86.0 can ask an external server who may do what. Its reference server, the access-list server, keeps users, groups and policies. `scripts/lakefs_acl_local.py` runs both, and gives each org a policy for the repositories whose names start with the org and a `-`. The system test `tests/system/test_lakefs_acl.py` checks this on one real server:
+  - Each org reads, pins and lists its own data.
+  - Each org lists only its own repositories, through the API and the S3 gateway.
+  - Each org is refused the other's repositories, and cannot make a repository under the other's name or on its storage.
+- **lakeFS with access control from Treeverse.** lakeFS Cloud and lakeFS Enterprise can limit a user to its own repositories.
+
+The route needs a patch to lakeFS, kept on the branch `provcat` of the fork [rahuldave/lakeFS](https://github.com/rahuldave/lakeFS). Without it, stock lakeFS 1.86.0 lets one org read another's data:
+
+- **Linking any address.** The stage and link calls let a user who may write to its own repository add an object at any address on the same storage. lakeFS checks the repository, not the address. The addresses follow a pattern that can be guessed. So acme could link one of globex's objects into an acme repository, and read it.
+- **Dots in names.** A storage namespace such as `local://acme-x/../globex-y` matches a policy on `namespace/local://acme-*`, but names globex's storage.
+- **Any file as a commit's contents.** A commit can name its metarange, the file that lists its objects. lakeFS opened that name in its cache without a check, so `../` reached any file on the server, another org's metaranges among them. A bad name also broke the branch.
+
+The patch closes all three:
+
+- **Addresses outside the repository.** An address outside the repository's own storage needs `fs:ImportFromStorage` on that address, as an import does. The org policies do not grant it.
+- **Dot segments.** lakeFS refuses `.` and `..` segments in addresses and storage namespaces, also when they are percent-encoded. It also refuses `@`, `?` and `#` in storage namespaces. The commit cache reads `local://acme-x@globex-y` as storage of `globex-y`.
+- **Metarange names.** A metarange ID from a caller must be letters, digits, `_` and `-`, and a commit's metarange must exist. The cache also refuses `.` and `..` in any file name.
+
+The system test `tests/system/test_lakefs_acl.py` tries each attack. The first two fail on stock 1.86.0 and pass on the patched build. A reviewer reproduced the third on a build with only the first two fixes. Open-source lakeFS at master has the same staging code. lakeFS Enterprise 1.103.0 made the same change to stage and link, and notes it as a security fix.
+
+Each lakeFS also needs its own commit cache. The default, `~/lakefs/data/cache`, is shared by every lakeFS of the same user, and names its files by storage namespace only. `scripts/lakefs_acl_local.py` sets `LAKEFS_COMMITTED_LOCAL_CACHE_DIR` to a folder of its own. Error messages and stat replies show absolute server paths, which help an attacker build addresses.
+
+The access-list server route has these limits:
+
+- **It ends with 1.86.0.** lakeFS 1.87.0 removed the external authorization server and the access-list server, and moved to the Business Source License 1.1. So this route stays on 1.86.0, built from source.
+- **The server trusts every caller.** The access-list server does not check who calls it. Anyone who reaches its port can make an admin. The script keeps it on `127.0.0.1`.
+- **Policies cannot be listed, deleted or detached.** The access-list server answers 501 to these, and lakeFS passes that on as 500. A policy can be changed, and the script rewrites each org's policy on every run. To take an org's access away, remove its user from its group, or delete its keys.
+- **Org users cannot manage their own keys.** Only the admin can make or delete an org's keys.
+- **The admin is made in the access-list server.** In this mode the lakeFS setup call makes no user, and `lakefs superuser` refuses to run. The script makes the admin in the access-list server, in its `Admins` group.
+- **A missing repository looks like a refused one.** For a user with limited access, the S3 gateway answers a repository that does not exist with 403. The `lakefs` driver then asks the API, which tells the two apart.
 
 These parts of tenancy are not built yet:
 

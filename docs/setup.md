@@ -44,12 +44,11 @@ Use lakeFS 1.86.0, and no later version. It is the last release under the Apache
 - **The license.** lakeFS 1.87.0 moved to the Business Source License 1.1, which is not an open-source license.
 - **Access control.** lakeFS 1.87.0 removed the external authorization server and its reference server, the access-list server. With them, one lakeFS can keep each org to its own repositories. Since 1.77.0, a user who lists repositories sees only the ones their policies let them list. The filter works only with an external authorization server, not with the built-in one.
 
-Build it from source, so the code is there to change. You need Git, Node.js and Go 1.23 or later. Go downloads the Go 1.26.4 that lakeFS needs.
+Build it from source, from the fork [rahuldave/lakeFS](https://github.com/rahuldave/lakeFS), branch `provcat`. The branch is v1.86.0 with one patch. Without the patch, access control does not keep orgs apart, as the design document explains. You need Git, Node.js and Go 1.23 or later. Go downloads the Go 1.26.4 that lakeFS needs.
 
 ```
-git clone --branch v1.86.0 --single-branch https://github.com/treeverse/lakeFS.git ~/Projects/lakeFS
+git clone --branch provcat --single-branch https://github.com/rahuldave/lakeFS.git ~/Projects/lakeFS
 cd ~/Projects/lakeFS
-git switch -c provcat
 export GOTOOLCHAIN=go1.26.4
 make gen-ui gen-code
 git checkout webui/package-lock.json
@@ -76,7 +75,7 @@ Check the version:
 ./lakefs --version
 ```
 
-It prints `lakefs version 1.86.0-` and the short hash of the commit, `36fad6476` for the tag itself. After you commit a change on the `provcat` branch, the hash changes.
+It prints `lakefs version 1.86.0-` and the short hash of the commit at the head of `provcat`. Each new commit on the branch changes the hash.
 
 lakeFS 1.70.1 and 1.86.0 use the same database schema, version 4, so 1.86.0 opens a 1.70.1 database with no migration. Back up the database before the switch all the same, for example with `pg_dump`. To check a database, run `lakefs --config <file> migrate version`.
 
@@ -146,6 +145,44 @@ uv run python scripts/lakefs_local.py --lakefs <program> --lakefs-dir <folder> -
 The script waits until Postgres answers, and then runs lakeFS in the foreground. Ctrl+C, `kill` or closing the terminal asks lakeFS to stop, and waits up to 30 seconds for it. Then the script stops the container, but only if the script started it. The exit code is the exit code of lakeFS.
 
 The script reads the connection string from `config.yaml`. It changes only the host and port, to `127.0.0.1` and the port of the container. It passes the result in the environment variable `LAKEFS_DATABASE_POSTGRES_CONNECTION_STRING`, so it never changes `config.yaml`. Its messages never show the connection string or a line of the file. If the password has a `/`, `?` or `#` that is not percent-encoded, the script stops and asks you to encode it.
+
+### Run one lakeFS for many orgs
+
+`scripts/lakefs_acl_local.py` runs lakeFS 1.86.0 with access control for each org. It runs two programs from the source build. The access-list server keeps users, groups and policies. lakeFS asks it who may do what. lakeFS keeps its metadata in a local database, so this needs no Postgres.
+
+```
+uv run python scripts/lakefs_acl_local.py
+```
+
+The first run makes the folder `~/Catalog/lakefs-acl`, and writes these files there:
+
+- `acl.yaml` and `lakefs.yaml`, each with a new random secret key.
+- The databases of both programs, and the lakeFS data, in the `data` folder.
+- `credentials`, an AWS credentials file.
+
+The credentials file has these profiles:
+
+- `lakefs`, the admin, who reads every repository.
+- `lakefs-acme` and `lakefs-globex`, the keys of each org.
+
+Each org may do anything in the repositories whose names start with the org and a `-`, such as `acme-data-shared`, and nothing else. Give `--org` once for each org, to choose other orgs. A later run keeps the keys, and adds any org that is new.
+
+lakeFS listens on `127.0.0.1:8002`, and the access-list server on `127.0.0.1:8011`. `--port` and `--acl-port` change them on the first run. Later runs must use the same ports. `--dir`, `--lakefs` and `--acl-server` change the folder and the two programs.
+
+An org user cannot list, make or delete its own keys. Only the admin can, through the lakeFS API.
+
+To use it with provcat and the example configuration:
+
+```
+export AWS_SHARED_CREDENTIALS_FILE=~/Catalog/lakefs-acl/credentials
+export LAKEFS_S3_ENDPOINT=http://127.0.0.1:8002
+```
+
+Setting `AWS_SHARED_CREDENTIALS_FILE` hides `~/.aws/credentials` from provcat in that shell, so the S3 stores lose their keys there. Use another shell for them, or copy the profiles into `~/.aws/credentials`.
+
+Ctrl+C, `kill` or closing the terminal stops lakeFS, and then the access-list server.
+
+The access-list server does not check who calls it. Anyone who reaches its port can make an admin, so keep it on `127.0.0.1`. The design document lists the other limits of this route.
 
 ### Make keys and save them
 
@@ -278,3 +315,14 @@ To test isolation between orgs, run a second lakeFS:
 5. Set `PROVCAT_SYSTEM_LAKEFS_B=http://127.0.0.1:8001`, and `PROVCAT_SYSTEM_LAKEFS_B_DATA` to its blockstore path.
 
 `PROVCAT_SYSTEM_LAKEFS_PROFILE` and `PROVCAT_SYSTEM_LAKEFS_B_PROFILE` change the two profile names, which are `lakefs` and `lakefs-b` by default.
+
+To test isolation on one lakeFS with access control, start `scripts/lakefs_acl_local.py`, and set three variables:
+
+```
+PROVCAT_SYSTEM_LAKEFS_ACL=http://127.0.0.1:8002 \
+PROVCAT_SYSTEM_LAKEFS_ACL_CREDENTIALS=~/Catalog/lakefs-acl/credentials \
+PROVCAT_SYSTEM_LAKEFS_ACL_DATA=~/Catalog/lakefs-acl/data \
+uv run pytest -m system tests/system/test_lakefs_acl.py
+```
+
+The test makes repositories named `acme-provcat-test-...` and `globex-provcat-test-...` with each org's keys, and deletes them at the end.

@@ -39,6 +39,22 @@ def test_cleanup_deletes_only_its_own_folders(data):
         assert (data / name / "f").exists()
 
 
+def test_an_org_prefix_is_its_own_rule(data):
+    # With access control, the test repositories start with the org.
+    (data / "acme-provcat-test-aaa").mkdir()
+    b = backend(data, ["acme-provcat-test-aaa", "provcat-test-aaa"])
+    b.prefix = "acme-provcat-test-"
+    with pytest.raises(RuntimeError, match="'provcat-test-aaa' is not a name"):
+        b.cleanup()
+    assert not (data / "acme-provcat-test-aaa").exists()
+    assert (data / "provcat-test-aaa" / "f").exists()
+
+
+def test_a_prefix_must_end_with_provcat_test():
+    with pytest.raises(ValueError, match="must end with provcat-test-"):
+        LakefsBackend("http://x", "p", prefix="acme-")
+
+
 def test_cleanup_without_a_data_folder_deletes_no_files(data):
     backend(None, ["provcat-test-aaa"]).cleanup()
     assert (data / "provcat-test-aaa").exists()
