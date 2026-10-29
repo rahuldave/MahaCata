@@ -137,7 +137,7 @@ Run the system tests with `-m system`. [docs/setup.md](docs/setup.md) shows how 
 | `PROVCAT_SYSTEM_AZURE=<subscription id>` | Azure. The tests make a resource group with one ADLS Gen2 account, and delete the group afterwards. They need `uv sync --group system`. |
 | `PROVCAT_SYSTEM_LAKEFS=<url>` | lakeFS, with the keys of the AWS profile `lakefs`. Set `PROVCAT_SYSTEM_LAKEFS_DATA` to its blockstore path, and the tests also delete the storage folders that they made. |
 | `PROVCAT_SYSTEM_LAKEFS_B=<url>` | A second lakeFS, with the keys of the profile `lakefs-b`. With both lakeFS variables set, a test checks that two servers keep two orgs apart. `PROVCAT_SYSTEM_LAKEFS_B_DATA` names its blockstore path. |
-| `PROVCAT_SYSTEM_LAKEFS_ACL=<url>` | A lakeFS run by `scripts/lakefs_acl_local.py`, with access control for each org. A test checks that one server keeps two orgs apart. `PROVCAT_SYSTEM_LAKEFS_ACL_CREDENTIALS` names the credentials file, and `PROVCAT_SYSTEM_LAKEFS_ACL_DATA` the blockstore path. |
+| `PROVCAT_SYSTEM_LAKEFS_ACL=<url>` | A lakeFS run by `scripts/lakefs_acl_local.py`, with access control for each org. A test checks that one server keeps two orgs apart. `PROVCAT_SYSTEM_LAKEFS_ACL_CREDENTIALS` names the credentials file, `PROVCAT_SYSTEM_LAKEFS_ACL_DATA` the blockstore path, `PROVCAT_SYSTEM_LAKEFS_ACL_SERVER` the access-list server, and `PROVCAT_SYSTEM_LAKEFS_ACL_DIR` the folder of the setup. |
 | `PROVCAT_SYSTEM_GITHUB=1` | github.com. |
 | `PROVCAT_SYSTEM_ETCD=<host:port>` | etcd. |
 

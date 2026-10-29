@@ -182,8 +182,26 @@ Each lakeFS also needs its own commit cache. The default, `~/lakefs/data/cache`,
 The access-list server route has these limits:
 
 - **It ends with 1.86.0.** lakeFS 1.87.0 removed the external authorization server and the access-list server, and moved to the Business Source License 1.1. So this route stays on 1.86.0, built from source.
-- **The server trusts every caller.** The access-list server does not check who calls it. Anyone who reaches its port can make an admin. The script keeps it on `127.0.0.1`.
-- **Policies cannot be listed, deleted or detached.** The access-list server answers 501 to these, and lakeFS passes that on as 500. A policy can be changed, and the script rewrites each org's policy on every run. To take an org's access away, remove its user from its group, or delete its keys.
+- **The server needs a token.** Stock 1.86.0's access-list server took every caller, so anyone who reached its port could make an admin. On the fork it takes `api_token`, and refuses a call without `Authorization: Bearer <token>`. lakeFS sends its `auth.api.token` that way. The script makes one token for both, and keeps the server on `127.0.0.1` as well.
+- **Policies.** Stock 1.86.0's access-list server answered 501 to listing, deleting and detaching policies, and to policies on users. The fork implements them. To take an org's access away, detach its policy from its group, or delete the policy. lakeFS caches each user's policies for up to 23 seconds, so a change can take that long to apply. The script turns off the access-list server's own cache, which made a deleted user or key look present. The script rewrites each org's policy on every run.
+- **Group policies are guarded.** Each group made through the access-list levels has a policy named `ACL(_-_)<group>`. Deleting the Admins one locked the admin out, with no way back through the API. So the fork refuses these:
+  - deleting the Admins group;
+  - deleting the `ACL(_-_)` policy of a group that exists, or detaching it from its own group;
+  - making an `ACL(_-_)` policy for a group that does not exist;
+  - writing anything into the Admins policy but the full-access statement it holds.
+
+  Deleting any other group also deletes its `ACL(_-_)` policy.
+- **The admin can still lock itself out.** It can do so in any of these ways:
+  - leave the Admins group, or delete it;
+  - join a group with a deny policy;
+  - attach a deny policy to itself or to Admins;
+  - delete its own keys or its own user.
+
+  Run `scripts/lakefs_acl_local.py --repair-admin` to undo any of these. It works through the access-list server and its token, while the setup runs or as it starts. It does the same steps every time:
+  1. It makes the Admins group again if it is missing. It writes the Admins policy back to its full-access statement, and detaches every other policy from Admins, also ones that only allow.
+  2. It puts the admin back in Admins, takes it out of every other group, and detaches the policies on the admin itself.
+  3. It replaces the admin's keys in `credentials`.
+  4. It waits until lakeFS takes the new keys for policies and for repositories, after lakeFS's policy cache has expired.
 - **Org users cannot manage their own keys.** Only the admin can make or delete an org's keys.
 - **The admin is made in the access-list server.** In this mode the lakeFS setup call makes no user, and `lakefs superuser` refuses to run. The script makes the admin in the access-list server, in its `Admins` group.
 - **A missing repository looks like a refused one.** For a user with limited access, the S3 gateway answers a repository that does not exist with 403. The `lakefs` driver then asks the API, which tells the two apart.

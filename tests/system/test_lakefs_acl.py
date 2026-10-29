@@ -193,3 +193,114 @@ def test_an_org_cannot_commit_a_metarange_outside_its_storage(orgs):
     # The branch still works, and still holds only acme's data.
     listed = acme._api("GET", f"/repositories/{acme_repo}/refs/main/objects/ls")["results"]
     assert [o["path"] for o in listed] == ["a.csv"]
+
+
+def test_policies_can_be_listed_detached_and_deleted(orgs, monkeypatch):
+    """The fork's access-list server implements the policy calls that stock
+    1.86.0 answered with 501, so the admin can take an org's access away."""
+    admin = LakefsBackend(orgs["acme"].endpoint, "lakefs")
+    name = f"provcat-test-{uuid.uuid4().hex[:12]}"
+    policy = {"id": name, "statement": [{"effect": "allow", "action": ["fs:ReadRepository"],
+                                         "resource": f"arn:lakefs:fs:::repository/{name}"}]}
+    admin._api("POST", "/auth/policies", policy)
+    try:
+        listed = [p["id"] for p in admin._api("GET", f"/auth/policies?prefix={name}")["results"]]
+        assert listed == [name]
+        admin._api("PUT", f"/auth/groups/acme/policies/{name}")
+        assert name in [p["id"] for p in admin._api("GET", "/auth/groups/acme/policies")["results"]]
+        admin._api("DELETE", f"/auth/groups/acme/policies/{name}")
+        assert name not in [p["id"] for p in admin._api("GET", "/auth/groups/acme/policies")["results"]]
+    finally:
+        admin._api("DELETE", f"/auth/policies/{name}")
+    with pytest.raises(urllib.error.HTTPError) as e:
+        admin._api("GET", f"/auth/policies/{name}")
+    assert e.value.code == 404
+
+
+def test_the_access_list_server_refuses_callers_without_the_token():
+    """PROVCAT_SYSTEM_LAKEFS_ACL_SERVER=<url> names the access-list server,
+    for example http://127.0.0.1:8011. Stock 1.86.0 took every caller."""
+    url = _need("PROVCAT_SYSTEM_LAKEFS_ACL_SERVER")
+    import json
+    import urllib.request
+
+    for headers in ({}, {"Authorization": "Bearer wrong"}):
+        req = urllib.request.Request(f"{url}/api/v1/auth/users", method="POST", headers={
+            "Content-Type": "application/json", **headers}, data=json.dumps({"username": "intruder"}).encode())
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req, timeout=10)
+        assert e.value.code == 401
+
+
+def test_the_admin_cannot_lock_itself_out(orgs):
+    """Review 5, finding 1: deleting the built-in Admins policy left the admin
+    unable to do anything. The fork refuses it, and the policy stays whole."""
+    admin = LakefsBackend(orgs["acme"].endpoint, "lakefs")
+    path = "/auth/policies/ACL%28_-_%29Admins"
+    before = admin._api("GET", path)
+    for method, call_path, body in (
+        ("DELETE", path, None),
+        ("DELETE", "/auth/groups/Admins/policies/ACL%28_-_%29Admins", None),
+        ("PUT", path, {"id": "ACL(_-_)Admins", "statement": [  # a valid body, so the guard answers
+            {"effect": "allow", "action": ["fs:ReadRepository"], "resource": "*"}]}),
+    ):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            admin._api(method, call_path, body)
+        assert e.value.code == 400, (method, call_path)
+    assert admin._api("GET", path)["statement"] == before["statement"]
+    assert "ACL(_-_)Admins" in [p["id"] for p in admin._api("GET", "/auth/groups/Admins/policies")["results"]]
+    admin._api("GET", "/repositories")
+
+
+@pytest.mark.parametrize("lockout", ["leave Admins", "deny policy", "delete Admins", "deny group",
+                                     "delete keys", "delete user"])
+def test_repair_admin_undoes_a_lockout(orgs, lockout):
+    """Reviews 6 and 7: the admin can still lock itself out through lakeFS.
+    scripts/lakefs_acl_local.py --repair-admin puts it back, through the
+    access-list server, and writes new admin keys. PROVCAT_SYSTEM_LAKEFS_ACL_DIR
+    names the folder of the running setup."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    home = _need("PROVCAT_SYSTEM_LAKEFS_ACL_DIR")
+    endpoint = orgs["acme"].endpoint
+    admin = LakefsBackend(endpoint, "lakefs")
+    deny = {"effect": "deny", "action": ["fs:*", "auth:*"], "resource": "*"}
+    if lockout == "leave Admins":
+        admin._api("DELETE", "/auth/groups/Admins/members/admin")
+    elif lockout == "deny policy":
+        admin._api("POST", "/auth/policies", {"id": "provcat-test-deny", "statement": [deny]})
+        admin._api("PUT", "/auth/users/admin/policies/provcat-test-deny")
+    elif lockout == "delete Admins":
+        # The fork refuses this outright (review 8); the repair still runs.
+        with pytest.raises(urllib.error.HTTPError) as e:
+            admin._api("DELETE", "/auth/groups/Admins")
+        assert e.value.code == 400
+    elif lockout == "deny group":
+        admin._api("POST", "/auth/policies", {"id": "provcat-test-deny", "statement": [deny]})
+        admin._api("POST", "/auth/groups", {"id": "provcat-test-evil"})
+        admin._api("PUT", "/auth/groups/provcat-test-evil/policies/provcat-test-deny")
+        admin._api("PUT", "/auth/groups/provcat-test-evil/members/admin")
+    elif lockout == "delete keys":
+        for cred in admin._api("GET", "/auth/users/admin/credentials")["results"]:
+            admin._api("DELETE", f"/auth/users/admin/credentials/{cred['access_key_id']}")
+    else:
+        admin._api("DELETE", "/auth/users/admin")
+    script = Path(__file__).parents[2] / "scripts" / "lakefs_acl_local.py"
+    port = endpoint.rsplit(":", 1)[1]
+    acl_port = os.environ.get("PROVCAT_SYSTEM_LAKEFS_ACL_SERVER", "http://127.0.0.1:8011").rsplit(":", 1)[1]
+    out = subprocess.run([sys.executable, str(script), "--dir", home, "--port", port, "--acl-port", acl_port,
+                          "--repair-admin"], capture_output=True, text=True, timeout=180)
+    assert out.returncode == 0, out.stderr
+    assert "made new admin keys" in out.stdout
+    # The new keys, read again from the credentials file, can manage policies.
+    admin = LakefsBackend(endpoint, "lakefs")
+    admin._api("GET", "/auth/policies?amount=1")
+    groups = [g["id"] for g in admin._api("GET", "/auth/users/admin/groups")["results"]]
+    assert groups == ["Admins"]
+    for path in ("/auth/groups/provcat-test-evil", "/auth/policies/provcat-test-deny"):
+        try:
+            admin._api("DELETE", path)
+        except urllib.error.HTTPError as e:
+            assert e.code == 404

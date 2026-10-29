@@ -44,7 +44,7 @@ Use lakeFS 1.86.0, and no later version. It is the last release under the Apache
 - **The license.** lakeFS 1.87.0 moved to the Business Source License 1.1, which is not an open-source license.
 - **Access control.** lakeFS 1.87.0 removed the external authorization server and its reference server, the access-list server. With them, one lakeFS can keep each org to its own repositories. Since 1.77.0, a user who lists repositories sees only the ones their policies let them list. The filter works only with an external authorization server, not with the built-in one.
 
-Build it from source, from the fork [rahuldave/lakeFS](https://github.com/rahuldave/lakeFS), branch `provcat`. The branch is v1.86.0 with one patch. Without the patch, access control does not keep orgs apart, as the design document explains. You need Git, Node.js and Go 1.23 or later. Go downloads the Go 1.26.4 that lakeFS needs.
+Build it from source, from the fork [rahuldave/lakeFS](https://github.com/rahuldave/lakeFS), branch `provcat`. The branch is v1.86.0 with our changes, which `PROVCAT.md` at the root of the fork lists. Without them, access control does not keep orgs apart, as the design document explains. You need Git, Node.js and Go 1.23 or later. Go downloads the Go 1.26.4 that lakeFS needs.
 
 ```
 git clone --branch provcat --single-branch https://github.com/rahuldave/lakeFS.git ~/Projects/lakeFS
@@ -157,6 +157,7 @@ uv run python scripts/lakefs_acl_local.py
 The first run makes the folder `~/Catalog/lakefs-acl`, and writes these files there:
 
 - `acl.yaml` and `lakefs.yaml`, each with a new random secret key.
+- `api-token`, the random token between lakeFS and the access-list server.
 - The databases of both programs, and the lakeFS data, in the `data` folder.
 - `credentials`, an AWS credentials file.
 
@@ -178,11 +179,13 @@ export AWS_SHARED_CREDENTIALS_FILE=~/Catalog/lakefs-acl/credentials
 export LAKEFS_S3_ENDPOINT=http://127.0.0.1:8002
 ```
 
+If the admin locks itself out, for example by leaving the Admins group, run the script again with `--repair-admin`. With the setup running, it repairs it in place and exits. Either way it writes new admin keys to `credentials`, and detaches every policy from Admins except its own.
+
 Setting `AWS_SHARED_CREDENTIALS_FILE` hides `~/.aws/credentials` from provcat in that shell, so the S3 stores lose their keys there. Use another shell for them, or copy the profiles into `~/.aws/credentials`.
 
 Ctrl+C, `kill` or closing the terminal stops lakeFS, and then the access-list server.
 
-The access-list server does not check who calls it. Anyone who reaches its port can make an admin, so keep it on `127.0.0.1`. The design document lists the other limits of this route.
+The access-list server takes only calls that carry the token in `api-token`, in the same folder. lakeFS sends it, and so does the script. The server listens on `127.0.0.1` only. The design document lists the other limits of this route.
 
 ### Make keys and save them
 
@@ -316,10 +319,12 @@ To test isolation between orgs, run a second lakeFS:
 
 `PROVCAT_SYSTEM_LAKEFS_PROFILE` and `PROVCAT_SYSTEM_LAKEFS_B_PROFILE` change the two profile names, which are `lakefs` and `lakefs-b` by default.
 
-To test isolation on one lakeFS with access control, start `scripts/lakefs_acl_local.py`, and set three variables:
+To test isolation on one lakeFS with access control, start `scripts/lakefs_acl_local.py`, and set five variables:
 
 ```
 PROVCAT_SYSTEM_LAKEFS_ACL=http://127.0.0.1:8002 \
+PROVCAT_SYSTEM_LAKEFS_ACL_SERVER=http://127.0.0.1:8011 \
+PROVCAT_SYSTEM_LAKEFS_ACL_DIR=~/Catalog/lakefs-acl \
 PROVCAT_SYSTEM_LAKEFS_ACL_CREDENTIALS=~/Catalog/lakefs-acl/credentials \
 PROVCAT_SYSTEM_LAKEFS_ACL_DATA=~/Catalog/lakefs-acl/data \
 uv run pytest -m system tests/system/test_lakefs_acl.py
