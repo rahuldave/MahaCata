@@ -27,7 +27,9 @@ Selectors on a logical URI:
 - ``stage:NAME`` looks up NAME in ``stages`` and uses the selector stored there.
 - ``ts:TIME`` keeps ``{ref}`` at its default, and goes on to the physical URI
   as ``?at=ts:TIME``, with or without ``pass_selector``. Only the store can say
-  which commit a branch had at TIME, so the lakefs driver resolves it.
+  which commit a branch had at TIME, so the lakefs and github drivers resolve
+  it. A target without ``{ref}`` loses the branch, so the resolution keeps it
+  as ``ts_branch``. The catalog gives a GitHub store ``?at=ts:BRANCH@TIME``.
 
 Template variables are the part names, the rest name, ``ref``, ``version`` and
 ``at`` (the whole selector as ``kind:value``). Each value is percent-encoded
@@ -69,6 +71,7 @@ class Resolution:
     logical: Uri
     physical: Uri
     via: tuple[str, ...] = field(default=())  # the steps taken, for people to read
+    ts_branch: str | None = None  # the branch of a ts: that the physical URI has no place for
 
 
 class Resolver(ABC):
@@ -77,6 +80,10 @@ class Resolver(ABC):
 
     @abstractmethod
     def resolve(self, uri: Uri) -> Resolution: ...
+
+
+def _uses_ref(target: str) -> bool:
+    return any(f == "ref" for _, f, _, _ in string.Formatter().parse(target))
 
 
 @dataclass(frozen=True)
@@ -291,4 +298,7 @@ class TemplateResolver(Resolver):
                 raise ResolveError(f"{spec.name}: target already has ?at=, so the selector {sel} cannot be added")
             physical = physical.with_selector(sel)
         via.append(f"{spec.name} template -> {physical}")
-        return Resolution(uri, physical, tuple(via))
+        # A ts: keeps the default branch, but a target without {ref} drops it.
+        # The store that reads the time may need it, so it goes along.
+        ts_branch = default.value if sel and sel.kind == "ts" and default and not _uses_ref(spec.target) else None
+        return Resolution(uri, physical, tuple(via), ts_branch)

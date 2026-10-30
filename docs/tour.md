@@ -210,7 +210,7 @@ stores:
 
 A logical URI of an org with no store fails. For example, `data+table://initech/...` fails with "there is no store named 'lakefs-initech'".
 
-A **driver** is a class that reads one kind of storage. A **store** is a driver with options and a name. The name becomes a URI scheme. The `lakefs` driver is the S3 driver plus the lakeFS REST API, which turns a branch or a time into a commit. So `?at=ts:2026-10-01` on a lakeFS URI reads the branch as it was on that day.
+A **driver** is a class that reads one kind of storage. A **store** is a driver with options and a name. The name becomes a URI scheme. The `lakefs` driver is the S3 driver plus the lakeFS REST API, which turns a branch or a time into a commit. So `?at=ts:2026-10-01` on a lakeFS URI reads the branch as it was on that day. The `github` driver answers `ts:` from commit dates.
 
 ## Step 4: Read from an S3-compatible server
 

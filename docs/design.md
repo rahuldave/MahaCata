@@ -268,6 +268,24 @@ A time search reads the first-parent log of the branch, 1000 commits a page, fro
 
 The API takes the same keys as the S3 gateway. provcat never follows a redirect from the API, because a redirect would send the keys to the host that it names.
 
+### Time on GitHub
+
+`github://owner/repo/path?at=ts:TIME` names a commit of the default branch, and `?at=ts:BRANCH@TIME` a commit of BRANCH. A time never holds an `@`, so the last `@` ends the branch name.
+
+GitHub has no log of where a branch pointed. So the driver walks the branch from its head, along first parents, and takes the first commit whose committer date is at or before TIME. It reads the history 100 commits a page, and stops once it has read 10,000 commits. As on lakeFS, a commit made on another branch and merged later with a merge commit is left out. A future time is refused, and a pin of a time less than 10 minutes ago is not kept for `--offline`.
+
+Git records when a commit was made, not when it was pushed. So the answer can differ from what the branch showed at TIME:
+
+- **A late push.** A commit made on Monday and pushed on Wednesday counts from Monday.
+- **A rewrite.** A force push or a rebase replaces commits, and their dates go with them.
+- **A wrong clock.** The committer's clock sets the date.
+- **A fast-forward merge.** The branch takes the other branch's commits as its own, with their old dates.
+- **A merge from a pull.** `git pull` on a branch can make a local commit the first parent, so the branch's own earlier commits become the second parent.
+
+`--offline` keeps the answer that the last online pin found. A late push or a rewrite can change the online answer later, and the offline one stays as it was.
+
+A logical URI keeps its branch in its path, for example `code://org/repo/dev/path`. A GitHub target has no `{ref}`, so a plain `ts:TIME` would lose `dev`. So the resolver keeps the branch, and the catalog gives a GitHub store `?at=ts:dev@TIME`. Other stores get `ts:TIME`, as before. An `@` in the time of a logical URI is refused, so it cannot name a second branch.
+
 ## Writes
 
 provcat writes as well as reads. `Catalog` has five methods for writing, and `provc` has a command for each.
@@ -384,9 +402,10 @@ What a bucket commit does not give:
 | Lock files under `.provcat/locks` are never deleted. | Delete them when no provcat process runs. |
 | A folder and a folder inside it can be fetched at the same time, under different locks. | Avoid it. If a fetch fails with an error, run it again. |
 | A `${oc.env:...}` value in etcd reads the environment of each reader. | Let only trusted people write to the etcd prefix. |
-| `ts:` works on lakeFS only. GitHub and buckets refuse it. | Pin a GitHub ref with `commit:`, and a bucket folder with a provcat commit. |
+| `ts:` works on lakeFS and GitHub. Buckets refuse it. | Pin a bucket folder with a provcat commit. |
+| A GitHub `ts:` goes by committer dates, not push times. | Pin with `commit:` when the exact state matters. |
 | A bucket commit lists every version under its folder, twice, so it slows as history grows. | Commit small folders, or delete old versions that no commit names. |
-| A `ts:` search reads at most 100,000 commits of a branch. | Use `commit:` or a stage for older versions. |
+| A `ts:` search reads at most 100,000 commits on lakeFS, and 10,000 on GitHub. | Use `commit:` or a stage for older versions. |
 
 ## Next steps
 

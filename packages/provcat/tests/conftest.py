@@ -56,6 +56,24 @@ class FakeGithub:
         self.headers_seen = []
         self.extra_tar_members = []  # (name, bytes, type) added to every tarball
         self.tarball_redirect = None  # a URL to send tarball requests to
+        # The history for ts: sha -> (committer date, parents). Commits that
+        # are not here get dates long ago, so the history ends with them.
+        self.history = {}
+
+    def commit_json(self, sha):
+        date, parents = self.history.get(sha, ("2000-01-01T00:00:00Z", []))
+        return {"sha": sha, "commit": {"committer": {"date": date}}, "parents": [{"sha": p} for p in parents]}
+
+    def log(self, head, per_page, page):
+        """Every commit reachable from head, newest date first, as GitHub lists them."""
+        found, todo = {}, [head]
+        while todo:
+            sha = todo.pop()
+            if sha not in found:
+                found[sha] = self.commit_json(sha)
+                todo += self.history.get(sha, ("", []))[1]
+        ordered = sorted(found.values(), key=lambda c: c["commit"]["committer"]["date"], reverse=True)
+        return ordered[(page - 1) * per_page: page * per_page]
 
     def files(self, sha):
         return self.commits[sha]
@@ -84,6 +102,10 @@ class FakeGithub:
             if sub.startswith("tags/") and sub[len("tags/"):] in self.tag_objects:
                 return self.send_json(h, {"object": {"type": "commit", "sha": self.tag_objects[sub[len("tags/"):]]}})
             return h.send_error(404)
+        if rest == "/commits":
+            return self.send_json(h, self.log(q["sha"][0], int(q["per_page"][0]), int(q.get("page", ["1"])[0])))
+        if kind == "commits" and "json" in accept:
+            return self.send_json(h, self.commit_json(rest[len("/commits/"):]))
         if kind == "commits":
             ref = rest[len("/commits/"):]
             sha = next((s for s in self.commits if s.startswith(ref)), None) if len(ref) >= 7 else None
