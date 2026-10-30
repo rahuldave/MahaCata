@@ -16,7 +16,8 @@ The stub's rules:
 - A logical URI has the form ``scheme://org/domain/env/...``. Its org and its
   environment must be those of the run.
 - A physical URI, such as ``file:///...``, names no environment, so the stub
-  grants one only in the dev environment.
+  grants one only in the dev environment. A scheme is physical if it names a
+  store of the catalog, including a configured one such as ``local-s3``.
 """
 from __future__ import annotations
 
@@ -79,8 +80,11 @@ class Broker(ABC):
 
 
 class StubBroker(Broker):
-    def __init__(self, allow: Iterable[str], *, physical_schemes: Iterable[str] = ("file", "s3", "github", "gs", "az"),
+    def __init__(self, allow: Iterable[str], *, physical_schemes: Iterable[str],
                  ttl: timedelta = timedelta(hours=1)):
+        # physical_schemes has no default: it must be the stores of the catalog, for
+        # example catalog.stores.keys(), so that a configured store such as local-s3
+        # counts as physical and not as a logical scheme.
         self.allow = [a for a in allow]
         self.physical = set(physical_schemes)
         self.ttl = ttl

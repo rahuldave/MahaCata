@@ -51,16 +51,25 @@ def _verify_outputs(folder: Path) -> list[str]:
     return problems
 
 
+def _bundle_pin(folder: Path, args) -> str | None:
+    """The commit to compare with: --bundle if given, else the one that
+    bundle.json names. bundle.json is in the run folder, so whoever can change
+    the folder can remove it or point it elsewhere; --bundle takes the commit
+    from outside the folder."""
+    record = folder / "bundle.json"
+    named = json.loads(record.read_text()).get("pinned") if record.exists() else None
+    return args.bundle or named
+
+
 def _verify_bundle(folder: Path, args) -> list[str]:
     """Compare the evidence with the committed bundle, if the run has one."""
-    record = folder / "bundle.json"
-    if not record.exists():
-        return []
-    pinned = json.loads(record.read_text()).get("pinned")
+    pinned = _bundle_pin(folder, args)
     if not pinned:
-        return []
+        return ["no committed bundle to compare with, and --require-bundle is set"] if args.require_bundle else []
     from provcat import Catalog, parse
 
+    if parse(pinned).selector is None:
+        return [f"the bundle {pinned} is not pinned; give the URI with ?at= from the commit"]
     catalog = Catalog.open(args.config, tenant=args.tenant)
     base = parse(pinned).child("evidence")
     try:
@@ -111,7 +120,7 @@ def cmd_verify(args) -> int:
     for p in problems:
         print(f"provr: {p}", file=sys.stderr)
     if not problems:
-        anchored = (folder / "bundle.json").exists() and json.loads((folder / "bundle.json").read_text()).get("pinned")
+        anchored = _bundle_pin(folder, args)
         print(f"{folder.name}: the evidence and the outputs verify"
               + (", and match the committed bundle" if anchored else "; no committed bundle to compare with"))
     return 1 if problems else 0
@@ -135,6 +144,10 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("run")
     v.add_argument("--config", help="the provcat configuration, to read the committed bundle")
     v.add_argument("--tenant", help="the provcat tenant")
+    v.add_argument("--bundle", help="the pinned URI of the committed bundle, taken from outside the run folder; "
+                                    "used instead of bundle.json")
+    v.add_argument("--require-bundle", action="store_true",
+                   help="fail if there is no committed bundle to compare with")
     v.set_defaults(fn=cmd_verify)
     args = ap.parse_args(argv)
     try:

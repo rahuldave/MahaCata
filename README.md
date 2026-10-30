@@ -11,7 +11,7 @@ This repository is a uv workspace with two Python packages. A uv workspace is on
 | Package | Folder | What it does |
 |---|---|---|
 | provcat | `packages/provcat` | Resolves catalog URIs, caches files and writes through to stores. Its command is `provc`. |
-| provrun | `packages/provrun` | Runs agents and model calls on data that provcat resolves, and records the evidence of each run. Its command is `provr`. Read [docs/provrun.md](docs/provrun.md). |
+| provrun | `packages/provrun` | Runs agents and model calls on data that provcat resolves, and records the evidence of each run. Its command is `provr`. Read [docs/provrun.md](docs/provrun.md), and take the tour in [docs/provrun-tour.md](docs/provrun-tour.md). |
 
 provrun depends on provcat, and provcat does not depend on provrun. [docs/provrun-plan.md](docs/provrun-plan.md) is the plan that provrun follows.
 

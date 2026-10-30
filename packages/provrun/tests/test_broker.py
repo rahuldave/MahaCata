@@ -72,3 +72,24 @@ def test_only_snapshot_mode(tmp_path, catalog, docs):
         c.broker.request(c, uri, "mounted_readwrite")
     with pytest.raises(ValueError):
         c.broker.request(c, uri, "telepathy")
+
+
+def test_a_configured_store_is_physical(tmp_path):
+    # A store from the configuration, such as local-s3, is physical: a pinned URI of it
+    # is granted in dev, and is not checked as scheme://org/domain/env/...
+    from provcat import Catalog
+
+    catalog = Catalog({"stores": {"local-s3": {"driver": "s3", "endpoint_url": "http://localhost:1"}}},
+                      cache_root=tmp_path / "cache")
+    uri = "local-s3://data/main/acme/demo/dev/report.txt?at=version:v1"
+    dev = ctx(tmp_path / "dev", catalog, allow=[uri])
+    g = dev.broker.decide(dev, uri, "mounted_snapshot", "")
+    assert g.granted and "physical" in g.reason
+    prod = ctx(tmp_path / "prod", catalog, env="prod", allow=[uri])
+    assert "only in dev" in prod.broker.decide(prod, uri, "mounted_snapshot", "").reason
+
+
+def test_the_stub_needs_its_physical_schemes():
+    # No built-in list, which would miss configured stores.
+    with pytest.raises(TypeError):
+        StubBroker(["file:///x"])

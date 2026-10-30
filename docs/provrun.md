@@ -1,6 +1,6 @@
 # provrun
 
-provrun runs agents and model calls on data that provcat resolves, and records the evidence of each run. provrun is the caller of record. It makes the run ID, asks the broker for each input, makes read-only snapshots of the inputs through provcat and runs the agent. Then it writes the evidence and the outputs as one bundle. [provrun-plan.md](provrun-plan.md) has the design and the reasons for it.
+provrun runs agents and model calls on data that provcat resolves, and records the evidence of each run. provrun is the caller of record. It makes the run ID, asks the broker for each input, makes read-only snapshots of the inputs through provcat and runs the agent. Then it writes the evidence and the outputs as one bundle. [provrun-plan.md](provrun-plan.md) has the design and the reasons for it. [provrun-tour.md](provrun-tour.md) is a guided tour that follows one file from a store into a run and its evidence.
 
 ## Terms
 
@@ -124,6 +124,8 @@ If someone changes, removes, adds or reorders an event, or changes a payload or 
 
 The local check proves that the folder is consistent. But someone who can write the folder can write a consistent false record. If the run has a committed bundle, `provr verify RUN --config CONFIG` also reads the events and the manifest from the commit, and compares them with the folder. The file `bundle.json` in the run folder names the commit.
 
+Someone who can write the folder can delete that file. So a checker who does not trust the folder passes the commit with `--bundle URI`. `--require-bundle` fails a run that has no commit to compare with.
+
 The runs root is `~/.local/share/provrun/runs`. The environment variable `PROVRUN_RUNS` or the option `--runs` changes it.
 
 provrun also opens an OpenTelemetry span for each step, with the names of the GenAI semantic conventions. Each event holds the trace ID and the span ID of its span, if a tracer provider is set.
@@ -140,7 +142,7 @@ The stub broker grants a URI if all of these are true:
 - A URI with a selector, such as `?at=branch:prod`, is in the `allow` list with that same selector. A selector can name another branch, and the branch is often the environment.
 - The mode is `mounted_snapshot`.
 - For a logical URI, of the form `scheme://org/domain/env/...`, the org and the environment are those of the run.
-- For a physical URI, such as `file://` or `lakefs://`, the run is in the `dev` environment. A physical URI names no environment, so the stub does not grant one in `staging` or `prod`.
+- For a physical URI, the run is in the `dev` environment. A URI is physical if its scheme names a store of the catalog, such as `file`, `s3` or a configured store like `local-s3`. A physical URI names no environment, so the stub does not grant one in `staging` or `prod`.
 
 ## The bundle
 
