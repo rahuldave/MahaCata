@@ -270,7 +270,7 @@ The API takes the same keys as the S3 gateway. provcat never follows a redirect 
 
 ## Writes
 
-provcat writes as well as reads. `Catalog` has four methods for writing, and `provc` has a command for each.
+provcat writes as well as reads. `Catalog` has five methods for writing, and `provc` has a command for each.
 
 | Method | Command | What it does |
 |---|---|---|
@@ -278,6 +278,7 @@ provcat writes as well as reads. `Catalog` has four methods for writing, and `pr
 | `delete(uri)` | `provc rm URI` | Deletes one object. |
 | `commit(uri, message, metadata)` | `provc commit URI -m MSG --meta K=V` | Commits the lakeFS branch that the URI is on, or a folder in a versioned bucket. It returns the URI pinned to the new commit. |
 | `branch(uri, source)` | `provc branch URI --from REF` | Makes a lakeFS branch from a branch, a tag or a commit. In a bucket, it copies a branch or a commit to a new branch. |
+| `merge(uri, source, message, metadata, strategy)` | `provc merge URI --from REF -m MSG --meta K=V --strategy S` | Merges a branch, a tag or a commit into the lakeFS branch that the URI is on. It returns the URI pinned to the merge commit. Buckets have no merge. |
 
 A write takes a logical or a physical URI, and goes to a branch:
 
@@ -290,9 +291,21 @@ On lakeFS, a write is not seen in a pinned URI until it is committed. The commit
 
 A local file is written through a temporary file in the same folder, so a reader never sees half of it. The file keeps the mode of the file it replaces. The `root` option confines writes as it confines reads. A folder upload checks every name before it writes the first file, and it includes hidden files.
 
+### Merges
+
+`provc merge lakefs://repo/main --from feature` merges `feature` into `main` with the lakeFS merge API. It merges the last commit of the source. So writes on `feature` that are not committed stay on `feature`. Commit them first.
+
+lakeFS refuses some merges, and provcat says why:
+
+- **A conflict.** Both branches changed the same file since they split. lakeFS refuses the merge, unless `--strategy` picks a side. `source-wins` keeps the source's file, and `dest-wins` keeps the branch's file.
+- **Nothing to merge.** The branch already has every change in the source.
+- **Uncommitted changes.** The branch that receives the merge has writes that are not committed. Commit them, or delete them, first.
+
+A merge through a logical URI adds `provcat.uri` to the merge commit's metadata, as a commit does. lakeFS adds its own key, `.lakefs.merge.strategy`.
+
 The cache needs no change for writes. An online read asks the store for the version first, so it never serves a copy that a write has replaced.
 
-Access control is the store's. With the shared lakeFS, each org's keys write, commit and branch only its own repositories. The system test `packages/provcat/tests/system/test_lakefs_acl.py` checks this.
+Access control is the store's. With the shared lakeFS, each org's keys write, commit, branch and merge only its own repositories. The system test `packages/provcat/tests/system/test_lakefs_acl.py` checks this.
 
 ## Commits in a bucket
 
@@ -377,5 +390,5 @@ What a bucket commit does not give:
 
 ## Next steps
 
-- **Merges:** lakeFS merges, and commits of only some paths, are not built.
+- **Partial commits:** a lakeFS commit takes everything staged on the branch. A commit of one folder would need a temporary branch and a merge.
 - **Containers:** mount the cache read-only into containers, and run `provc --offline` inside them.

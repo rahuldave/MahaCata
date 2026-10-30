@@ -35,6 +35,8 @@ class FakeLakefs:
         self.branches = {"main", "empty", "merged"}
         self.posts = []  # (path, body) of each POST
         self.commit_reply = (201, {"id": "NEWCOMMIT"})
+        self.merge_reply = (200, {"reference": "MERGECOMMIT"})
+        self.before_merge = lambda: None
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -56,6 +58,8 @@ class FakeLakefs:
                 fake.queries.append(q)
                 if len(parts) == 5 and parts[3] == "repositories":
                     return self.reply(200, {"id": "repo"}) if parts[4] == "repo" else self.reply(404, {})
+                if len(parts) == 7 and parts[5] == "branches" and parts[4] == "repo" and "~" in parts[6]:
+                    return self.reply(400, {"message": "argument branch: branch id: invalid value"})
                 if len(parts) == 7 and parts[5] == "branches" and parts[4] == "repo":
                     return self.reply(200, {"id": parts[6]}) if parts[6] in fake.branches else self.reply(404, {})
                 if len(parts) == 6 and parts[5] == "branches" and parts[4] == "repo":
@@ -88,6 +92,12 @@ class FakeLakefs:
                     if parts[6] not in fake.branches:
                         return self.reply(404, {"message": "branch not found"})
                     return self.reply(*fake.commit_reply)
+                # /api/v1/repositories/repo/refs/<source>/merge/<branch>
+                if len(parts) == 9 and parts[5] == "refs" and parts[7] == "merge":
+                    fake.before_merge()
+                    if parts[8] not in fake.branches or parts[6] not in fake.LOGS:
+                        return self.reply(404, {"message": "not found"})
+                    return self.reply(*fake.merge_reply)
                 # /api/v1/repositories/repo/branches
                 if len(parts) == 6 and parts[5] == "branches":
                     if body["name"] in fake.branches:
@@ -480,6 +490,107 @@ def test_logical_writes_to_a_fixed_version_are_refused(s3_endpoint, api, data, t
         c.put(f"t://main/t/l.csv?at={selector}", b"x")
 
 
+def test_merge_merges_a_ref_into_a_branch_and_pins_it(s3_endpoint, api, data, tmp_path):
+    c = cat(s3_endpoint, api, tmp_path)
+    pinned = c.merge("lakefs://repo/main/t", "empty", "bring empty in", {"run": "7"})
+    assert str(pinned) == "lakefs://repo/MERGECOMMIT/t"
+    path, body = api.posts[-1]
+    assert path.endswith("/repositories/repo/refs/empty/merge/main")
+    assert body == {"message": "bring empty in", "metadata": {"run": "7"}}
+    c.merge("lakefs://repo/main", C1, strategy="source-wins")
+    path, body = api.posts[-1]
+    assert path.endswith(f"/refs/{C1}/merge/main")
+    assert body == {"message": "", "metadata": {}, "strategy": "source-wins"}
+
+
+@pytest.mark.parametrize("reply, match", [
+    ((409, {"reference": ""}), "both changed the same files; pass a strategy"),
+    ((400, {"message": "no changes"}), "nothing to merge; main already has everything in empty"),
+    ((400, {"message": "main: uncommitted changes (dirty branch)"}), "main has uncommitted changes"),
+    ((200, {"reference": ""}), "gave no merge commit id"),
+    ((500, {"message": "no changes were saved"}), "API error 500"),
+])
+def test_merge_errors_say_what_happened(s3_endpoint, api, data, tmp_path, reply, match):
+    api.merge_reply = reply
+    with pytest.raises(StoreError, match=match):
+        cat(s3_endpoint, api, tmp_path).merge("lakefs://repo/main", "empty")
+
+
+@pytest.mark.parametrize("uri, source, strategy, err, match", [
+    ("lakefs://repo/main", "nosuch", None, NotFound, "no branch, tag or commit 'nosuch'"),
+    ("lakefs://repo/nosuch", "main", None, StoreError, "'nosuch' is not a branch of repo"),
+    (f"lakefs://repo/{C1}", "main", None, StoreError, "is not a branch of repo"),
+    ("lakefs://nosuch/main", "empty", None, NotFound, "has no repository 'nosuch'"),
+    ("lakefs://repo/main", "main", None, UriError, "cannot merge into itself"),
+    ("lakefs://repo/main", "", None, UriError, "needs a source"),
+    ("lakefs://repo/main", "empty", "theirs", UriError, "source-wins or dest-wins"),
+])
+def test_merge_refuses_what_it_cannot_do(s3_endpoint, api, data, tmp_path, uri, source, strategy, err, match):
+    with pytest.raises(err, match=match):
+        cat(s3_endpoint, api, tmp_path).merge(uri, source, strategy=strategy)
+    # Only a missing source gets as far as asking lakeFS.
+    assert any("/merge/" in p for p, _ in api.posts) == (source == "nosuch")
+
+
+def test_a_branch_deleted_during_a_merge_is_named(s3_endpoint, api, data, tmp_path):
+    # Review finding 2: every 404 of the merge was blamed on the source.
+    api.branches.add("gone")
+    api.before_merge = lambda: api.branches.discard("gone")
+    with pytest.raises(StoreError, match="'gone' is not a branch of repo"):
+        cat(s3_endpoint, api, tmp_path).merge("lakefs://repo/gone", "main")
+
+
+def test_a_source_with_a_percent_is_refused(s3_endpoint, api, data, tmp_path):
+    # Review finding 3: lakeFS decodes the ref again, so f%7E1 merged f~1.
+    with pytest.raises(UriError, match="a ref has no '%'"):
+        cat(s3_endpoint, api, tmp_path).merge("lakefs://repo/main", "main%7E1")
+    assert not any("/merge/" in p for p, _ in api.posts)
+
+
+def test_a_name_that_cannot_be_a_branch_is_not_a_branch(s3_endpoint, api, data, tmp_path):
+    # Review finding 4: lakeFS answers main~0 with 400, which came out raw.
+    c = cat(s3_endpoint, api, tmp_path)
+    with pytest.raises(StoreError, match="'main~0' is not a branch of repo"):
+        c.merge("lakefs://repo/main~0", "empty")
+    with pytest.raises(StoreError, match="'main~0' is not a branch of repo"):
+        c.put("lakefs://repo/main~0/x.csv", b"x")
+
+
+def test_an_empty_metadata_key_is_refused(s3_endpoint, api, data, tmp_path):
+    # Review finding 5: the CLI refused it, but the Python API sent it.
+    c = cat(s3_endpoint, api, tmp_path)
+    with pytest.raises(UriError, match="metadata key cannot be empty"):
+        c.merge("lakefs://repo/main", "empty", metadata={"": "x"})
+    with pytest.raises(UriError, match="metadata key cannot be empty"):
+        c.commit("lakefs://repo/main", "m", {"": "x"})
+    assert api.posts == []
+
+
+def test_logical_merge_records_the_logical_uri(s3_endpoint, api, data, tmp_path):
+    c = cat(s3_endpoint, api, tmp_path, schemes=SCHEMES)
+    assert str(c.merge("t://main/t", "empty")) == "lakefs://repo/MERGECOMMIT/t"
+    assert api.posts[-1][1]["metadata"] == {"provcat.uri": "t://main/t"}
+    with pytest.raises(UriError, match="names a fixed version"):
+        c.merge(f"t://main/t?at=commit:{C1}", "empty")
+
+
+def test_merge_on_the_command_line(s3_endpoint, api, data, tmp_path, capsys):
+    import yaml
+
+    from provcat.cli import main
+
+    cfg = tmp_path / "provcat.yaml"
+    cfg.write_text(yaml.safe_dump({"stores": {"lakefs": {"driver": "lakefs", "endpoint_url": s3_endpoint,
+                                                         "api_url": api.api_url}}}))
+    args = ["--config", str(cfg), "--cache", str(tmp_path / "cache"), "merge", "lakefs://repo/main",
+            "--from", "empty", "-m", "cli merge", "--meta", "k=v", "--strategy", "dest-wins"]
+    assert main(args) == 0
+    assert capsys.readouterr().out.strip() == "lakefs://repo/MERGECOMMIT"
+    assert api.posts[-1][1] == {"message": "cli merge", "metadata": {"k": "v"}, "strategy": "dest-wins"}
+    assert main(args[:-2] + ["--meta", "novalue"]) == 1
+    assert "write KEY=VALUE" in capsys.readouterr().err
+
+
 def test_stores_without_commits_say_so(tmp_path):
     from provcat import Catalog
 
@@ -488,3 +599,5 @@ def test_stores_without_commits_say_so(tmp_path):
         c.commit(f"file://{tmp_path}/x", "m")
     with pytest.raises(StoreError, match="has no branches"):
         c.branch(f"file://{tmp_path}/x", "main")
+    with pytest.raises(StoreError, match="has no merges"):
+        c.merge(f"file://{tmp_path}/x", "main")

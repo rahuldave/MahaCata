@@ -306,7 +306,7 @@ def test_repair_admin_undoes_a_lockout(orgs, lockout):
             assert e.code == 404
 
 
-def test_each_org_writes_commits_and_branches_only_its_own(orgs, tmp_path):
+def test_each_org_writes_commits_and_branches_only_its_own(orgs, tmp_path, monkeypatch):
     """provcat writes through each org's keys: put, commit and branch work on
     its own repositories and are refused on the other's."""
     acme, globex = orgs["acme"], orgs["globex"]
@@ -346,4 +346,24 @@ def test_each_org_writes_commits_and_branches_only_its_own(orgs, tmp_path):
         c.commit(f"lakefs-acme://{globex_repo}/main", "no")
     with pytest.raises(StoreError):
         c.branch(f"lakefs-acme://{globex_repo}/sneaky", "main")
+
+    # Each org merges its own branches, and cannot merge into the other's.
+    c.commit(f"t://acme/{acme_repo}/feature", "add b")
+    merged = c.merge(f"t://acme/{acme_repo}/main/out/b.csv", "feature", "bring b")
+    assert c.read(str(merged)) == b"feature"
+    assert acme.log(acme_repo, "main")[0]["metadata"]["provcat.uri"] == f"t://acme/{acme_repo}/main/out/b.csv"
     assert [b["id"] for b in globex._api("GET", f"/repositories/{globex_repo}/branches")["results"]] == ["main"]
+    globex.branch(globex_repo, "theirs", "main")
+    globex.put(globex_repo, "theirs/t.csv", b"theirs")
+    globex.commit(globex_repo, "theirs", "globex work")
+    head = globex.log(globex_repo, "main")[0]["id"]
+    with pytest.raises(StoreError, match="ReadBranch"):
+        c.merge(f"lakefs-acme://{globex_repo}/main", "theirs")
+    # Review finding 1: provcat stops at its own branch check, so skip that
+    # check and let lakeFS itself refuse the merge.
+    from provcat.stores.lakefs import LakefsStore
+
+    monkeypatch.setattr(LakefsStore, "_branch_of", lambda self, uri: (uri.authority, uri.segments[0]))
+    with pytest.raises(StoreError, match="CreateCommit"):
+        c.merge(f"lakefs-acme://{globex_repo}/main", "theirs")
+    assert globex.log(globex_repo, "main")[0]["id"] == head

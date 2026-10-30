@@ -147,7 +147,7 @@ The admin is the user `admin`, in the group `Admins`. Its keys are the profile `
 | List repositories | Sees only its own | Not shown |
 | Manage users, groups, policies or keys | Refused | Refused |
 
-The system test `packages/provcat/tests/system/test_lakefs_acl.py` checks reading, writing, committing, branching, making and listing repositories, through the REST API, the S3 gateway and provcat. Tags and merges follow from the same policy, but no test runs them.
+The system test `packages/provcat/tests/system/test_lakefs_acl.py` checks reading, writing, committing, branching, merging, making and listing repositories, through the REST API, the S3 gateway and provcat. Tags follow from the same policy, but no test runs them.
 
 ### Add an org
 
