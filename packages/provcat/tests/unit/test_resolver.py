@@ -66,6 +66,30 @@ def test_ts_keeps_the_default_ref_and_goes_to_the_store():
         r(TABLE + "?at=when:now")
 
 
+def test_ts_carries_the_branch_when_the_target_has_no_ref():
+    schemes = {"code": {"parts": ["owner", "repo", "env"], "rest": "path", "target": "github://{owner}/{repo}/{path}",
+                        "ref": "{env}", "pass_selector": True}}
+    res = TemplateResolver(schemes, {}).resolve(parse("code://o/r/dev/a.txt?at=ts:2026-01-01"))
+    assert str(res.physical) == "github://o/r/a.txt?at=ts:2026-01-01" and res.ts_branch == "dev"
+    # A target with {ref} puts the branch in the path, so there is nothing to carry.
+    assert r(TABLE + "?at=ts:2026-01-01").ts_branch is None
+    # The catalog adds the branch for a GitHub store only.
+    c = Catalog({"schemes": schemes}, cache_root="/nonexistent")
+    assert str(c.resolve("code://o/r/dev/a.txt?at=ts:2026-01-01").physical) == "github://o/r/a.txt?at=ts:dev@2026-01-01"
+    # An "@" in a logical ts: is not a time, so it cannot name a second branch.
+    with pytest.raises(ResolveError, match="not a date"):
+        TemplateResolver(schemes, {}).resolve(parse("code://o/r/dev/a.txt?at=ts:main@2026-01-01"))
+
+
+def test_ts_on_a_lakefs_target_without_ref_stays_a_time():
+    # Review finding 1: the branch was added for every store, and lakeFS
+    # cannot read ts:dev@TIME.
+    schemes = {"t": {"parts": ["env", "name"], "target": "lakefs://repo/{env}/{name}", "ref": "{env}"}}
+    c = Catalog({"stores": {"lakefs": {"driver": "lakefs", "endpoint_url": "http://127.0.0.1:1"}},
+                 "schemes": schemes}, cache_root="/nonexistent")
+    assert str(c.resolve("t://dev/x?at=ts:2026-01-01").physical) == "lakefs://repo/dev/x?at=ts:2026-01-01"
+
+
 def test_a_stage_can_point_at_a_time():
     stages = {TABLE: {"audit": "ts:2026-03-31T23:59:59Z"}}
     res = TemplateResolver(SCHEMES, stages).resolve(parse(TABLE + "?at=stage:audit"))

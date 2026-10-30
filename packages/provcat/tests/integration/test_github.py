@@ -220,3 +220,136 @@ def test_missing_things(github, tmp_path):
         c.fetch("github:///repo/x")
     with pytest.raises(UriError):
         c.fetch("github://owner/repo/x?at=version:3")
+
+
+# ts: the commit a branch had at a time
+
+M1, F1 = "1" * 40, "f" * 40
+
+
+@pytest.fixture
+def history(github):
+    """main: A on 1 March, M1 on 5 March, then B on 20 March, which merges
+    F1, a commit made on a feature branch on 10 March."""
+    github.history = {
+        SHA_A: ("2026-03-01T00:00:00Z", []),
+        M1: ("2026-03-05T00:00:00Z", [SHA_A]),
+        F1: ("2026-03-10T00:00:00Z", [SHA_A]),
+        SHA_B: ("2026-03-20T00:00:00Z", [M1, F1]),
+    }
+    return github
+
+
+@pytest.mark.parametrize("ts, want", [
+    ("2026-03-25", SHA_B), ("2026-03-20T00:00:00Z", SHA_B), ("2026-03-12", M1),
+    ("2026-03-05T01:00:00%2B01:00", M1), ("2026-03-02", SHA_A), ("1772323200", SHA_A),
+])
+def test_ts_pins_the_first_parent_commit_of_that_time(history, tmp_path, ts, want):
+    # 12 March gives M1, not F1: F1 was made then, but main got it on 20 March.
+    assert cat(history, tmp_path).pin(f"github://owner/repo/README.md?at=ts:{ts}").selector.value == want
+
+
+def test_ts_names_a_branch_before_the_time(history, tmp_path):
+    history.heads["feat/x"] = F1
+    c = cat(history, tmp_path)
+    assert c.pin("github://owner/repo?at=ts:feat/x@2026-03-12").selector.value == F1
+    assert c.pin("github://owner/repo?at=ts:feat/x@2026-03-09").selector.value == SHA_A
+    with pytest.raises(NotFound, match="not found on GitHub"):
+        c.pin("github://owner/repo?at=ts:nosuch@2026-03-09")
+
+
+def test_ts_reads_the_files_of_that_commit(history, tmp_path):
+    assert cat(history, tmp_path).read("github://owner/repo/README.md?at=ts:2026-03-02") == b"hello A\n"
+
+
+@pytest.mark.parametrize("uri, err, match", [
+    ("github://owner/repo?at=ts:2026-02-01", NotFound, "main has no commit at or before 2026-02-01"),
+    ("github://owner/repo?at=ts:2999-01-01", UriError, "in the future"),
+    ("github://owner/repo?at=ts:yesterday", UriError, "not a date"),
+    ("github://owner/repo?at=ts:@2026-03-02", UriError, "write ts:BRANCH@TIME"),
+    ("github://owner/repo?at=version:3", UriError, "branch:, tag:, commit: or ts:"),
+])
+def test_ts_refuses_what_it_cannot_answer(history, tmp_path, uri, err, match):
+    with pytest.raises(err, match=match):
+        cat(history, tmp_path).pin(uri)
+
+
+def test_ts_pages_through_the_history(history, tmp_path, monkeypatch):
+    import provcat.stores.github as gh
+
+    monkeypatch.setattr(gh, "_PAGE", 1)
+    assert cat(history, tmp_path).pin("github://owner/repo?at=ts:2026-03-02").selector.value == SHA_A
+    assert history.hits["commits"] >= 3
+
+
+def test_ts_asks_for_a_commit_the_listing_left_out(history, tmp_path, monkeypatch):
+    monkeypatch.setattr(history, "log", lambda head, per_page, page: [])
+    assert cat(history, tmp_path).pin("github://owner/repo?at=ts:2026-03-12").selector.value == M1
+
+
+def test_ts_search_has_a_limit(history, tmp_path, monkeypatch):
+    import provcat.stores.github as gh
+
+    monkeypatch.setattr(gh, "_MAX_COMMITS", 2)
+    monkeypatch.setattr(gh, "_PAGE", 1)
+    with pytest.raises(StoreError, match="read 2 commits of main"):
+        cat(history, tmp_path).pin("github://owner/repo?at=ts:2026-03-02")
+
+
+def test_ts_limit_counts_commits_of_merged_branches(history, tmp_path, monkeypatch):
+    # Review finding 2: the limit counted only first-parent steps, so a long
+    # merged side branch was read to the end.
+    import provcat.stores.github as gh
+
+    side = [f"{n:040x}" for n in range(1, 301)]
+    for n, sha in enumerate(side):
+        history.history[sha] = (f"2026-03-1{n % 9}T{n % 24:02d}:{n % 60:02d}:00Z",
+                                [side[n + 1]] if n + 1 < len(side) else [SHA_A])
+    history.history[SHA_B] = ("2026-03-20T00:00:00Z", [M1, side[0]])
+    monkeypatch.setattr(gh, "_MAX_COMMITS", 50)
+    monkeypatch.setattr(gh, "_PAGE", 10)
+    with pytest.raises(StoreError, match="read 50 commits"):
+        cat(history, tmp_path).pin("github://owner/repo?at=ts:2026-03-02")
+    assert history.hits["commits"] <= 7
+
+
+def test_ts_a_commit_github_leaves_out_is_an_error(history, tmp_path, monkeypatch):
+    monkeypatch.setattr(history, "log", lambda head, per_page, page: [])
+    monkeypatch.setattr(history, "commit_json", lambda sha: {"sha": "0" * 40, "commit": {"committer": {
+        "date": "2026-03-20T00:00:00Z"}}, "parents": []})
+    with pytest.raises(StoreError, match=f"GitHub did not return commit {SHA_B}"):
+        cat(history, tmp_path).pin("github://owner/repo?at=ts:2026-03-02")
+
+
+def test_ts_with_a_bad_date_is_a_store_error(history, tmp_path):
+    history.history[SHA_B] = ("not a date", [M1])
+    with pytest.raises(StoreError, match="not a date"):
+        cat(history, tmp_path).pin("github://owner/repo?at=ts:2026-03-02")
+    history.history[SHA_B] = ("2026-03-20T00:00:00", [M1])
+    with pytest.raises(StoreError, match="without a zone"):
+        cat(history, tmp_path).pin("github://owner/repo?at=ts:2026-03-02")
+
+
+def test_ts_offline_uses_the_last_pin_of_an_old_time(history, tmp_path, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    cat(history, tmp_path).pin("github://owner/repo?at=ts:2026-03-02")
+    off = cat(history, tmp_path, offline=True)
+    assert off.pin("github://owner/repo?at=ts:2026-03-02").selector.value == SHA_A
+    # A time a minute ago could still gain a commit, so it is not remembered.
+    recent = (datetime.now(UTC) - timedelta(minutes=1)).isoformat(timespec="seconds").replace("+", "%2B")
+    cat(history, tmp_path).pin(f"github://owner/repo?at=ts:{recent}")
+    with pytest.raises(OfflineMiss):
+        off.pin(f"github://owner/repo?at=ts:{recent}")
+
+
+def test_ts_on_a_logical_uri_keeps_its_branch(history, tmp_path):
+    history.heads["dev"] = F1
+    cfg = {"stores": {"github": {"api_url": history.api_url, "token_env": ["NO_SUCH_TOKEN_VAR"], "use_gh_cli": False}},
+           "schemes": {"code": {"parts": ["org", "repo", "env"], "rest": "path", "target": "github://{org}/{repo}/{path}",
+                                "ref": "{env}", "pass_selector": True}}}
+    c = Catalog(cfg, cache_root=tmp_path / "cache")
+    r = c.resolve("code://owner/repo/dev/README.md?at=ts:2026-03-12")
+    assert str(r.physical) == "github://owner/repo/README.md?at=ts:dev@2026-03-12"
+    assert c.pin("code://owner/repo/dev/README.md?at=ts:2026-03-12").selector.value == F1
+    assert c.pin("code://owner/repo/main/README.md?at=ts:2026-03-12").selector.value == M1

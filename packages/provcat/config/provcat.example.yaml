@@ -120,7 +120,7 @@ schemes:
       org: "[a-z0-9]{1,20}"
       project: "[a-z0-9][a-z0-9-]{0,40}[a-z0-9]"   # {org}-{project} stays a valid bucket name
 
-  # code://org/repo/env/path[?at=branch:X|tag:X|commit:X]
+  # code://org/repo/env/path[?at=branch:X|tag:X|commit:X|ts:TIME]
   # The org here is the GitHub owner, and the scheme names no tenant, so
   # every tenant reads code through the one github store.
   # The env is the GitHub branch, as it is the lakeFS branch for data.

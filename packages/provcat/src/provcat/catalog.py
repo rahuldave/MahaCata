@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .cache import LocalCache, snapshot
@@ -39,7 +39,7 @@ from .config import ConfigSource, View, check, open_config, view
 from .errors import ConfigError, ResolveError, StoreError, UriError
 from .resolver import Resolution, Resolver, TemplateResolver
 from .stores import DEFAULT_STORES, Entry, Store, make_store
-from .uri import Uri, parse
+from .uri import Selector, Uri, parse
 
 
 @dataclass(frozen=True)
@@ -102,6 +102,11 @@ class Catalog:
         if res.physical.scheme not in self.stores:
             raise ResolveError(f"{u} resolves to {res.physical}, but there is no store named "
                                f"{res.physical.scheme!r}; add one to the configuration")
+        if res.ts_branch is not None and getattr(self.stores[res.physical.scheme], "ts_names_branch", False):
+            # A GitHub URI has no branch in its path, so the time carries it.
+            sel = Selector("ts", f"{res.ts_branch}@{res.physical.selector.value}")
+            physical = res.physical.with_selector(sel)
+            res = replace(res, physical=physical, via=(*res.via, f"ts on branch {res.ts_branch} -> {physical}"))
         return res
 
     def _store(self, uri: str | Uri) -> tuple[Store, Uri]:

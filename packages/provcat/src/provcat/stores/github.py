@@ -1,7 +1,16 @@
 """GitHub repositories: ``github://owner/repo/path?at=branch:main``.
 
 The selector names a git ref with ``branch:``, ``tag:`` or ``commit:``. Without a
-selector the store uses the default branch of the repository. A ``branch:`` must
+selector the store uses the default branch of the repository.
+
+``?at=ts:TIME`` names the commit that the default branch had at TIME, and
+``?at=ts:BRANCH@TIME`` the commit that BRANCH had. The store walks the branch's
+first parents from its head, and takes the first commit whose committer date
+is at or before TIME. First parents are the commits of the branch itself, so a
+commit made on another branch and merged later by a merge commit is left out.
+Git records when a commit was made, not when it was pushed, so a commit made
+on Monday and pushed on Wednesday counts from Monday. docs/design.md lists the
+other cases where the answer differs from what the branch showed. A ``branch:`` must
 be a branch and a ``tag:`` must be a tag; the store asks the git refs API, so a
 tag of the same name cannot stand in for a branch.
 
@@ -50,14 +59,19 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import quote, urlsplit
 
 import functools
+from datetime import UTC, datetime
 
 from ..cache import LocalCache, find_twins
 from ..errors import ConfigError, NotFound, OfflineMiss, StoreError, UriError
+from ..timestamps import parse_ts
 from ..uri import Selector, Uri
 from . import Entry, Store, register_driver
 
 _SHA = re.compile(r"[0-9a-f]{40}")
 _REF_KINDS = ("branch", "tag", "commit")
+_PAGE = 100
+_MAX_COMMITS = 10_000  # a ts: search reads at most this many commits
+_SETTLE = 600  # seconds; a ts: pin closer to now than this is not cached
 
 
 class _DropAuthOnHostChange(urllib.request.HTTPRedirectHandler):
@@ -91,6 +105,7 @@ def _reply_guard(fn):
 @register_driver
 class GithubStore(Store):
     driver = "github"
+    ts_names_branch = True  # ts:BRANCH@TIME; see Catalog.resolve
 
     def option_types(self):
         return {"api_url": str, "token_env": list, "use_gh_cli": bool, "timeout": (int, float)}
@@ -159,8 +174,8 @@ class GithubStore(Store):
         if not uri.authority or not uri.segments:
             raise UriError(f"{uri}: write github://owner/repo/path")
         sel = uri.selector
-        if sel is not None and sel.kind not in _REF_KINDS:
-            raise UriError(f"{uri}: GitHub selectors are branch:, tag: or commit:")
+        if sel is not None and sel.kind not in (*_REF_KINDS, "ts"):
+            raise UriError(f"{uri}: GitHub selectors are branch:, tag:, commit: or ts:")
         return uri.authority, uri.segments[0], "/".join(uri.segments[1:])
 
     def _repo_path(self, owner: str, repo: str) -> str:
@@ -180,6 +195,47 @@ class GithubStore(Store):
             obj = (self._json(uri, f"{base}/git/tags/{obj.get('sha')}") or {}).get("object") or {}
         raise StoreError(f"{uri}: tag {name} is nested too deep")
 
+    def _commit_at(self, uri: Uri, base: str, head: str, branch: str, moment: datetime) -> str:
+        """The first commit on the first-parent line from head whose committer
+        date is at or before moment."""
+        seen: dict[str, tuple[datetime, str | None]] = {}
+        page, more = 1, True
+
+        def learn(c: dict) -> None:
+            try:
+                made = datetime.fromisoformat(c["commit"]["committer"]["date"].replace("z", "Z"))
+            except ValueError:
+                raise StoreError(f"{uri}: GitHub gave commit {c.get('sha')} a date that is not a date") from None
+            if made.tzinfo is None:
+                raise StoreError(f"{uri}: GitHub gave commit {c.get('sha')} a date without a zone")
+            parents = c.get("parents") or []
+            seen[c["sha"]] = (made, parents[0]["sha"] if parents else None)
+
+        sha: str | None = head
+        # Count both the commits read and the steps taken, so a long merged
+        # side branch, or a reply whose parents loop, still ends the search.
+        for _ in range(_MAX_COMMITS + 1):
+            while sha not in seen and more and len(seen) <= _MAX_COMMITS:
+                # One listing of the history from head, newest first, page by page.
+                out = self._json(uri, f"{base}/commits?sha={head}&per_page={_PAGE}&page={page}")
+                for c in out:
+                    learn(c)
+                more, page = len(out) == _PAGE, page + 1
+            if sha not in seen and len(seen) <= _MAX_COMMITS:
+                learn(self._json(uri, f"{base}/commits/{sha}"))  # not in the listing; ask for it alone
+            if sha not in seen and len(seen) > _MAX_COMMITS:
+                break
+            if sha not in seen:
+                raise StoreError(f"{uri}: GitHub did not return commit {sha}")
+            made, parent = seen[sha]
+            if made <= moment:
+                return sha
+            if parent is None:
+                raise NotFound(f"{uri}: {branch} has no commit at or before {moment.isoformat()}")
+            sha = parent
+        raise StoreError(f"{uri}: read {_MAX_COMMITS} commits of {branch} without reaching "
+                         f"{moment.isoformat()}; use commit: or a stage")
+
     @_reply_guard
     def pin(self, uri: Uri, cache: LocalCache) -> Uri:
         owner, repo, _ = self.locate(uri)
@@ -187,6 +243,15 @@ class GithubStore(Store):
         if sel is not None and sel.kind == "commit" and _SHA.fullmatch(sel.value):
             return uri
         refkey = [owner, repo, str(sel) if sel else "default"]
+        remember = True
+        if sel is not None and sel.kind == "ts":
+            branch, moment = _split_ts(uri, sel.value)
+            now = datetime.now(UTC)
+            if moment > now:
+                raise UriError(f"{uri}: {sel} is in the future, so its commit could still change")
+            # A push can still add a commit at or before a recent time, so a
+            # recent time is answered but not remembered for --offline.
+            remember = (now - moment).total_seconds() > _SETTLE
         if self.offline:
             sha = cache.get_ref(self.name, refkey)
             if sha is None:
@@ -195,6 +260,9 @@ class GithubStore(Store):
             base = self._repo_path(owner, repo)
             if sel is None:
                 sha = self._commit_of_ref(uri, base, "branch", self._json(uri, base)["default_branch"])
+            elif sel.kind == "ts":
+                branch = branch or self._json(uri, base)["default_branch"]
+                sha = self._commit_at(uri, base, self._commit_of_ref(uri, base, "branch", branch), branch, moment)
             elif sel.kind == "commit":
                 with self._open(uri, f"{base}/commits/{quote(sel.value, safe='')}", "application/vnd.github.sha") as r:
                     sha = r.read().decode(errors="replace").strip()
@@ -202,7 +270,8 @@ class GithubStore(Store):
                 sha = self._commit_of_ref(uri, base, sel.kind, sel.value)
             if not _SHA.fullmatch(sha):
                 raise StoreError(f"{uri}: GitHub gave {sha[:60]!r}, not a commit")
-            cache.set_ref(self.name, refkey, sha)
+            if remember:
+                cache.set_ref(self.name, refkey, sha)
         return uri.with_selector(Selector("commit", sha))
 
     def _key(self, pinned: Uri) -> list[str]:
@@ -316,3 +385,12 @@ class GithubStore(Store):
                     tar.extractall(dest, members=members, filter="data")
             except (tarfile.TarError, OSError) as e:
                 raise StoreError(f"{pinned}: cannot unpack the tarball: {e}") from e
+
+
+def _split_ts(uri: Uri, value: str) -> tuple[str, datetime]:
+    """The branch and the time of ts:TIME or ts:BRANCH@TIME. A time never holds
+    an "@", so the last one ends the branch."""
+    branch, _, text = value.rpartition("@")
+    if "@" in value and not branch:
+        raise UriError(f"{uri}: write ts:BRANCH@TIME, or ts:TIME for the default branch")
+    return branch, parse_ts(text)
