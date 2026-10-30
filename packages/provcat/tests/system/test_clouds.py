@@ -27,6 +27,7 @@ import pytest
 
 from object_store_suite import *  # noqa: F401,F403  (the tests and backends)
 from provcat import NotFound
+from provcat.errors import StoreError
 
 from object_store_suite import AzureBackend, GcsBackend, LakefsBackend, S3Backend, cat
 
@@ -193,6 +194,51 @@ def test_lakefs_ts_ignores_merged_commits(lakefs, tmp_path):
     assert c.read(f"{uri}?at=ts:{between}") == b"main v1"
     assert sorted(str(e.uri) for e in c.list(lakefs.uri(repo))) == [lakefs.uri(repo, "feature"),
                                                                     lakefs.uri(repo, "main")]
+
+
+def test_lakefs_merge(lakefs, tmp_path):
+    """A real merge, a conflict, each strategy, a dirty branch and an empty
+    merge, so the error texts that the driver reads are those lakeFS sends."""
+    repo = "provcat-test-" + uuid.uuid4().hex[:12]
+    lakefs.make_bucket(repo)
+    c = cat(lakefs, tmp_path)
+    at = lambda path: lakefs.uri(repo, path)  # noqa: E731
+    c.put(at("main/a.csv"), b"base")
+    c.commit(at("main"), "base")
+    c.branch(at("feature"), "main")
+    c.put(at("feature/b.csv"), b"new on feature")
+    c.commit(at("feature/b.csv"), "add b")
+    c.put(at("feature/staged.csv"), b"not committed")
+
+    pinned = c.merge(at("main/b.csv"), "feature", "bring b", {"run": "9"})
+    assert pinned.segments[0] != "main" and c.read(str(pinned)) == b"new on feature"
+    assert lakefs.log(repo, "main")[0]["metadata"]["run"] == "9"  # lakeFS adds its own keys too
+    with pytest.raises(NotFound):
+        c.stat(at("main/staged.csv"))  # uncommitted writes on feature stay behind
+    with pytest.raises(StoreError, match="nothing to merge"):
+        c.merge(at("main"), "feature")
+
+    # Both sides change a.csv: a conflict, then each strategy picks a side.
+    c.delete(at("feature/staged.csv"))
+    for side in ("main", "feature"):
+        c.put(at(f"{side}/a.csv"), f"from {side}".encode())
+        c.commit(at(side), f"{side} changes a")
+    with pytest.raises(StoreError, match="both changed the same files"):
+        c.merge(at("main"), "feature")
+    c.merge(at("main"), "feature", strategy="dest-wins")
+    assert c.read(at("main/a.csv")) == b"from main"
+    c.put(at("feature/a.csv"), b"feature again")
+    c.commit(at("feature"), "feature changes a again")
+    c.put(at("main/a.csv"), b"main again")
+    c.commit(at("main"), "main changes a again")
+    c.merge(at("main"), "feature", strategy="source-wins")
+    assert c.read(at("main/a.csv")) == b"feature again"
+
+    c.put(at("main/dirty.csv"), b"x")
+    c.put(at("feature/c.csv"), b"c")
+    c.commit(at("feature"), "add c")
+    with pytest.raises(StoreError, match="main has uncommitted changes"):
+        c.merge(at("main"), "feature")
 
 
 def test_adls_gen2_says_it_cannot_pin(azure_connection, monkeypatch, tmp_path):

@@ -125,6 +125,7 @@ A fetch can rewrite a cached file in place when a branch moves. So do not mount 
 | `provc rm URI` | Deletes one object. |
 | `provc commit URI -m MSG [--meta K=V]` | Commits a lakeFS branch or a folder in a versioned bucket, and prints the URI pinned to the new commit. |
 | `provc branch URI --from REF` | Makes a lakeFS branch from a branch, a tag or a commit. In a bucket, copies a branch or a commit to a new branch. See [Commits in a bucket](docs/design.md#commits-in-a-bucket). |
+| `provc merge URI --from REF [-m MSG] [--meta K=V] [--strategy S]` | Merges a branch, a tag or a commit into a lakeFS branch, and prints the URI pinned to the merge commit. `--strategy` is `source-wins` or `dest-wins`. |
 | `provc config show` | The configuration and its source. |
 | `provc config push --to etcd://...` | Copies the configuration into etcd. |
 

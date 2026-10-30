@@ -29,6 +29,9 @@ Writes go to a branch, through the S3 gateway:
 - **commit** commits a branch, with a message and metadata, and returns the
   pinned URI of the new commit.
 - **branch** makes a branch from a branch, a tag or a commit.
+- **merge** merges a branch, a tag or a commit into a branch, and returns the
+  pinned URI of the merge commit. It merges the source's last commit, so
+  uncommitted changes on a source branch stay behind.
 
 A write to a commit or a tag is refused, because lakeFS cannot change one.
 """
@@ -324,7 +327,10 @@ class LakefsStore(S3Store):
         repo, ref = uri.authority, uri.segments[0]
         try:
             self._api(uri, f"/repositories/{quote(repo, safe='')}/branches/{quote(ref, safe='')}")
-        except NotFound:
+        except StoreError as e:
+            # lakeFS answers a name that cannot be a branch, such as main~0, with 400.
+            if not isinstance(e, NotFound) and "API error 400:" not in str(e):
+                raise
             missing = self._missing(uri, repo, ref)
             if "has no repository" in str(missing):
                 raise missing from None
@@ -349,7 +355,7 @@ class LakefsStore(S3Store):
         if not message:
             raise UriError(f"{uri}: a commit needs a message")
         repo, branch = self._branch_of(uri)
-        body = {"message": message, "metadata": {str(k): str(v) for k, v in (metadata or {}).items()},
+        body = {"message": message, "metadata": _metadata(uri, metadata),
                 "allow_empty": allow_empty}
         try:
             made = self._api(uri, f"/repositories/{quote(repo, safe='')}/branches/{quote(branch, safe='')}/commits",
@@ -378,6 +384,63 @@ class LakefsStore(S3Store):
         except NotFound:
             raise self._missing(uri, repo, source) from None
         return uri
+
+    def merge(self, uri: Uri, source: str, message: str = "", metadata: dict[str, str] | None = None,
+              strategy: str | None = None) -> Uri:
+        """Merge source, a branch, a tag or a commit, into the branch that uri
+        is on, and return uri pinned to the merge commit.
+
+        A file changed on both sides is a conflict, and lakeFS refuses the
+        merge, unless strategy is "source-wins" or "dest-wins"."""
+        if strategy not in MERGE_STRATEGIES:
+            raise UriError(f"{uri}: the merge strategy is source-wins or dest-wins, not {strategy!r}")
+        if not source:
+            raise UriError(f"{uri}: a merge needs a source: a branch, a tag or a commit")
+        if "%" in source:
+            # lakeFS decodes the ref once more, so f%7E1 would merge f~1.
+            raise UriError(f"{uri}: {source!r} is not a branch, a tag or a commit; a ref has no '%'")
+        repo, branch = self._branch_of(uri)
+        if source == branch:
+            raise UriError(f"{uri}: a branch cannot merge into itself")
+        body = {"message": message, "metadata": _metadata(uri, metadata)}
+        if strategy:
+            body["strategy"] = strategy
+        path = (f"/repositories/{quote(repo, safe='')}/refs/{quote(source, safe='')}"
+                f"/merge/{quote(branch, safe='')}")
+        try:
+            made = self._api(uri, path, method="POST", body=body)
+        except NotFound:
+            made = None
+        except StoreError as e:
+            text = str(e)
+            if "conflicts with what is there" in text:
+                raise StoreError(f"{uri}: {source} and {branch} both changed the same files; "
+                                 "pass a strategy, source-wins or dest-wins, to choose a side") from None
+            reply = text.split("API error 400:", 1)[1].lower() if "API error 400:" in text else ""
+            if "no changes" in reply:
+                raise StoreError(f"{uri}: nothing to merge; {branch} already has everything in {source}") from None
+            if "dirty branch" in reply:
+                raise StoreError(f"{uri}: {branch} has uncommitted changes; commit them before a merge") from None
+            raise
+        if made is None:
+            # The branch was checked above, but it can be deleted since. Then
+            # this says it is gone; otherwise the source is what is missing.
+            self._branch_of(uri)
+            raise self._missing(uri, repo, source)
+        commit = made.get("reference")
+        if not isinstance(commit, str) or not commit:
+            raise StoreError(f"{uri}: lakeFS gave no merge commit id")
+        return Uri(uri.scheme, repo, (commit, *uri.segments[1:]))
+
+
+MERGE_STRATEGIES = (None, "source-wins", "dest-wins")
+
+
+def _metadata(uri: Uri, metadata: dict[str, str] | None) -> dict[str, str]:
+    out = {str(k): str(v) for k, v in (metadata or {}).items()}
+    if "" in out:
+        raise UriError(f"{uri}: a metadata key cannot be empty")
+    return out
 
 
 class _Refuse(urllib.request.HTTPRedirectHandler):

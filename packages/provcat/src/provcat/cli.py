@@ -15,6 +15,16 @@ def _print(obj) -> None:
     print(json.dumps(obj, indent=2))
 
 
+def _meta(items: list[str]) -> dict[str, str]:
+    meta = {}
+    for item in items:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise ProvcatError(f"--meta {item!r}: write KEY=VALUE")
+        meta[key] = value
+    return meta
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser("provc", description="Resolve, fetch and write catalog URIs.")
     ap.add_argument("--config", help="a YAML path or etcd://host:port/prefix (default: PROVCAT_CONFIG, ./provcat.yaml)")
@@ -37,6 +47,13 @@ def main(argv: list[str] | None = None) -> int:
     br = sp.add_parser("branch", help="make a lakeFS branch, or copy a bucket branch")
     br.add_argument("uri", help="the new branch: repository/branch or bucket/branch")
     br.add_argument("--from", dest="source", required=True, help="a branch, a tag or a commit")
+    mg = sp.add_parser("merge", help="merge into a lakeFS branch; prints the pinned URI")
+    mg.add_argument("uri", help="the branch to merge into: repository/branch")
+    mg.add_argument("--from", dest="source", required=True, help="a branch, a tag or a commit")
+    mg.add_argument("-m", "--message", default="")
+    mg.add_argument("--meta", action="append", default=[], metavar="KEY=VALUE", help="commit metadata")
+    mg.add_argument("--strategy", choices=["source-wins", "dest-wins"],
+                    help="on a conflict, keep this side (default: refuse the merge)")
     cfg = sp.add_parser("config", help="show or copy the configuration")
     cs = cfg.add_subparsers(dest="ccmd", required=True)
     cs.add_parser("show", help="print the configuration as JSON")
@@ -77,15 +94,11 @@ def main(argv: list[str] | None = None) -> int:
             cat.delete(args.uri)
             _print({"deleted": args.uri})
         elif args.cmd == "commit":
-            meta = {}
-            for item in args.meta:
-                key, sep, value = item.partition("=")
-                if not sep or not key:
-                    raise ProvcatError(f"--meta {item!r}: write KEY=VALUE")
-                meta[key] = value
-            print(cat.commit(args.uri, args.message, meta))
+            print(cat.commit(args.uri, args.message, _meta(args.meta)))
         elif args.cmd == "branch":
             print(cat.branch(args.uri, args.source))
+        elif args.cmd == "merge":
+            print(cat.merge(args.uri, args.source, args.message, _meta(args.meta), args.strategy))
         sys.stdout.flush()
         return 0
     except BrokenPipeError:

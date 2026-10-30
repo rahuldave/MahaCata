@@ -209,3 +209,18 @@ class Catalog:
         if make is None:
             raise StoreError(f"{u}: store {store.name} ({store.driver}) has no branches")
         return make(u, source)
+
+    def merge(self, uri: str | Uri, source: str, message: str = "", metadata: dict[str, str] | None = None,
+              strategy: str | None = None) -> Uri:
+        """Merge source, a branch, a tag or a commit, into the branch that uri
+        is on, and return the physical URI pinned to the merge commit. As with
+        commit, a logical URI adds provcat.uri to the metadata."""
+        store, u = self._writable(uri)
+        merge = getattr(store, "merge", None)
+        if merge is None:
+            raise StoreError(f"{u}: store {store.name} ({store.driver}) has no merges")
+        meta = dict(metadata or {})
+        logical = parse(uri)
+        if logical.scheme != u.scheme:
+            meta.setdefault("provcat.uri", str(logical))
+        return merge(u, source, message, meta, strategy)
