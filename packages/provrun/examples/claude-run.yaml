@@ -1,0 +1,18 @@
+# Call a real model once, on a local file. Make the file first:
+#   mkdir -p /tmp/provrun-example && echo "Revenue in 2025 was 42 million." > /tmp/provrun-example/report.txt
+# Set ANTHROPIC_API_KEY before the run.
+run:
+  org: acme
+  domain: demo
+  env: dev
+  actor: you@example.com
+agent:
+  name: revenue-question
+  backend: litellm
+  model: anthropic/claude-haiku-5-5
+  instructions: Answer from the document only, in one sentence.
+  prompt: What was revenue in 2025?
+  inputs:
+    - file:///tmp/provrun-example/report.txt
+  settings:
+    max_tokens: 200

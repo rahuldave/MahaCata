@@ -7,11 +7,17 @@ staged inputs, where the agent sees them, and where it writes.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+# A setting with one of these words in its name can carry a credential, for
+# example extra_headers with an API key. The spec goes into the evidence, so
+# such settings are refused; keys come from the environment of the provider.
+_SECRET_SETTING = re.compile(r"key|secret|auth|header|password|credential|extra_body|base_url|api_base", re.I)
 
 
 @dataclass
@@ -32,6 +38,12 @@ class AgentSpec:
     tools: list[str] = field(default_factory=list)
     settings: dict[str, Any] = field(default_factory=dict)  # model settings, for example temperature
     limits: dict[str, Any] = field(default_factory=dict)  # for example request_limit, timeout
+
+    def __post_init__(self):
+        refused = sorted(k for k in self.settings if _SECRET_SETTING.search(k))
+        if refused:
+            raise ValueError(f"agent spec: settings {refused} can carry a credential, and the spec goes into "
+                             "the evidence; set the key in the environment of the provider instead")
 
     @classmethod
     def from_dict(cls, d: dict) -> AgentSpec:

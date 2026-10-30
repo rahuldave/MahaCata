@@ -18,7 +18,7 @@ provrun runs agents and model calls on data that provcat resolves, and records t
 
 ## Run an example
 
-The examples use the LiteLLM setting `mock_response`, so they call no model and need no key.
+The examples `file-run.yaml` and `lakefs-run.yaml` use the LiteLLM setting `mock_response`, so they call no model and need no key.
 
 1. Make the input file.
 
@@ -47,7 +47,18 @@ The examples use the LiteLLM setting `mock_response`, so they call no model and 
 uv run provr run packages/provrun/examples/lakefs-run.yaml --config packages/provcat/config/provcat.example.yaml
 ```
 
-To call a real model, remove `mock_response` from the run file, and set the key of the provider in the environment, for example `OPENAI_API_KEY`.
+Two examples call a real model, `claude-haiku-5-5`. They read the same input file as `file-run.yaml`, so make it first, as in step 1. They need `ANTHROPIC_API_KEY` in the environment.
+
+- `packages/provrun/examples/claude-run.yaml` makes one LiteLLM call.
+- `packages/provrun/examples/claude-agent.yaml` runs a PydanticAI agent. The agent searches the input with `grep_file` and records its source with `add_note`. The instructions ask it to write `/output/answer.txt`. The final answer is always in `/output/response.txt` as well.
+
+```
+uv run provr run packages/provrun/examples/claude-agent.yaml
+```
+
+`grep_file` needs ripgrep, the `rg` command. Without it, the tool tells the agent that ripgrep is not installed.
+
+To call another model, change `model` in the run file, and set the key of its provider, for example `OPENAI_API_KEY`. The evidence holds the prompts and the responses, but not the key. An agent spec refuses a setting that can carry a key, such as `api_key` or `extra_headers`, because the spec goes into the evidence.
 
 ## The run file
 
@@ -155,4 +166,5 @@ provrun prints the pinned URI of the commit. Another run can commit the same bra
 | Snapshots and staged inputs are read-only, so `rm -rf` cannot delete them. | Run `chmod -R u+w` on the folder first. |
 | Snapshots are never deleted. | Delete old folders under `<cache>/.provcat/snapshots` when no run uses them. |
 | LiteLLM can print a warning that a logging coroutine was never awaited. | Ignore it. It comes from LiteLLM's logging, after the run ends. |
+| PydanticAI prints a banner about Logfire on each run in a terminal. | Set `PYDANTIC_AI_NO_BANNER=1`. |
 | Only the in-process backends exist. | Docker and Foundry backends are planned. See [provrun-plan.md](provrun-plan.md). |

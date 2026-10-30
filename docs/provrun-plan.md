@@ -2,6 +2,8 @@
 
 provrun is a Python library that runs agents and model calls on data that provcat resolves. It is the caller of record for every run. It makes the run ID, asks the access broker for a grant and asks provcat for the files. Then it stages the files, runs the agent and records the evidence. The first version runs agents in the same process as the caller. Docker and Azure Foundry come later, so the classes must already have room for them.
 
+**Status:** phases 0 to 4 are built. Commit `5d8246b` made the workspace, and commit `2524d03` added snapshots and provrun. [provrun.md](provrun.md) is the guide for users. This plan records the design, so some steps below describe work that is now finished.
+
 The design comes from three sources. The first source is the Point32 planning documents in `~/Projects/Point32AI/PlanningDocs`, chiefly `implspec.md` sections 8, 10 to 12 and 14. The second source is the agent execution spec of ExtractoPrimo, `~/Credcore/ExtractoPrimo/internal_docs/agent-execution-spec.md`. The third source is the current Microsoft documentation of the Foundry Agent Service.
 
 ## Terms
@@ -68,21 +70,24 @@ The classes below are the whole design. The phases build some of them now and le
 | `Resolver` | Pins a URI and makes a snapshot. `ProvcatResolver` calls provcat. | Yes |
 | `Broker` and `Grant` | Decide access for one URI and one mode. `StubBroker` checks an allow list. | Stub |
 | `Stager` | Makes granted files visible to the agent. | `InProcessStager` |
-| `RunSpec` | Lists the staged inputs, the output folder, the environment and the limits of one run. | Yes |
+| `RunSpec` | Lists the staged inputs, the input, output and scratch folders, and the environment of one run. The limits are in `AgentSpec`. | Yes |
 | `AgentSpec` | The portable agent description. | Yes |
 | `Backend` | Runs an agent spec. | LiteLLM and PydanticAI |
-| `Tool` and `ToolRegistry` | Hold tools by name with a JSON schema and an execution mode. | In-process mode |
-| `Outputter` | Collects the outputs, hashes them and commits them through provcat. | Yes |
+| `Tool` and `ToolRegistry` | Hold tools by name, each with a function and an execution mode. PydanticAI makes the JSON schema from the function. | In-process mode |
+| `Outputter` | Collects the outputs and hashes them. `RunContext` commits them with the evidence. | Yes |
 
 Each step of a run writes an evidence event. The steps of one run follow this order:
 
 1. `RunContext` writes `run_created`.
 2. `Broker` writes `access_requested` and then `access_granted` or `access_denied` for each input URI.
-3. `Resolver` writes `context_resolved` and `snapshot_materialized`.
+3. `Resolver` writes `context_resolved` and `snapshot_materialized`. Steps 2 and 3 repeat for each input.
 4. `Stager` writes `input_staged` for each input, with its hash.
 5. `Backend` writes `sandbox_started`, `prompt_rendered`, each `model_called` and each `tool_called`, and then `sandbox_completed`.
-6. `Outputter` writes `output_artifact_created` for each output.
-7. `RunContext` writes `run_completed` or `run_failed`, and then commits the evidence bundle.
+6. `Stager` hashes each input again and writes `input_verified`.
+7. `Outputter` writes `output_artifact_created` for each output.
+8. `RunContext` writes `run_completed` or `run_failed`, and then commits the evidence bundle.
+
+A step that raises an error writes `step_failed`. The PydanticAI backend also writes `trace_imported`, just before `sandbox_completed`. The agent can write `note_added`.
 
 ### Room for later backends
 
@@ -115,11 +120,11 @@ An evidence event has these fields:
 
 Events refer to logical URIs and not to paths on a disk, so that a later job can ask for the same snapshot.
 
-At the end of a run, the recorder writes a manifest with the hash of the last event and the list of payloads. Then `RunContext` commits the folder of the run through provcat to `run://<org>/<domain>/<env>/<run_id>`. The commit uses the provcat write path that exists, which is `put` and then `commit`. The bundle then has a pinned version like any other catalog object.
+At the end of a run, the recorder writes a manifest with the hash of the last event and the list of payloads. Then `RunContext` commits the evidence and output folders of the run through provcat to `run://<org>/<domain>/<env>/<run_id>`. The commit uses the provcat write path that exists, which is `put` and then `commit`. The bundle then has a pinned version like any other catalog object.
 
 The recorder also opens an OpenTelemetry span for each step. The spans use the GenAI semantic conventions, for example `invoke_agent` and `execute_tool`. Those conventions are still at Development status, so provrun pins one version. When no exporter is set, the spans go nowhere and cost little.
 
-Model calls and tool calls inside PydanticAI must reach the recorder without help from the agent. provrun wraps the PydanticAI model in a subclass of its `WrapperModel` that writes `model_called`. The tool registry wraps each tool function so that it writes `tool_called`. The agent can add notes and citations through a tool, and those events have the component `agent`.
+Model calls and tool calls inside PydanticAI must reach the recorder without help from the agent. provrun wraps the PydanticAI model in a subclass of its `WrapperModel` that writes `model_called`. It also wraps each toolset in a subclass of `WrapperToolset` that writes `tool_called`. The agent can add notes and citations through a tool, and those events have the component `agent`.
 
 ## Phases
 
@@ -146,13 +151,13 @@ Model calls and tool calls inside PydanticAI must reach the recorder without hel
 - A run with three steps writes a chain that verifies.
 - A changed or removed event fails the verification.
 - A sink that fails stops the run in strict mode and does not stop it in lenient mode.
-- The bundle commits to a `file` store and reads back at the same version.
+- The bundle commits to a versioned bucket and reads back at the same version. The tests use a moto S3 bucket. A `file` store has no commits, so there the bundle stays unpinned.
 
 ### Phase 2: resolver, broker and snapshots
 
 1. Write `Grant` and `StubBroker`. The stub grants a URI only if the URI is in the allow list of the run. The environment segment of the URI must also match the environment of the run. The stub grants only the mode `mounted_snapshot`. A physical URI, such as `file://`, has no environment segment, so the stub grants one only in `dev`.
 2. Write `ProvcatResolver`. It calls `pin` and then makes a snapshot of the pinned version.
-3. Add snapshots to provcat as `Catalog.snapshot(uri) -> Path`. A snapshot lives under a folder named by the store, the pinned version and the key. It is read-only and is never rewritten. On macOS it uses a copy-on-write clone, and elsewhere it uses hard links or a copy.
+3. Add snapshots to provcat as `Catalog.snapshot(uri)`, which returns a `Snapshot` with the pinned URI, the path and the SHA-256. A snapshot lives at `.provcat/snapshots/<kind>/<sha256>/<name>` in the cache, where the kind is file or folder. The SHA-256 is of the content. For a folder, it is the SHA-256 of a list of its files and their hashes. So two versions with the same kind, the same name and the same content share one snapshot. A snapshot is read-only. provcat reuses it only if its hash still matches, and replaces it otherwise. It is made with a copy-on-write clone where the disk has one, and with a copy elsewhere.
 
 The provcat cache today keeps one path for each store and key, whatever the version. A later fetch of a moved branch rewrites that path in place. A mount of that path is not safe, so mounts use snapshots only.
 
@@ -169,9 +174,9 @@ The provcat cache today keeps one path for each store and key, whatever the vers
 3. Write the `Backend` interface with `start`, `poll`, `stream`, `cancel` and `result`, all asynchronous.
 4. Write `LiteLLMBackend` for one text call or one multimodal call.
 5. Write `PydanticAIBackend`, with the filesystem toolset and `grep_file`.
-6. Write `ToolRegistry`, which loads tools from Python entry points and from a tools folder.
-7. Write `Outputter`. It hashes each file in `/output` and commits the folder through provcat to `run://.../<run_id>/outputs`.
-8. Write the PydanticAI importer. It turns the message history into `parsed` events for steps that the wrappers did not see.
+6. Write `ToolRegistry`, which loads tools from Python entry points and from a tools folder. Each module in a tools folder names its tools in a list called `TOOLS`.
+7. Write `Outputter`. It hashes each file in `/output`. `RunContext` commits the folder through provcat to `run://.../<run_id>/output`.
+8. Write the PydanticAI importer. It puts the whole message history into one `trace_imported` event with confidence `parsed`. The wrappers have already recorded each model call and tool call.
 
 **Tests:**
 - Use the PydanticAI `TestModel` and `FunctionModel`, and a LiteLLM mock, so that the tests use no network and no keys.
@@ -196,7 +201,7 @@ The provcat cache today keeps one path for each store and key, whatever the vers
 | `executors.py`: `_LiteLLMBase`, `StandardExecutor`, `MultimodalExecutor`, `build_content_blocks` | `LiteLLMBackend` | Use `acompletion`. Write evidence for each call. Keep the version limit `litellm<=1.82.6` from ExtractoPrimo, which avoids a compromised release. |
 | `executors.py`: `PydanticAIExecutor` | `PydanticAIBackend` | Mounts come from `RunSpec`, not from `incoming/`. Remove the answers folder and the `{file_key}` substitution. |
 | `agent_tools.py`: `grep_file` and `EPDeps` | `provrun.tools.grep_file` and `RunDeps` | `RunDeps` holds the sandbox and the `RunContext`. |
-| `registry.py` | `provrun.registry` | Keep the entry points. Rename the groups to `provrun.backends`, `provrun.stagers` and `provrun.tools`. |
+| `registry.py` | `load_backend` in `provrun.backends`, and `ToolRegistry` in `provrun.tools` | Keep the entry points. Rename the groups to `provrun.backends`, `provrun.stagers` and `provrun.tools`. |
 | Workspace protocol in the agent execution spec, section 2.8 | `RunSpec` folder layout | Keep `input/`, `output/` and `scratch/`. |
 
 These parts of ExtractoPrimo are not copied:
@@ -222,6 +227,9 @@ These parts of ExtractoPrimo are not copied:
 
 ## Open questions
 
-- **The org, domain and environment of `run://` URIs.** The plan takes them from `RunContext`. A profile will give them later.
-- **The place of snapshots.** The plan puts `snapshot` in provcat because it is a cache feature. It could live in provrun instead, if provcat must stay read and write only.
-- **The format of a tool folder.** ExtractoPrimo loads every public function of a module. provrun could ask for an explicit list in each module instead.
+- **The org, domain and environment of `run://` URIs.** Today the `run` section of the run file gives them to `RunContext`. A profile will give them later.
+
+## Questions that the build settled
+
+- **The place of snapshots.** Snapshots live in provcat, because they are a cache feature.
+- **The format of a tool folder.** Each module lists its tools in `TOOLS`. provrun does not load every public function, as ExtractoPrimo does.
