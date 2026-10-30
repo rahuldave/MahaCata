@@ -167,15 +167,15 @@ An Iceberg table commits by swapping the catalog's pointer from the old metadata
 
 ### What put and delete guarantee
 
-- **One object at a time.** `put` writes one object, and `delete` removes one object. Each is atomic on its own. [src] `src/provcat/stores/objects.py`
+- **One object at a time.** `put` writes one object, and `delete` removes one object. Each is atomic on its own. [src] `packages/provcat/src/provcat/stores/objects.py`
 - **Last writer wins.** No driver sends a condition on `put`. [src]
-- **The S3 version of a small file is the one written.** A file up to 64 MB goes in one `PutObject`, whose reply gives its ETag. A larger file goes in a multipart upload, which gives no ETag, so a HEAD reads it after. A write by someone else in between gives their ETag. [src] `src/provcat/stores/s3.py`
+- **The S3 version of a small file is the one written.** A file up to 64 MB goes in one `PutObject`, whose reply gives its ETag. A larger file goes in a multipart upload, which gives no ETag, so a HEAD reads it after. A write by someone else in between gives their ETag. [src] `packages/provcat/src/provcat/stores/s3.py`
 - **The S3 delete checks and then deletes.** A write between the HEAD and the DeleteObject is deleted. [src]
 - **Several files are never one step.** A reader of a live folder can see half a change. Read at a commit for one moment, or write through lakeFS. [src]
 
 ### What a commit is
 
-A commit of a folder writes two objects at the top of the bucket. The design page has the layout. [src] `src/provcat/stores/objects.py`
+A commit of a folder writes two objects at the top of the bucket. The design page has the layout. [src] `packages/provcat/src/provcat/stores/objects.py`
 
 1. It finds the folder's newest commit, N.
 2. It lists every version under the folder, deleted ones too, twice. It goes on only when the two listings are equal, and tries up to five times.
@@ -186,7 +186,7 @@ A commit of a folder writes two objects at the top of the bucket. The design pag
 
 ### Why the file list is a snapshot
 
-Every write makes a new version ID, and every delete makes a delete marker on S3, or a deletion time on GCS. Suppose the two listings are equal. Then no key changed between its read in the first listing and its read in the second. So every listed version was current at one moment, between the end of the first listing and the start of the second. Snapshot algorithms call the method "double collect". The unit test `tests/unit/test_bucket_commits.py` checks that a change between the listings makes the commit list again. [src]
+Every write makes a new version ID, and every delete makes a delete marker on S3, or a deletion time on GCS. Suppose the two listings are equal. Then no key changed between its read in the first listing and its read in the second. So every listed version was current at one moment, between the end of the first listing and the start of the second. Snapshot algorithms call the method "double collect". The unit test `packages/provcat/tests/unit/test_bucket_commits.py` checks that a change between the listings makes the commit list again. [src]
 
 An upload in progress is not an object, so the commit leaves it out. The commit is then older than the upload, but it is still a snapshot. [doc, for S3]
 

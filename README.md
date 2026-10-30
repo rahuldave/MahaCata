@@ -4,6 +4,10 @@ provcat turns a catalog URI into a local path. A catalog URI names a dataset, a 
 
 The first commit of this repository is the provcat code as it was found in `~/Catalog/provcat`. Read [docs/tour.md](docs/tour.md) for a guided tour with commands to run. Read [docs/setup.md](docs/setup.md) to install lakeFS, etcd and the tools that the tests need. Read [docs/design.md](docs/design.md) for what that code did, what changed and how the parts fit together. Read [docs/reference-server.md](docs/reference-server.md) to run and operate the shared lakeFS that keeps orgs apart. Read [docs/transactions.md](docs/transactions.md) for what a write and a commit guarantee, in lakeFS and in a bucket.
 
+## Layout
+
+This repository is a uv workspace. A uv workspace is one repository with several Python packages, one lock file and editable installs between them. provcat lives in `packages/provcat`, with its tests, scripts and example configuration. Run `uv sync` and `uv run pytest` from the root.
+
 ## Install and run
 
 provcat needs Python 3.13 and [uv](https://docs.astral.sh/uv/).
@@ -76,12 +80,12 @@ provcat reads its configuration from the first of these sources that exists:
 3. The file `provcat.yaml` in the current folder.
 4. The built-in defaults, which have the five stores and no logical schemes.
 
-A source that starts with `etcd://host:port/prefix` is etcd. Any other source is a YAML file. [config/provcat.example.yaml](config/provcat.example.yaml) has every section and the logical schemes from the old provcat docs. A value can read the environment with `${oc.env:NAME,default}`.
+A source that starts with `etcd://host:port/prefix` is etcd. Any other source is a YAML file. [packages/provcat/config/provcat.example.yaml](packages/provcat/config/provcat.example.yaml) has every section and the logical schemes from the old provcat docs. A value can read the environment with `${oc.env:NAME,default}`.
 
 To copy a YAML configuration into etcd, run the command below. It copies the `${...}` references as written, so each reader fills them in from its own environment. It also deletes the sections in etcd that the file does not have.
 
 ```
-uv run provc --config config/provcat.example.yaml config push --to etcd://localhost:2379/provcat
+uv run provc --config packages/provcat/config/provcat.example.yaml config push --to etcd://localhost:2379/provcat
 ```
 
 A configuration can hold a part for each tenant, in its `tenants` section, and a part for the admin, in its `admin` section. `provc --tenant acme`, or `PROVCAT_TENANT=acme`, sees the shared sections and acme's part only. Without a tenant, `provc` is the admin, and sees every part. Read "A configuration for each tenant" in [docs/design.md](docs/design.md).
@@ -121,9 +125,9 @@ The tests are in three folders, and each test gets the marker of its folder:
 
 | Folder | Marker | What the tests use |
 |---|---|---|
-| `tests/unit` | `unit` | Only the code and temporary files. |
-| `tests/integration` | `integration` | Servers on this machine: a fake GitHub API and a fake etcd in the test process, moto for S3, and emulators in Docker for GCS and Azure. |
-| `tests/system` | `system` | Real services on the network. |
+| `packages/provcat/tests/unit` | `unit` | Only the code and temporary files. |
+| `packages/provcat/tests/integration` | `integration` | Servers on this machine: a fake GitHub API and a fake etcd in the test process, moto for S3, and emulators in Docker for GCS and Azure. |
+| `packages/provcat/tests/system` | `system` | Real services on the network. |
 
 `uv run pytest` runs the unit and integration tests. They need no network. The GCS and Azure tests need Docker and two images. If an image is missing, those tests skip and name the image to pull:
 
@@ -132,7 +136,7 @@ docker pull fsouza/fake-gcs-server:1.52.2
 docker pull mcr.microsoft.com/azure-storage/azurite:3.35.0
 ```
 
-`tests/object_store_suite.py` holds one set of tests for every object store. The integration tests run it against moto, fake-gcs-server and Azurite. The system tests run it against real AWS, GCS, Azure and lakeFS. Each system test makes its own bucket and deletes it afterwards. It uses the cloud's Python SDK, or the REST API for lakeFS.
+`packages/provcat/tests/object_store_suite.py` holds one set of tests for every object store. The integration tests run it against moto, fake-gcs-server and Azurite. The system tests run it against real AWS, GCS, Azure and lakeFS. Each system test makes its own bucket and deletes it afterwards. It uses the cloud's Python SDK, or the REST API for lakeFS.
 
 Run the system tests with `-m system`. [docs/setup.md](docs/setup.md) shows how to set up each service. Each service runs only if you set its variable:
 
@@ -143,7 +147,7 @@ Run the system tests with `-m system`. [docs/setup.md](docs/setup.md) shows how 
 | `PROVCAT_SYSTEM_AZURE=<subscription id>` | Azure. The tests make a resource group with one ADLS Gen2 account, and delete the group afterwards. They need `uv sync --group system`. |
 | `PROVCAT_SYSTEM_LAKEFS=<url>` | lakeFS, with the keys of the AWS profile `lakefs`. Set `PROVCAT_SYSTEM_LAKEFS_DATA` to its blockstore path, and the tests also delete the storage folders that they made. |
 | `PROVCAT_SYSTEM_LAKEFS_B=<url>` | A second lakeFS, with the keys of the profile `lakefs-b`. With both lakeFS variables set, a test checks that two servers keep two orgs apart. `PROVCAT_SYSTEM_LAKEFS_B_DATA` names its blockstore path. |
-| `PROVCAT_SYSTEM_LAKEFS_ACL=<url>` | A lakeFS run by `scripts/lakefs_acl_local.py`, with access control for each org. A test checks that one server keeps two orgs apart. `PROVCAT_SYSTEM_LAKEFS_ACL_CREDENTIALS` names the credentials file, `PROVCAT_SYSTEM_LAKEFS_ACL_DATA` the blockstore path, `PROVCAT_SYSTEM_LAKEFS_ACL_SERVER` the access-list server, and `PROVCAT_SYSTEM_LAKEFS_ACL_DIR` the folder of the setup. |
+| `PROVCAT_SYSTEM_LAKEFS_ACL=<url>` | A lakeFS run by `packages/provcat/scripts/lakefs_acl_local.py`, with access control for each org. A test checks that one server keeps two orgs apart. `PROVCAT_SYSTEM_LAKEFS_ACL_CREDENTIALS` names the credentials file, `PROVCAT_SYSTEM_LAKEFS_ACL_DATA` the blockstore path, `PROVCAT_SYSTEM_LAKEFS_ACL_SERVER` the access-list server, and `PROVCAT_SYSTEM_LAKEFS_ACL_DIR` the folder of the setup. |
 | `PROVCAT_SYSTEM_GITHUB=1` | github.com. |
 | `PROVCAT_SYSTEM_ETCD=<host:port>` | etcd. |
 

@@ -130,7 +130,7 @@ Use the `127.0.0.1` port of the container, not its Docker host name. On OrbStack
 
 ### Start lakeFS with the script
 
-After the first start, `scripts/lakefs_local.py` starts lakeFS again in one command. It needs these things:
+After the first start, `packages/provcat/scripts/lakefs_local.py` starts lakeFS again in one command. It needs these things:
 
 - **A container.** The Postgres container from step 1 must exist. The script starts it, and does not make it.
 - **The program.** `--lakefs` gives the `lakefs` program, as a path or as a name on your `PATH`. The default is `~/Projects/lakeFS/lakefs`, the build from source.
@@ -139,7 +139,7 @@ After the first start, `scripts/lakefs_local.py` starts lakeFS again in one comm
 - **The port.** Give the port that the container publishes on `127.0.0.1`.
 
 ```
-uv run python scripts/lakefs_local.py --lakefs <program> --lakefs-dir <folder> --container lakefs-postgres --port 5432
+uv run python packages/provcat/scripts/lakefs_local.py --lakefs <program> --lakefs-dir <folder> --container lakefs-postgres --port 5432
 ```
 
 The script waits until Postgres answers, and then runs lakeFS in the foreground. Ctrl+C, `kill` or closing the terminal asks lakeFS to stop, and waits up to 30 seconds for it. Then the script stops the container, but only if the script started it. The exit code is the exit code of lakeFS.
@@ -148,10 +148,10 @@ The script reads the connection string from `config.yaml`. It changes only the h
 
 ### Run one lakeFS for many orgs
 
-`scripts/lakefs_acl_local.py` runs lakeFS 1.86.0 with access control for each org. It runs two programs from the source build. The access-list server keeps users, groups and policies. lakeFS asks it who may do what. lakeFS keeps its metadata in a local database, so this needs no Postgres.
+`packages/provcat/scripts/lakefs_acl_local.py` runs lakeFS 1.86.0 with access control for each org. It runs two programs from the source build. The access-list server keeps users, groups and policies. lakeFS asks it who may do what. lakeFS keeps its metadata in a local database, so this needs no Postgres.
 
 ```
-uv run python scripts/lakefs_acl_local.py
+uv run python packages/provcat/scripts/lakefs_acl_local.py
 ```
 
 The first run makes the folder `~/Catalog/lakefs-acl`, and writes these files there:
@@ -263,7 +263,7 @@ Put your keys in `~/.aws/credentials`, or use a profile with `PROVCAT_SYSTEM_AWS
 2. Make a project for the tests. The script makes the project, links it to a billing account, and turns on the Cloud Storage API. It uses the Google REST APIs, not `gcloud`.
 
    ```
-   uv run python scripts/gcs_test_project.py --billing-from <a project that has billing>
+   uv run python packages/provcat/scripts/gcs_test_project.py --billing-from <a project that has billing>
    ```
 
 3. Run the tests with the project id that the script prints.
@@ -319,7 +319,7 @@ To test isolation between orgs, run a second lakeFS:
 
 `PROVCAT_SYSTEM_LAKEFS_PROFILE` and `PROVCAT_SYSTEM_LAKEFS_B_PROFILE` change the two profile names, which are `lakefs` and `lakefs-b` by default.
 
-To test isolation on one lakeFS with access control, start `scripts/lakefs_acl_local.py`, and set five variables:
+To test isolation on one lakeFS with access control, start `packages/provcat/scripts/lakefs_acl_local.py`, and set five variables:
 
 ```
 PROVCAT_SYSTEM_LAKEFS_ACL=http://127.0.0.1:8002 \
@@ -327,7 +327,7 @@ PROVCAT_SYSTEM_LAKEFS_ACL_SERVER=http://127.0.0.1:8011 \
 PROVCAT_SYSTEM_LAKEFS_ACL_DIR=~/Catalog/lakefs-acl \
 PROVCAT_SYSTEM_LAKEFS_ACL_CREDENTIALS=~/Catalog/lakefs-acl/credentials \
 PROVCAT_SYSTEM_LAKEFS_ACL_DATA=~/Catalog/lakefs-acl/data \
-uv run pytest -m system tests/system/test_lakefs_acl.py
+uv run pytest -m system packages/provcat/tests/system/test_lakefs_acl.py
 ```
 
 The test makes repositories named `acme-provcat-test-...` and `globex-provcat-test-...` with each org's keys, and deletes them at the end.

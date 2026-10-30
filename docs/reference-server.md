@@ -27,7 +27,7 @@ Two programs run side by side. Both are built from the fork [rahuldave/lakeFS](h
 
 - **lakeFS** holds the data, the commits and the branches. It runs with `auth.ui_config.rbac: external`, so it asks another server who may do what.
 - **The access-list server** is the reference authorization server that lakeFS ships in `contrib/auth/acl`. It keeps the users, groups, policies and keys. lakeFS fetches each user's policies from it, and checks every call against them.
-- **`scripts/lakefs_acl_local.py`** in this project starts both, sets up the orgs, and stops both.
+- **`packages/provcat/scripts/lakefs_acl_local.py`** in this project starts both, sets up the orgs, and stops both.
 
 ### Where the data lives
 
@@ -58,7 +58,7 @@ Stock 1.86.0 did not keep orgs apart. The fork fixes that. `PROVCAT.md` at the r
 Build the fork first, as `docs/setup.md` explains under "Build lakeFS 1.86.0 from source". Then start the server:
 
 ```bash
-uv run python scripts/lakefs_acl_local.py
+uv run python packages/provcat/scripts/lakefs_acl_local.py
 ```
 
 It runs in the foreground. Ctrl+C, `kill` or closing the terminal stops lakeFS, and then the access-list server. Start it again with the same command.
@@ -147,14 +147,14 @@ The admin is the user `admin`, in the group `Admins`. Its keys are the profile `
 | List repositories | Sees only its own | Not shown |
 | Manage users, groups, policies or keys | Refused | Refused |
 
-The system test `tests/system/test_lakefs_acl.py` checks reading, writing, committing, branching, making and listing repositories, through the REST API, the S3 gateway and provcat. Tags and merges follow from the same policy, but no test runs them.
+The system test `packages/provcat/tests/system/test_lakefs_acl.py` checks reading, writing, committing, branching, making and listing repositories, through the REST API, the S3 gateway and provcat. Tags and merges follow from the same policy, but no test runs them.
 
 ### Add an org
 
 Stop the server, then start it with every org you want, the old ones too:
 
 ```bash
-uv run python scripts/lakefs_acl_local.py --org acme --org globex --org initech
+uv run python packages/provcat/scripts/lakefs_acl_local.py --org acme --org globex --org initech
 ```
 
 A run only adds. It keeps the keys of the orgs that already exist, and prints the new ones as `(new: initech)`. It also writes each org's policy again, so a change to the policy in the script reaches an existing server.
@@ -173,7 +173,7 @@ export AWS_SHARED_CREDENTIALS_FILE=~/Catalog/lakefs-acl/credentials
 export LAKEFS_S3_ENDPOINT=http://127.0.0.1:8002
 ```
 
-The example configuration, `config/provcat.example.yaml`, then works as it is. Its store `lakefs-acme` uses the profile `lakefs-acme`, and `lakefs-globex` uses `lakefs-globex`. The logical schemes pick the store from the org in the URI, so `data+table://acme/...` reads and writes with acme's keys only. The store `lakefs` uses the admin's keys.
+The example configuration, `packages/provcat/config/provcat.example.yaml`, then works as it is. Its store `lakefs-acme` uses the profile `lakefs-acme`, and `lakefs-globex` uses `lakefs-globex`. The logical schemes pick the store from the org in the URI, so `data+table://acme/...` reads and writes with acme's keys only. The store `lakefs` uses the admin's keys.
 
 Give each org a configuration with only its own store, and only its own profile in its credentials file. The mapping in one shared configuration routes requests; the keys are what keep orgs apart. `docs/design.md` explains this under "Tenants".
 
@@ -227,7 +227,7 @@ The admin can still lock itself out in other ways:
 To undo any of these, run the script with `--repair-admin`:
 
 ```bash
-uv run python scripts/lakefs_acl_local.py --repair-admin
+uv run python packages/provcat/scripts/lakefs_acl_local.py --repair-admin
 ```
 
 With the server running, both ports in use, it repairs it in place and exits. Otherwise it starts the server and repairs it first. It works through the access-list server and the token, not through lakeFS, so a locked-out admin does not stop it. It does the same steps every time:
@@ -261,7 +261,7 @@ It does not protect against these:
 Integration tests run the script against fake servers, in about 40 seconds:
 
 ```bash
-uv run pytest tests/integration/test_lakefs_acl_local.py
+uv run pytest packages/provcat/tests/integration/test_lakefs_acl_local.py
 ```
 
 The system tests run against the real server. Start it first, then:
@@ -272,7 +272,7 @@ PROVCAT_SYSTEM_LAKEFS_ACL_SERVER=http://127.0.0.1:8011 \
 PROVCAT_SYSTEM_LAKEFS_ACL_DIR=~/Catalog/lakefs-acl \
 PROVCAT_SYSTEM_LAKEFS_ACL_CREDENTIALS=~/Catalog/lakefs-acl/credentials \
 PROVCAT_SYSTEM_LAKEFS_ACL_DATA=~/Catalog/lakefs-acl/data \
-uv run pytest -m system tests/system/test_lakefs_acl.py
+uv run pytest -m system packages/provcat/tests/system/test_lakefs_acl.py
 ```
 
 They take about 3 minutes, most of it waiting out lakeFS's policy cache after each repair. They make repositories named `acme-provcat-test-...` and `globex-provcat-test-...`, and delete them at the end. The repair tests lock the admin out and repair it, so they change the admin's keys in `credentials`.
@@ -304,4 +304,4 @@ The lakeFS banner says to complete setup at `127.0.0.1:8000`. That line is stock
 - **Building lakeFS:** the section "Build lakeFS 1.86.0 from source" in `docs/setup.md`.
 - **Tenancy:** the section "Tenants" in `docs/design.md`, with the holes in stock lakeFS.
 - **Writes through provcat:** the section "Writes" in `docs/design.md`.
-- **The script itself:** `scripts/lakefs_acl_local.py`.
+- **The script itself:** `packages/provcat/scripts/lakefs_acl_local.py`.

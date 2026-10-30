@@ -48,12 +48,12 @@ provcat follows the Perl `URI` module, in which the scheme of a URI picks the cl
 
 | Interface | Implementations | File |
 |---|---|---|
-| `ConfigSource` | `YamlConfig`, `EtcdConfig`, `EmptyConfig` | `src/provcat/config.py` |
-| `Resolver` | `TemplateResolver` | `src/provcat/resolver.py` |
-| `Store` | `LocalStore`, `GithubStore`, and the object stores `S3Store`, `GcsStore`, `AzureStore` | `src/provcat/stores/` |
-| Cache | `LocalCache` | `src/provcat/cache.py` |
+| `ConfigSource` | `YamlConfig`, `EtcdConfig`, `EmptyConfig` | `packages/provcat/src/provcat/config.py` |
+| `Resolver` | `TemplateResolver` | `packages/provcat/src/provcat/resolver.py` |
+| `Store` | `LocalStore`, `GithubStore`, and the object stores `S3Store`, `GcsStore`, `AzureStore` | `packages/provcat/src/provcat/stores/` |
+| Cache | `LocalCache` | `packages/provcat/src/provcat/cache.py` |
 
-`Catalog` in `src/provcat/catalog.py` joins them. It loads a configuration, makes one store for each entry in `stores`, and makes the resolver from `schemes` and `stages`. A store name and a logical scheme cannot be the same.
+`Catalog` in `packages/provcat/src/provcat/catalog.py` joins them. It loads a configuration, makes one store for each entry in `stores`, and makes the resolver from `schemes` and `stages`. A store name and a logical scheme cannot be the same.
 
 ### Configuration sources
 
@@ -96,7 +96,7 @@ The `file`, `s3`, `gcs`, `azure` and `lakefs` drivers can be written. The `githu
 
 To add a driver, write a subclass of `Store`, set `driver`, give its options and their types in `option_types()`, and decorate the class with `register_driver`. A store entry with `driver: <name>` then uses it.
 
-S3, Google Cloud Storage and Azure Blob Storage share one base class, `ObjectStore` in `src/provcat/stores/objects.py`. It holds stat, list, folder fetch, the cache and offline mode. A driver for one more object store gives only four primitives:
+S3, Google Cloud Storage and Azure Blob Storage share one base class, `ObjectStore` in `packages/provcat/src/provcat/stores/objects.py`. It holds stat, list, folder fetch, the cache and offline mode. A driver for one more object store gives only four primitives:
 
 - **`locate(uri)`:** the bucket and the key that a URI names.
 - **`_head`:** the size and version of one object.
@@ -165,8 +165,8 @@ A shared cache is not a boundary either. Its folders, such as `<cache>/lakefs-gl
 
 The keys keep tenants apart only if the server checks them. lakeFS with its default settings has no access control. It answers 501 to the group and policy APIs, and every user can read every repository. With one open-source lakeFS, the stores for each org route the requests. They do not stop one org's keys from reading another org's repositories. To enforce the separation, use one of these:
 
-- **A lakeFS for each org.** Point each org's store at its own lakeFS server, with `endpoint_url`. The system test `tests/system/test_lakefs_isolation.py` checks this with two real servers. Each org reads its own data, and its store finds no repository of the other org. Each server refuses the other server's keys, at the S3 gateway and at the API.
-- **One patched lakeFS 1.86.0 with the access-list server.** lakeFS 1.86.0 can ask an external server who may do what. Its reference server, the access-list server, keeps users, groups and policies. `scripts/lakefs_acl_local.py` runs both, and gives each org a policy for the repositories whose names start with the org and a `-`. The system test `tests/system/test_lakefs_acl.py` checks this on one real server:
+- **A lakeFS for each org.** Point each org's store at its own lakeFS server, with `endpoint_url`. The system test `packages/provcat/tests/system/test_lakefs_isolation.py` checks this with two real servers. Each org reads its own data, and its store finds no repository of the other org. Each server refuses the other server's keys, at the S3 gateway and at the API.
+- **One patched lakeFS 1.86.0 with the access-list server.** lakeFS 1.86.0 can ask an external server who may do what. Its reference server, the access-list server, keeps users, groups and policies. `packages/provcat/scripts/lakefs_acl_local.py` runs both, and gives each org a policy for the repositories whose names start with the org and a `-`. The system test `packages/provcat/tests/system/test_lakefs_acl.py` checks this on one real server:
   - Each org reads, pins and lists its own data.
   - Each org lists only its own repositories, through the API and the S3 gateway.
   - Each org is refused the other's repositories, and cannot make a repository under the other's name or on its storage.
@@ -184,9 +184,9 @@ The patch closes all three:
 - **Dot segments.** lakeFS refuses `.` and `..` segments in addresses and storage namespaces, also when they are percent-encoded. It also refuses `@`, `?` and `#` in storage namespaces. The commit cache reads `local://acme-x@globex-y` as storage of `globex-y`.
 - **Metarange names.** A metarange ID from a caller must be letters, digits, `_` and `-`, and a commit's metarange must exist. The cache also refuses `.` and `..` in any file name.
 
-The system test `tests/system/test_lakefs_acl.py` tries each attack. The first two fail on stock 1.86.0 and pass on the patched build. A reviewer reproduced the third on a build with only the first two fixes. Open-source lakeFS at master has the same staging code. lakeFS Enterprise 1.103.0 made the same change to stage and link, and notes it as a security fix.
+The system test `packages/provcat/tests/system/test_lakefs_acl.py` tries each attack. The first two fail on stock 1.86.0 and pass on the patched build. A reviewer reproduced the third on a build with only the first two fixes. Open-source lakeFS at master has the same staging code. lakeFS Enterprise 1.103.0 made the same change to stage and link, and notes it as a security fix.
 
-Each lakeFS also needs its own commit cache. The default, `~/lakefs/data/cache`, is shared by every lakeFS of the same user, and names its files by storage namespace only. `scripts/lakefs_acl_local.py` sets `LAKEFS_COMMITTED_LOCAL_CACHE_DIR` to a folder of its own. Error messages and stat replies show absolute server paths, which help an attacker build addresses.
+Each lakeFS also needs its own commit cache. The default, `~/lakefs/data/cache`, is shared by every lakeFS of the same user, and names its files by storage namespace only. `packages/provcat/scripts/lakefs_acl_local.py` sets `LAKEFS_COMMITTED_LOCAL_CACHE_DIR` to a folder of its own. Error messages and stat replies show absolute server paths, which help an attacker build addresses.
 
 The access-list server route has these limits:
 
@@ -206,7 +206,7 @@ The access-list server route has these limits:
   - attach a deny policy to itself or to Admins;
   - delete its own keys or its own user.
 
-  Run `scripts/lakefs_acl_local.py --repair-admin` to undo any of these. It works through the access-list server and its token, while the setup runs or as it starts. It does the same steps every time:
+  Run `packages/provcat/scripts/lakefs_acl_local.py --repair-admin` to undo any of these. It works through the access-list server and its token, while the setup runs or as it starts. It does the same steps every time:
   1. It makes the Admins group again if it is missing. It writes the Admins policy back to its full-access statement, and detaches every other policy from Admins, also ones that only allow.
   2. It puts the admin back in Admins, takes it out of every other group, and detaches the policies on the admin itself.
   3. It replaces the admin's keys in `credentials`.
@@ -292,7 +292,7 @@ A local file is written through a temporary file in the same folder, so a reader
 
 The cache needs no change for writes. An online read asks the store for the version first, so it never serves a copy that a write has replaced.
 
-Access control is the store's. With the shared lakeFS, each org's keys write, commit and branch only its own repositories. The system test `tests/system/test_lakefs_acl.py` checks this.
+Access control is the store's. With the shared lakeFS, each org's keys write, commit and branch only its own repositories. The system test `packages/provcat/tests/system/test_lakefs_acl.py` checks this.
 
 ## Commits in a bucket
 

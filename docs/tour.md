@@ -21,7 +21,7 @@ You need Python 3.13, [uv](https://docs.astral.sh/uv/) and a GitHub login for `g
 3. Keep the example configuration in a variable, because most steps use it.
 
    ```
-   export C=config/provcat.example.yaml
+   export C=packages/provcat/config/provcat.example.yaml
    ```
 
 ## The path of one URI
@@ -340,20 +340,20 @@ The push copies each `${oc.env:...}` value as written. Each reader fills the val
 
 | Step | Files |
 |---|---|
-| Parse a URI and its selector | `src/provcat/uri.py` |
-| Read the configuration | `src/provcat/config.py` |
-| Resolve a logical URI | `src/provcat/resolver.py` |
-| Join the parts and pick the store | `src/provcat/catalog.py` |
-| Read GitHub | `src/provcat/stores/github.py` |
-| Read S3, lakeFS and MinIO | `src/provcat/stores/s3.py` |
-| Read local files | `src/provcat/stores/local.py` |
-| Keep files, records and locks | `src/provcat/cache.py` |
-| The `provc` command | `src/provcat/cli.py` |
+| Parse a URI and its selector | `packages/provcat/src/provcat/uri.py` |
+| Read the configuration | `packages/provcat/src/provcat/config.py` |
+| Resolve a logical URI | `packages/provcat/src/provcat/resolver.py` |
+| Join the parts and pick the store | `packages/provcat/src/provcat/catalog.py` |
+| Read GitHub | `packages/provcat/src/provcat/stores/github.py` |
+| Read S3, lakeFS and MinIO | `packages/provcat/src/provcat/stores/s3.py` |
+| Read local files | `packages/provcat/src/provcat/stores/local.py` |
+| Keep files, records and locks | `packages/provcat/src/provcat/cache.py` |
+| The `provc` command | `packages/provcat/src/provcat/cli.py` |
 
 The tests in `tests/` are a second set of examples. They run without a network, except for two live tests that run only when you set an environment variable. The README lists them.
 
 ## Where to go next
 
-- **Use provcat from Python.** `Catalog` has the methods `resolve`, `pin`, `stat`, `list`, `fetch` and `read`. `list` is `provc ls`, and `read` returns the bytes that `provc cat` prints. For example, `Catalog.open("config/provcat.example.yaml").fetch(uri)` returns a path.
+- **Use provcat from Python.** `Catalog` has the methods `resolve`, `pin`, `stat`, `list`, `fetch` and `read`. `list` is `provc ls`, and `read` returns the bytes that `provc cat` prints. For example, `Catalog.open("packages/provcat/config/provcat.example.yaml").fetch(uri)` returns a path.
 - **Add a driver.** The section "Stores" in [design.md](design.md) lists the methods that a driver needs.
 - **Learn the limits.** The section "Known limits" in [design.md](design.md) lists what does not work yet, and what to do about each limit.

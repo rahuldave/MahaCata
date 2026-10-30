@@ -6,6 +6,12 @@ resolution-markers = [
     "python_full_version < '3.14'",
 ]
 
+[manifest]
+members = [
+    "mahacata",
+    "provcat",
+]
+
 [[package]]
 name = "annotated-types"
 version = "0.8.0"
@@ -817,6 +823,43 @@ wheels = [
 ]
 
 [[package]]
+name = "mahacata"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "provcat" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "azure-identity" },
+    { name = "azure-storage-blob" },
+    { name = "google-cloud-storage" },
+    { name = "moto", extra = ["server"] },
+    { name = "pytest" },
+]
+system = [
+    { name = "azure-mgmt-resource" },
+    { name = "azure-mgmt-storage" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "provcat", editable = "packages/provcat" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "azure-identity", specifier = ">=1.27.0" },
+    { name = "azure-storage-blob", specifier = ">=12.31.0" },
+    { name = "google-cloud-storage", specifier = ">=3.17.1" },
+    { name = "moto", extras = ["server"], specifier = ">=5.2.4" },
+    { name = "pytest", specifier = ">=9.1.1" },
+]
+system = [
+    { name = "azure-mgmt-resource", specifier = ">=26.0.0" },
+    { name = "azure-mgmt-storage", specifier = ">=25.3.0" },
+]
+
+[[package]]
 name = "markupsafe"
 version = "3.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1108,7 +1151,7 @@ wheels = [
 [[package]]
 name = "provcat"
 version = "0.2.0"
-source = { editable = "." }
+source = { editable = "packages/provcat" }
 dependencies = [
     { name = "boto3" },
     { name = "omegaconf" },
@@ -1124,19 +1167,6 @@ gcs = [
     { name = "google-cloud-storage" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "azure-identity" },
-    { name = "azure-storage-blob" },
-    { name = "google-cloud-storage" },
-    { name = "moto", extra = ["server"] },
-    { name = "pytest" },
-]
-system = [
-    { name = "azure-mgmt-resource" },
-    { name = "azure-mgmt-storage" },
-]
-
 [package.metadata]
 requires-dist = [
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.27.0" },
@@ -1147,19 +1177,6 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3" },
 ]
 provides-extras = ["gcs", "azure"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "azure-identity", specifier = ">=1.27.0" },
-    { name = "azure-storage-blob", specifier = ">=12.31.0" },
-    { name = "google-cloud-storage", specifier = ">=3.17.1" },
-    { name = "moto", extras = ["server"], specifier = ">=5.2.4" },
-    { name = "pytest", specifier = ">=9.1.1" },
-]
-system = [
-    { name = "azure-mgmt-resource", specifier = ">=26.0.0" },
-    { name = "azure-mgmt-storage", specifier = ">=25.3.0" },
-]
 
 [[package]]
 name = "py-partiql-parser"
