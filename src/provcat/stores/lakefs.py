@@ -21,6 +21,16 @@ keys as the gateway, from the same AWS profile or environment.
 
 Pins are kept in the cache, so ``--offline`` pins a branch or a time to the
 commit that the last online pin found.
+
+Writes go to a branch, through the S3 gateway:
+
+- **put and delete** change objects on a branch. The change is not committed,
+  so a pinned URI does not show it.
+- **commit** commits a branch, with a message and metadata, and returns the
+  pinned URI of the new commit.
+- **branch** makes a branch from a branch, a tag or a commit.
+
+A write to a commit or a tag is refused, because lakeFS cannot change one.
 """
 from __future__ import annotations
 
@@ -29,6 +39,7 @@ import json
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
+from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from ..cache import LocalCache
@@ -106,33 +117,43 @@ class LakefsStore(S3Store):
         frozen = creds.get_frozen_credentials()
         return "Basic " + base64.b64encode(f"{frozen.access_key}:{frozen.secret_key}".encode()).decode()
 
-    def _api(self, uri: Uri, path: str, query: dict | None = None) -> dict:
+    def _api(self, uri: Uri, path: str, query: dict | None = None, method: str = "GET",
+             body: dict | None = None) -> dict:
         url = self._api_url() + path + ("?" + urlencode(query) if query else "")
-        req = urllib.request.Request(url, headers={"Authorization": self._authorization(uri),
-                                                   "Accept": "application/json"})
+        headers = {"Authorization": self._authorization(uri), "Accept": "application/json"}
+        data = None
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+            data = json.dumps(body).encode()
+        req = urllib.request.Request(url, headers=headers, method=method, data=data)
         try:
             with _NO_REDIRECTS.open(req, timeout=30) as resp:
-                return json.loads(resp.read() or b"{}")
+                text = resp.read()
+                if method != "GET" and resp.headers.get_content_type() != "application/json":
+                    return {"text": text.decode(errors="replace").strip()}  # creating a branch answers text
+                return json.loads(text or b"{}")
         except urllib.error.HTTPError as e:
-            body = e.read()[:300].decode(errors="replace").strip()
+            reply = e.read()[:300].decode(errors="replace").strip()
             if e.code in (301, 302, 303, 307, 308):
                 # Following it would send the keys to whatever host it names.
                 raise StoreError(f"{uri}: the lakeFS API at {self._api_url()} answered with a redirect; "
                                  "set api_url to the real API address") from None
             if e.code == 404:
-                raise NotFound(f"{uri}: lakeFS found nothing at {path} ({body})") from None
+                raise NotFound(f"{uri}: lakeFS found nothing at {path} ({reply})") from None
+            if e.code == 409:
+                raise StoreError(f"{uri}: lakeFS refused, as it conflicts with what is there: {reply}") from None
             if e.code in (401, 403):
                 # With access control, lakeFS knows the keys but their policies
                 # do not allow the action; its message names the action.
                 try:
-                    message = str(json.loads(body).get("message", ""))
+                    message = str(json.loads(reply).get("message", ""))
                 except (ValueError, AttributeError):
                     message = ""
                 if message.startswith("insufficient permissions"):
                     raise StoreError(f"{uri}: lakeFS does not allow these keys to do this ({e.code}): "
                                      f"{message[:200]}") from None
                 raise StoreError(f"{uri}: lakeFS refused the keys ({e.code})") from None
-            raise StoreError(f"{uri}: lakeFS API error {e.code}: {body}") from None
+            raise StoreError(f"{uri}: lakeFS API error {e.code}: {reply}") from None
         except (urllib.error.URLError, OSError) as e:
             raise StoreError(f"{uri}: cannot reach the lakeFS API at {self._api_url()}: {e}") from None
         except ValueError:
@@ -288,6 +309,75 @@ class LakefsStore(S3Store):
 
     def fetch(self, uri: Uri, cache: LocalCache):
         return super().fetch(self._plain(uri, cache), cache)
+
+
+    # Writes
+
+    def _branch_of(self, uri: Uri) -> tuple[str, str]:
+        """The repository and branch a write goes to. A commit or a tag is refused."""
+        self._online(uri)
+        if uri.selector is not None:
+            raise UriError(f"{uri}: a lakeFS URI names its branch in the path, as repository/branch/path, "
+                           "so a write takes no ?at= (a scheme with pass_selector cannot write to lakeFS)")
+        if not uri.authority or not uri.segments:
+            raise UriError(f"{uri}: write {uri.scheme}://repository/branch/path")
+        repo, ref = uri.authority, uri.segments[0]
+        try:
+            self._api(uri, f"/repositories/{quote(repo, safe='')}/branches/{quote(ref, safe='')}")
+        except NotFound:
+            missing = self._missing(uri, repo, ref)
+            if "has no repository" in str(missing):
+                raise missing from None
+            raise StoreError(f"{uri}: {ref!r} is not a branch of {repo}; lakeFS writes only to a branch") from None
+        return repo, ref
+
+    def put(self, uri: Uri, src: Path, cache: LocalCache) -> Entry:
+        self._branch_of(uri)
+        if len(uri.segments) < 2:
+            raise UriError(f"{uri}: name an object on the branch to write")
+        return super().put(uri, src, cache)
+
+    def delete(self, uri: Uri, cache: LocalCache) -> None:
+        self._branch_of(uri)
+        if len(uri.segments) < 2:
+            raise UriError(f"{uri}: name an object on the branch to delete")
+        super().delete(uri, cache)
+
+    def commit(self, uri: Uri, message: str, metadata: dict[str, str] | None = None,
+               allow_empty: bool = False) -> Uri:
+        """Commit the branch that uri is on, and return uri pinned to the new commit."""
+        if not message:
+            raise UriError(f"{uri}: a commit needs a message")
+        repo, branch = self._branch_of(uri)
+        body = {"message": message, "metadata": {str(k): str(v) for k, v in (metadata or {}).items()},
+                "allow_empty": allow_empty}
+        try:
+            made = self._api(uri, f"/repositories/{quote(repo, safe='')}/branches/{quote(branch, safe='')}/commits",
+                             method="POST", body=body)
+        except StoreError as e:
+            # lakeFS answers an empty commit with 400 and "commit: no changes".
+            if "API error 400:" in str(e) and "no changes" in str(e).split("API error 400:", 1)[1].lower():
+                raise StoreError(f"{uri}: nothing to commit on {branch}") from None
+            raise
+        commit = made.get("id")
+        if not isinstance(commit, str) or not commit:
+            raise StoreError(f"{uri}: lakeFS gave no commit id")
+        return Uri(uri.scheme, repo, (commit, *uri.segments[1:]))
+
+    def branch(self, uri: Uri, source: str) -> Uri:
+        """Make the branch that uri names, from source: a branch, a tag or a commit."""
+        self._online(uri)
+        if uri.selector is not None or not uri.authority or len(uri.segments) != 1:
+            raise UriError(f"{uri}: write {uri.scheme}://repository/new-branch")
+        if not source:
+            raise UriError(f"{uri}: a branch needs a source: a branch, a tag or a commit")
+        repo, name = uri.authority, uri.segments[0]
+        try:
+            self._api(uri, f"/repositories/{quote(repo, safe='')}/branches", method="POST",
+                      body={"name": name, "source": source})
+        except NotFound:
+            raise self._missing(uri, repo, source) from None
+        return uri
 
 
 class _Refuse(urllib.request.HTTPRedirectHandler):

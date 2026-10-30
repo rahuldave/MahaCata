@@ -88,6 +88,16 @@ class GcsStore(ObjectStore):
                 raise StoreError(f"{uri}: the download failed its checksum: {e}") from e
             raise
 
+    def _put(self, uri, bucket, key, src):
+        blob = self._call(uri, lambda c: c.bucket(bucket).blob(key))
+        self._call(uri, lambda c: blob.upload_from_filename(str(src)))
+        if blob.generation is None:
+            raise StoreError(f"{uri}: GCS sent no generation with the upload")
+        return str(blob.generation)
+
+    def _delete(self, uri, bucket, key):
+        self._call(uri, lambda c: c.bucket(bucket).blob(key).delete())
+
     def _head(self, uri, bucket, key):
         blob = self._call(uri, lambda c: c.bucket(bucket).get_blob(key))
         if blob is None:

@@ -112,6 +112,16 @@ class AzureStore(ObjectStore):
         except exceptions.AzureError as e:
             raise StoreError(f"{uri}: {e}") from e
 
+    def _put(self, uri, bucket, key, src):
+        with open(src, "rb") as f:
+            out = self._call(uri, lambda c: c.get_blob_client(key).upload_blob(f, overwrite=True))
+        return str(out["etag"]).strip('"')
+
+    def _delete(self, uri, bucket, key):
+        if self._is_marker(uri, bucket, key):
+            raise StoreError(f"{uri}: a folder, not a file")
+        self._call(uri, lambda c: c.get_blob_client(key).delete_blob())
+
     def _head(self, uri, bucket, key):
         props = self._call(uri, lambda c: c.get_blob_client(key).get_blob_properties())
         if _is_folder(props):

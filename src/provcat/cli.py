@@ -16,7 +16,7 @@ def _print(obj) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser("provc", description="Resolve and fetch catalog URIs.")
+    ap = argparse.ArgumentParser("provc", description="Resolve, fetch and write catalog URIs.")
     ap.add_argument("--config", help="a YAML path or etcd://host:port/prefix (default: PROVCAT_CONFIG, ./provcat.yaml)")
     ap.add_argument("--cache", help="the cache folder (default: PROVCAT_CACHE, ~/.cache/provcat)")
     ap.add_argument("--offline", action="store_true", help="use only the cache")
@@ -25,6 +25,17 @@ def main(argv: list[str] | None = None) -> int:
                        ("stat", "show one entry"), ("ls", "list a folder"),
                        ("fetch", "print a local path that holds the object"), ("cat", "write a file to stdout")]:
         sp.add_parser(name, help=text).add_argument("uri")
+    put = sp.add_parser("put", help="write a local file or folder, or - for stdin")
+    put.add_argument("uri")
+    put.add_argument("src")
+    sp.add_parser("rm", help="delete one object").add_argument("uri")
+    com = sp.add_parser("commit", help="commit a lakeFS branch; prints the pinned URI")
+    com.add_argument("uri")
+    com.add_argument("-m", "--message", required=True)
+    com.add_argument("--meta", action="append", default=[], metavar="KEY=VALUE", help="commit metadata")
+    br = sp.add_parser("branch", help="make a lakeFS branch")
+    br.add_argument("uri", help="the new branch, as repository/branch")
+    br.add_argument("--from", dest="source", required=True, help="a branch, a tag or a commit")
     cfg = sp.add_parser("config", help="show or copy the configuration")
     cs = cfg.add_subparsers(dest="ccmd", required=True)
     cs.add_parser("show", help="print the configuration as JSON")
@@ -56,6 +67,22 @@ def main(argv: list[str] | None = None) -> int:
             print(cat.fetch(args.uri))
         elif args.cmd == "cat":
             sys.stdout.buffer.write(cat.read(args.uri))
+        elif args.cmd == "put":
+            src = sys.stdin.buffer.read() if args.src == "-" else args.src
+            _print([e.as_dict() for e in cat.put(args.uri, src)])
+        elif args.cmd == "rm":
+            cat.delete(args.uri)
+            _print({"deleted": args.uri})
+        elif args.cmd == "commit":
+            meta = {}
+            for item in args.meta:
+                key, sep, value = item.partition("=")
+                if not sep or not key:
+                    raise ProvcatError(f"--meta {item!r}: write KEY=VALUE")
+                meta[key] = value
+            print(cat.commit(args.uri, args.message, meta))
+        elif args.cmd == "branch":
+            print(cat.branch(args.uri, args.source))
         sys.stdout.flush()
         return 0
     except BrokenPipeError:

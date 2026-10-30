@@ -80,12 +80,19 @@ The resolver percent-encodes each value in the template, so a value can never ad
 
 ### Stores
 
-A driver class has four methods. Each method takes the cache.
+A driver class has four methods for reading. Each method takes the cache.
 
 - **`pin(uri, cache)`:** returns the URI with a fixed version. GitHub replaces a branch or tag with a commit and records it in the cache. Other drivers return the URI as it is.
 - **`stat(uri, cache)`:** returns one `Entry`, a file or a folder, with a size and a version.
 - **`list(uri, cache)`:** returns the entries directly inside a folder.
 - **`fetch(uri, cache)`:** returns a local path that holds the file or folder.
+
+A driver that can be written also has two methods for writing:
+
+- **`put(uri, src, cache)`:** writes the local file `src` at the URI, and returns its `Entry`.
+- **`delete(uri, cache)`:** deletes one object.
+
+The `file`, `s3`, `gcs`, `azure` and `lakefs` drivers can be written. The `github` driver cannot, and the base class refuses with a `StoreError`. The lakeFS driver also has `commit` and `branch`, as "Writes" below explains.
 
 To add a driver, write a subclass of `Store`, set `driver`, give its options and their types in `option_types()`, and decorate the class with `register_driver`. A store entry with `driver: <name>` then uses it.
 
@@ -95,6 +102,8 @@ S3, Google Cloud Storage and Azure Blob Storage share one base class, `ObjectSto
 - **`_head`:** the size and version of one object.
 - **`_pages`:** the pages of a listing, with folder prefixes and objects.
 - **`_get`:** writes the bytes of one object, and returns their version.
+- **`_put`:** writes a local file as one object, and returns its version.
+- **`_delete`:** deletes one object, or raises `NotFound`.
 
 Each driver uses its cloud's Python SDK, never a command-line tool. The version of a file is the ETag on S3 and Azure, and the generation on GCS. The GCS and Azure SDKs are optional extras, so the drivers import them only when a store is used. An ADLS Gen2 account keeps folders as marker blobs, and the Azure driver leaves them out of listings.
 
@@ -229,6 +238,32 @@ A time search reads the first-parent log of the branch, 1000 commits a page, fro
 
 The API takes the same keys as the S3 gateway. provcat never follows a redirect from the API, because a redirect would send the keys to the host that it names.
 
+## Writes
+
+provcat writes as well as reads. `Catalog` has four methods for writing, and `provc` has a command for each.
+
+| Method | Command | What it does |
+|---|---|---|
+| `put(uri, src)` | `provc put URI PATH` | Writes a local file, a local folder, or bytes. A folder is written file by file under the URI. `-` reads standard input. |
+| `delete(uri)` | `provc rm URI` | Deletes one object. |
+| `commit(uri, message, metadata)` | `provc commit URI -m MSG --meta K=V` | Commits the lakeFS branch that the URI is on. It returns the URI pinned to the new commit. |
+| `branch(uri, source)` | `provc branch URI --from REF` | Makes a lakeFS branch from a branch, a tag or a commit. |
+
+A write takes a logical or a physical URI, and goes to a branch:
+
+- **No selector.** A logical URI writes to its scheme's default branch, which is the environment in the example configuration. So `data+table://acme/shared/dev/...` writes to branch `dev`.
+- **A branch selector.** `?at=branch:NAME` writes to that branch.
+- **Any other selector.** A commit, a tag, a version or a time names a fixed version, which cannot change, so the write is refused. A stage is refused too, even one that points at a branch. Write to the branch itself.
+- **A scheme must use the branch.** If a scheme's target has no `{ref}`, `?at=branch:NAME` would be dropped and the write would go to the default branch. So the write is refused.
+
+On lakeFS, a write is not seen in a pinned URI until it is committed. The commit gets metadata, and a commit through a logical URI adds `provcat.uri`, the logical URI it was made through. So a commit records where its data belongs in the catalog. lakeFS refuses a write to a commit or a tag. The driver checks that the ref is a branch first, so the error says so.
+
+A local file is written through a temporary file in the same folder, so a reader never sees half of it. The file keeps the mode of the file it replaces. The `root` option confines writes as it confines reads. A folder upload checks every name before it writes the first file, and it includes hidden files.
+
+The cache needs no change for writes. An online read asks the store for the version first, so it never serves a copy that a write has replaced.
+
+Access control is the store's. With the shared lakeFS, each org's keys write, commit and branch only its own repositories. The system test `tests/system/test_lakefs_acl.py` checks this.
+
 ## Known limits
 
 | Limit | What to do |
@@ -245,5 +280,5 @@ The API takes the same keys as the S3 gateway. provcat never follows a redirect 
 
 ## Next steps
 
-- **Writes:** bring back the lakeFS branch, commit and merge commands from the first commit, as a separate interface.
+- **Merges:** lakeFS merges, and commits of only some paths, are not built.
 - **Containers:** mount the cache read-only into containers, and run `provc --offline` inside them.

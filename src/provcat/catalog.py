@@ -7,14 +7,24 @@
 A URI whose scheme is a store is already physical, so resolve returns it as it
 is. A URI whose scheme is a logical scheme goes through the resolver once, and
 the result must name a store.
+
+Writes take a logical or a physical URI:
+
+    cat.put("data+table://acme/shared/dev/agreements/qa_outputs/part-0.parquet", "out.parquet")
+    pinned = cat.commit("data+table://acme/shared/dev/agreements/qa_outputs", "qa run 42")
+
+A write goes to a branch: a URI with no ?at=, which writes to the scheme's
+default branch, or one with ?at=branch:NAME. Any other selector names a fixed
+version, which cannot change, so it is refused.
 """
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 from .cache import LocalCache
 from .config import ConfigSource, check, open_config
-from .errors import ConfigError, ResolveError
+from .errors import ConfigError, ResolveError, StoreError, UriError
 from .resolver import Resolution, Resolver, TemplateResolver
 from .stores import DEFAULT_STORES, Entry, Store, make_store
 from .uri import Uri, parse
@@ -82,3 +92,71 @@ class Catalog:
         if p.is_dir():
             raise IsADirectoryError(f"{uri} is a folder")
         return p.read_bytes()
+
+    # Writes
+
+    def _writable(self, uri: str | Uri) -> tuple[Store, Uri]:
+        u = parse(uri)
+        if u.selector is not None and u.selector.kind != "branch":
+            raise UriError(f"{u}: ?at={u.selector} names a fixed version; write to a branch")
+        store, physical = self._store(u)
+        if physical.selector is not None and physical.selector.kind != "branch":
+            raise UriError(f"{u} resolves to {physical}, a fixed version; write to a branch")
+        if u.selector is not None and u.scheme != physical.scheme:
+            # A scheme whose target has no {ref} drops the branch, so the
+            # write would land on the default one.
+            plain = self.resolve(Uri(u.scheme, u.authority, u.segments)).physical
+            if plain == physical:
+                raise UriError(f"{u}: scheme {u.scheme!r} does not use the branch in ?at=, "
+                               f"so the write would go to {physical}")
+        return store, physical
+
+    def put(self, uri: str | Uri, src: str | Path | bytes) -> list[Entry]:
+        """Write a local file, a local folder or bytes at uri, and return the
+        Entries written. A folder is written file by file under uri."""
+        store, u = self._writable(uri)
+        if isinstance(src, bytes):
+            with tempfile.TemporaryDirectory() as d:
+                f = Path(d) / "data"
+                f.write_bytes(src)
+                return [store.put(u, f, self.cache)]
+        src = Path(src)
+        if src.is_file():
+            return [store.put(u, src, self.cache)]
+        if not src.is_dir():
+            raise FileNotFoundError(f"{src} does not exist")
+        # Every target first, so a name that no URI can hold fails before
+        # anything is written.
+        plan = []
+        for f in sorted(p for p in src.rglob("*") if p.is_file()):
+            target = u
+            for seg in f.relative_to(src).parts:
+                target = target.child(seg)
+            plan.append((target, f))
+        return [store.put(target, f, self.cache) for target, f in plan]
+
+    def delete(self, uri: str | Uri) -> None:
+        store, u = self._writable(uri)
+        store.delete(u, self.cache)
+
+    def commit(self, uri: str | Uri, message: str, metadata: dict[str, str] | None = None) -> Uri:
+        """Commit the branch that uri is on, and return the physical URI pinned
+        to the new commit. The metadata records where the commit came from: a
+        logical URI adds provcat.uri."""
+        store, u = self._writable(uri)
+        commit = getattr(store, "commit", None)
+        if commit is None:
+            raise StoreError(f"{u}: store {store.name} ({store.driver}) has no commits")
+        meta = dict(metadata or {})
+        logical = parse(uri)
+        if logical.scheme != u.scheme:
+            meta.setdefault("provcat.uri", str(logical))
+        return commit(u, message, meta)
+
+    def branch(self, uri: str | Uri, source: str) -> Uri:
+        """Make the branch that uri names, from source: a branch, a tag or a commit."""
+        store, u = self._writable(uri)
+        make = getattr(store, "branch", None)
+        if make is None:
+            raise StoreError(f"{u}: store {store.name} ({store.driver}) has no branches")
+        return make(u, source)

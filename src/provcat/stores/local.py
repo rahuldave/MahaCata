@@ -1,16 +1,23 @@
 """The local file system: ``file:///absolute/path``.
 
 Files are already local, so fetch returns the path itself and the cache is not
-used. The option ``root`` confines the store to one folder; a URI path is then
+used. put writes a file through a temporary file in the same folder, so a
+reader never sees half of it, and makes the folders it needs. The file keeps
+the mode of the file it replaces. put replaces the file, so a hard link to the
+old file keeps the old bytes, and put refuses to write over a link. A crash
+can leave a temporary file named .NAME.XXXXXXXX beside it. The option ``root`` confines the store to one folder; a URI path is then
 relative to that folder. A path that leaves the root through a symbolic link is
 refused.
 """
 from __future__ import annotations
 
+import os
+import shutil
+import tempfile
 from pathlib import Path
 
 from ..cache import LocalCache
-from ..errors import NotFound, UriError
+from ..errors import NotFound, StoreError, UriError
 from ..uri import Uri
 from . import Entry, Store, register_driver
 
@@ -66,3 +73,48 @@ class LocalStore(Store):
         if not p.exists():
             raise NotFound(f"{uri}: {p} does not exist")
         return p
+
+    def put(self, uri: Uri, src: Path, cache: LocalCache) -> Entry:
+        p = self.locate(uri)
+        if not uri.segments:
+            raise UriError(f"{uri}: name a file to write")
+        if p.is_dir():
+            raise StoreError(f"{uri}: {p} is a folder")
+        if p.is_symlink():
+            raise StoreError(f"{uri}: {p} is a link; write to the file it names")
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            self.locate(uri)  # a folder made through a link must not leave the root
+            # The mode of the file it replaces, or the usual mode of a new file.
+            mode = p.stat().st_mode & 0o7777 if p.exists() else 0o666 & ~_umask()
+            fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=f".{p.name}.")
+            try:
+                with os.fdopen(fd, "wb") as out, open(src, "rb") as f:
+                    shutil.copyfileobj(f, out)
+                    out.flush()
+                    os.fsync(out.fileno())
+                os.chmod(tmp, mode)
+                os.replace(tmp, p)
+            except BaseException:
+                Path(tmp).unlink(missing_ok=True)
+                raise
+        except OSError as e:
+            raise StoreError(f"{uri}: cannot write {p}: {e.strerror or e}") from e
+        return self._entry(uri, p)
+
+    def delete(self, uri: Uri, cache: LocalCache) -> None:
+        p = self.locate(uri)
+        if p.is_dir() and not p.is_symlink():
+            raise StoreError(f"{uri}: {p} is a folder; delete the files in it")
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            raise NotFound(f"{uri}: {p} does not exist") from None
+        except OSError as e:
+            raise StoreError(f"{uri}: cannot delete {p}: {e.strerror or e}") from e
+
+
+def _umask() -> int:
+    mask = os.umask(0)
+    os.umask(mask)
+    return mask

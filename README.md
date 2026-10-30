@@ -48,7 +48,7 @@ In the example configuration, the org is the tenant and the first part of every 
 
 ## Stores
 
-A store is a named instance of a driver. The stores `file`, `s3`, `github`, `gs` and `az` exist without configuration. So a logical scheme cannot use one of those five names. The configuration can add more, for example a store `lakefs` that uses the `lakefs` driver with the lakeFS endpoint.
+A store is a named instance of a driver. Every driver reads. All but `github` also write, as docs/design.md explains under "Writes". The stores `file`, `s3`, `github`, `gs` and `az` exist without configuration. So a logical scheme cannot use one of those five names. The configuration can add more, for example a store `lakefs` that uses the `lakefs` driver with the lakeFS endpoint.
 
 | Driver | URI | What it does |
 |---|---|---|
@@ -106,6 +106,10 @@ provcat stores a GitHub file under its commit, so the file never goes stale. pro
 | `provc ls URI` | The entries in a folder, as JSON. |
 | `provc fetch URI` | The local path of the file or folder. |
 | `provc cat URI` | The bytes of a file. |
+| `provc put URI PATH` | Writes a local file or folder at the URI, or standard input for `-`. |
+| `provc rm URI` | Deletes one object. |
+| `provc commit URI -m MSG [--meta K=V]` | Commits a lakeFS branch, and prints the URI pinned to the new commit. |
+| `provc branch URI --from REF` | Makes a lakeFS branch from a branch, a tag or a commit. |
 | `provc config show` | The configuration and its source. |
 | `provc config push --to etcd://...` | Copies the configuration into etcd. |
 

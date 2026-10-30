@@ -10,6 +10,7 @@ import boto3
 import pytest
 
 from provcat import Catalog, NotFound, OfflineMiss, UriError
+from provcat.errors import ProvcatError, StoreError
 
 C1, C2, C0 = "c1" * 32, "c2" * 32, "c0" * 32
 T1, T2 = 1_700_000_000, 1_700_000_100  # the creation times of C1 and C2
@@ -31,6 +32,9 @@ class FakeLakefs:
         self.redirect_to = None
         self.fail_with = None
         self.fail_message = "broken"
+        self.branches = {"main", "empty", "merged"}
+        self.posts = []  # (path, body) of each POST
+        self.commit_reply = (201, {"id": "NEWCOMMIT"})
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -52,6 +56,8 @@ class FakeLakefs:
                 fake.queries.append(q)
                 if len(parts) == 5 and parts[3] == "repositories":
                     return self.reply(200, {"id": "repo"}) if parts[4] == "repo" else self.reply(404, {})
+                if len(parts) == 7 and parts[5] == "branches" and parts[4] == "repo":
+                    return self.reply(200, {"id": parts[6]}) if parts[6] in fake.branches else self.reply(404, {})
                 if len(parts) == 6 and parts[5] == "branches" and parts[4] == "repo":
                     return self.reply(200, {"results": [{"id": "empty"}, {"id": "main"}],
                                             "pagination": {"has_more": False}})
@@ -69,6 +75,34 @@ class FakeLakefs:
                 more = start + amount < len(log)
                 self.reply(200, {"results": [{"id": c, "creation_date": t} for c, t in page],
                                  "pagination": {"has_more": more, "next_offset": str(start + amount) if more else ""}})
+
+            def do_POST(self):
+                fake.auth.append(self.headers.get("Authorization"))
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+                parts = [unquote(p) for p in urlsplit(self.path).path.split("/")]
+                fake.posts.append(("/".join(parts), body))
+                if parts[3:5] != ["repositories", "repo"]:
+                    return self.reply(404, {"message": "repository not found"})
+                # /api/v1/repositories/repo/branches/<b>/commits
+                if len(parts) == 8 and parts[5] == "branches" and parts[7] == "commits":
+                    if parts[6] not in fake.branches:
+                        return self.reply(404, {"message": "branch not found"})
+                    return self.reply(*fake.commit_reply)
+                # /api/v1/repositories/repo/branches
+                if len(parts) == 6 and parts[5] == "branches":
+                    if body["name"] in fake.branches:
+                        return self.reply(409, {"message": "branch already exists"})
+                    if body["source"] not in fake.LOGS:
+                        return self.reply(404, {"message": "source not found"})
+                    fake.branches.add(body["name"])
+                    data = body["source"].encode()  # lakeFS answers with the ref, as text
+                    self.send_response(201)
+                    self.send_header("Content-Type", "text/html")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+                return self.reply(404, {"message": "not found"})
 
             def reply(self, code, body):
                 data = json.dumps(body).encode()
@@ -362,3 +396,95 @@ def test_each_org_reads_with_its_own_keys(s3_endpoint, api, data, tmp_path, monk
     with pytest.raises(Exception, match="no store named 'lakefs-initech'"):
         c.read("t://initech/main/a.csv")
     assert api.auth == []  # refused before any request
+
+
+# Writes
+
+
+def test_put_writes_to_a_branch_and_commit_pins_it(s3_endpoint, api, data, tmp_path):
+    c = cat(s3_endpoint, api, tmp_path)
+    [entry] = c.put("lakefs://repo/main/t/new.csv", b"N")
+    assert str(entry.uri) == "lakefs://repo/main/t/new.csv"
+    assert c.read("lakefs://repo/main/t/new.csv") == b"N"
+    pinned = c.commit("lakefs://repo/main/t/new.csv", "add new.csv", {"run": "42"})
+    assert str(pinned) == "lakefs://repo/NEWCOMMIT/t/new.csv"
+    path, body = api.posts[-1]
+    assert path.endswith("/repositories/repo/branches/main/commits")
+    assert body == {"message": "add new.csv", "metadata": {"run": "42"}, "allow_empty": False}
+    c.delete("lakefs://repo/main/t/new.csv")
+    with pytest.raises(NotFound):
+        c.stat("lakefs://repo/main/t/new.csv")
+
+
+@pytest.mark.parametrize("uri, match", [
+    (f"lakefs://repo/{C1}/t/x.csv", "is not a branch of repo"),
+    ("lakefs://nosuch/main/t/x.csv", "has no repository 'nosuch'"),
+    ("lakefs://repo/main/t/x.csv?at=ts:2026-01-01", "write to a branch"),
+    ("lakefs://repo/main", "name an object"),
+])
+def test_writes_go_only_to_an_object_on_a_branch(s3_endpoint, api, data, tmp_path, uri, match):
+    with pytest.raises(ProvcatError, match=match):
+        cat(s3_endpoint, api, tmp_path).put(uri, b"x")
+
+
+def test_commit_with_nothing_to_commit_says_so(s3_endpoint, api, data, tmp_path):
+    api.commit_reply = (400, {"message": "commit: no changes"})
+    with pytest.raises(StoreError, match="nothing to commit on main"):
+        cat(s3_endpoint, api, tmp_path).commit("lakefs://repo/main", "nothing")
+
+
+def test_other_commit_errors_are_not_called_empty(s3_endpoint, api, data, tmp_path):
+    # Finding 7: "no changes" anywhere in an error read as an empty commit.
+    api.commit_reply = (500, {"message": "storage failed; no changes were saved"})
+    with pytest.raises(StoreError, match="API error 500"):
+        cat(s3_endpoint, api, tmp_path).commit("lakefs://repo/main", "m")
+
+
+def test_commit_needs_a_message(s3_endpoint, api, data, tmp_path):
+    with pytest.raises(UriError, match="needs a message"):
+        cat(s3_endpoint, api, tmp_path).commit("lakefs://repo/main", "")
+
+
+def test_branch_makes_a_branch_from_a_ref(s3_endpoint, api, data, tmp_path):
+    c = cat(s3_endpoint, api, tmp_path)
+    assert str(c.branch("lakefs://repo/feature", "main")) == "lakefs://repo/feature"
+    assert api.posts[-1][1] == {"name": "feature", "source": "main"}
+    with pytest.raises(StoreError, match="conflicts with what is there"):
+        c.branch("lakefs://repo/feature", "main")
+    with pytest.raises(NotFound, match="no branch, tag or commit 'nosuch'"):
+        c.branch("lakefs://repo/other", "nosuch")
+    with pytest.raises(UriError):
+        c.branch("lakefs://repo/feature/extra", "main")
+
+
+SCHEMES = {"t": {"parts": ["env"], "rest": "path", "target": "lakefs://repo/{ref}/{path}", "ref": "{env}"}}
+
+
+def test_logical_writes_go_to_the_default_or_a_named_branch(s3_endpoint, api, data, tmp_path):
+    c = cat(s3_endpoint, api, tmp_path, schemes=SCHEMES)
+    api.branches.add("dev")
+    data.put_object(Bucket="repo", Key="dev/placeholder", Body=b"")
+    [entry] = c.put("t://main/t/l.csv", b"L")
+    assert str(entry.uri) == "lakefs://repo/main/t/l.csv"
+    [entry] = c.put("t://main/t/l.csv?at=branch:dev", b"D")
+    assert str(entry.uri) == "lakefs://repo/dev/t/l.csv"
+    pinned = c.commit("t://main/t", "logical commit")
+    assert str(pinned) == "lakefs://repo/NEWCOMMIT/t"
+    assert api.posts[-1][1]["metadata"] == {"provcat.uri": "t://main/t"}
+
+
+@pytest.mark.parametrize("selector", [f"commit:{C1}", "tag:v1", "ts:2026-01-01"])
+def test_logical_writes_to_a_fixed_version_are_refused(s3_endpoint, api, data, tmp_path, selector):
+    c = cat(s3_endpoint, api, tmp_path, schemes=SCHEMES)
+    with pytest.raises(UriError, match="names a fixed version"):
+        c.put(f"t://main/t/l.csv?at={selector}", b"x")
+
+
+def test_stores_without_commits_say_so(tmp_path):
+    from provcat import Catalog
+
+    c = Catalog({}, cache_root=tmp_path / "cache")
+    with pytest.raises(StoreError, match="has no commits"):
+        c.commit(f"file://{tmp_path}/x", "m")
+    with pytest.raises(StoreError, match="has no branches"):
+        c.branch(f"file://{tmp_path}/x", "main")

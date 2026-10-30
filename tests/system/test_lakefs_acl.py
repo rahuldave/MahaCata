@@ -304,3 +304,46 @@ def test_repair_admin_undoes_a_lockout(orgs, lockout):
             admin._api("DELETE", path)
         except urllib.error.HTTPError as e:
             assert e.code == 404
+
+
+def test_each_org_writes_commits_and_branches_only_its_own(orgs, tmp_path):
+    """provcat writes through each org's keys: put, commit and branch work on
+    its own repositories and are refused on the other's."""
+    acme, globex = orgs["acme"], orgs["globex"]
+    tag = uuid.uuid4().hex[:12]
+    acme_repo, globex_repo = f"acme-provcat-test-{tag}", f"globex-provcat-test-{tag}"
+    acme.make_bucket(acme_repo)
+    globex.make_bucket(globex_repo)
+
+    def store(profile):
+        return {"driver": "lakefs", "endpoint_url": acme.endpoint, "profile": profile}
+
+    c = Catalog({
+        "stores": {"lakefs-acme": store("lakefs-acme"), "lakefs-globex": store("lakefs-globex")},
+        "schemes": {"t": {"parts": ["org", "repo", "env"], "rest": "path",
+                          "target": "lakefs-{org}://{repo}/{ref}/{path}", "ref": "{env}",
+                          "match": {"org": "[a-z0-9]{1,20}"}}},
+    }, cache_root=tmp_path / "cache")
+
+    c.put(f"t://acme/{acme_repo}/main/out/a.csv", b"v1")
+    pinned = c.commit(f"t://acme/{acme_repo}/main/out/a.csv", "first", {"run": "1"})
+    assert pinned.scheme == "lakefs-acme" and pinned.segments[0] != "main"
+    c.put(f"t://acme/{acme_repo}/main/out/a.csv", b"v2")
+    c.commit(f"t://acme/{acme_repo}/main", "second")
+    assert c.read(str(pinned)) == b"v1"  # the pinned URI keeps the first version
+    assert c.read(f"t://acme/{acme_repo}/main/out/a.csv") == b"v2"
+    log = acme.log(acme_repo, "main")
+    assert log[1]["metadata"] == {"run": "1", "provcat.uri": f"t://acme/{acme_repo}/main/out/a.csv"}
+
+    assert str(c.branch(f"lakefs-acme://{acme_repo}/feature", "main")) == f"lakefs-acme://{acme_repo}/feature"
+    c.put(f"t://acme/{acme_repo}/feature/out/b.csv", b"feature")
+    assert c.read(f"t://acme/{acme_repo}/feature/out/b.csv") == b"feature"
+
+    # acme's keys are refused every write to globex's repository.
+    with pytest.raises(StoreError):
+        c.put(f"lakefs-acme://{globex_repo}/main/x.csv", b"no")
+    with pytest.raises(StoreError):
+        c.commit(f"lakefs-acme://{globex_repo}/main", "no")
+    with pytest.raises(StoreError):
+        c.branch(f"lakefs-acme://{globex_repo}/sneaky", "main")
+    assert [b["id"] for b in globex._api("GET", f"/repositories/{globex_repo}/branches")["results"]] == ["main"]

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from provcat import Catalog, NotFound, OfflineMiss
-from provcat.errors import StoreError
+from provcat.errors import StoreError, UriError
 
 
 class S3Backend:
@@ -49,6 +49,9 @@ class S3Backend:
     def delete(self, bucket, key):
         self.client.delete_object(Bucket=bucket, Key=key)
 
+    def get(self, bucket, key):
+        return self.client.get_object(Bucket=bucket, Key=key)["Body"].read()
+
 
 class GcsBackend:
     def __init__(self, endpoint=None, project=None):
@@ -82,6 +85,9 @@ class GcsBackend:
 
     def delete(self, bucket, key):
         self.client.bucket(bucket).blob(key).delete()
+
+    def get(self, bucket, key):
+        return self.client.bucket(bucket).blob(key).download_as_bytes()
 
 
 class AzureBackend:
@@ -117,6 +123,9 @@ class AzureBackend:
 
     def delete(self, bucket, key):
         self.client.get_container_client(bucket).delete_blob(key)
+
+    def get(self, bucket, key):
+        return self.client.get_container_client(bucket).download_blob(key).readall()
 
 
 class LakefsBackend(S3Backend):
@@ -341,3 +350,50 @@ def test_listings_follow_every_page(backend, bucket, tmp_path):
     folder = c.fetch(backend.uri(bucket, "main/many"))
     assert sorted(p.name for p in folder.rglob("*.txt")) == ["a.txt", "f0.txt", "f1.txt", "f2.txt", "f3.txt",
                                                              "f4.txt", "x.txt", "x.txt", "x.txt"]
+
+
+def test_put_read_overwrite_and_delete(backend, bucket, tmp_path):
+    c = cat(backend, tmp_path)
+    uri = backend.uri(bucket, "main/w/new.txt")
+    [entry] = c.put(uri, b"W1")
+    assert entry.kind == "file" and entry.size == 2 and entry.version
+    assert c.read(uri) == b"W1"
+    [again] = c.put(uri, b"W22")
+    assert again.version != entry.version
+    assert c.read(uri) == b"W22"  # the cached copy of W1 is not served
+    assert backend.get(bucket, "main/w/new.txt") == b"W22"
+    c.delete(uri)
+    with pytest.raises(NotFound):
+        c.stat(uri)
+    with pytest.raises(NotFound):
+        c.delete(uri)
+
+
+def test_put_a_folder(backend, bucket, tmp_path):
+    src = tmp_path / "src"
+    (src / "sub").mkdir(parents=True)
+    (src / "x.csv").write_bytes(b"X")
+    (src / "sub" / "y.csv").write_bytes(b"Y")
+    c = cat(backend, tmp_path)
+    written = c.put(backend.uri(bucket, "main/out"), src)
+    assert sorted(str(e.uri) for e in written) == [backend.uri(bucket, "main/out/sub/y.csv"),
+                                                   backend.uri(bucket, "main/out/x.csv")]
+    folder = c.fetch(backend.uri(bucket, "main/out"))
+    assert (folder / "x.csv").read_bytes() == b"X" and (folder / "sub" / "y.csv").read_bytes() == b"Y"
+
+
+def test_writes_need_an_object_and_a_connection(backend, bucket, tmp_path):
+    with pytest.raises(UriError):
+        cat(backend, tmp_path).put(backend.uri(bucket), b"x")  # the bucket itself
+    with pytest.raises(OfflineMiss):
+        cat(backend, tmp_path, offline=True).put(backend.uri(bucket, "main/w/off.txt"), b"x")
+
+
+def test_put_and_delete_refuse_a_folder(backend, bucket, tmp_path):
+    # Review of the write feature, findings 4 and 5.
+    c = cat(backend, tmp_path)
+    with pytest.raises(StoreError, match="a folder"):
+        c.put(backend.uri(bucket, "main/data"), b"x")
+    with pytest.raises(StoreError, match="a folder"):
+        c.delete(backend.uri(bucket, "main/data"))
+    assert c.read(backend.uri(bucket, "main/data/a.txt")) == b"A1"

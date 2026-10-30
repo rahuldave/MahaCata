@@ -93,6 +93,17 @@ class S3Store(ObjectStore):
         except BotoCoreError as e:
             raise StoreError(f"{uri}: {e}") from e
 
+    def _put(self, uri, bucket, key, src):
+        # upload_file switches to a multipart upload for a large file, so a
+        # file over 5 GB works. Its ETag is then not an MD5, but it still
+        # changes when the bytes change, which is all the cache needs.
+        self._call(uri, "upload_file", Filename=str(src), Bucket=bucket, Key=key)
+        return self._head(uri, bucket, key)[1]
+
+    def _delete(self, uri, bucket, key):
+        self._head(uri, bucket, key)  # S3 deletes a missing key without a word
+        self._call(uri, "delete_object", Bucket=bucket, Key=key)
+
     def _head(self, uri, bucket, key):
         head = self._call(uri, "head_object", Bucket=bucket, Key=key)
         return head["ContentLength"], head["ETag"].strip('"')

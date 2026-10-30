@@ -12,6 +12,14 @@ A driver gives four things:
 - ``pin(uri, cache)``: the URI with any moving name (a branch) replaced by a fixed one.
 - ``fetch(uri, cache)``: a local path that holds the object.
 
+A driver that can be written also gives:
+
+- ``put(uri, src, cache)``: write the local file ``src`` at ``uri``, and return its Entry.
+- ``delete(uri, cache)``: delete the object at ``uri``.
+
+A driver with commits, lakeFS, also gives ``commit`` and ``branch``. The others
+refuse writes with a StoreError.
+
 Every method takes the cache, because pinning a moving name records what it
 pointed at, and offline mode reads only the cache.
 """
@@ -22,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..cache import LocalCache
-from ..errors import ConfigError
+from ..errors import ConfigError, StoreError
 from ..uri import Uri
 
 
@@ -74,6 +82,12 @@ class Store(ABC):
 
     def read(self, uri: Uri, cache: LocalCache) -> bytes:
         return self.fetch(uri, cache).read_bytes()
+
+    def put(self, uri: Uri, src: Path, cache: LocalCache) -> Entry:
+        raise StoreError(f"{uri}: store {self.name} ({self.driver}) cannot be written")
+
+    def delete(self, uri: Uri, cache: LocalCache) -> None:
+        raise StoreError(f"{uri}: store {self.name} ({self.driver}) cannot be written")
 
 
 _TYPE_NAMES = {str: "string", bool: "true or false", list: "list of strings", (int, float): "number"}

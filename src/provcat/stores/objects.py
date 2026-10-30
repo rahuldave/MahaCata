@@ -11,6 +11,9 @@ cache, folder fetches and offline mode. A driver gives four primitives:
   ``(key, size, version)``.
 - ``_get(uri, bucket, key, out)``: write the object's bytes to the open file
   ``out``, and return the version of the bytes written.
+- ``_put(uri, bucket, key, src)``: write the local file ``src`` as the object,
+  and return the version of the bytes written.
+- ``_delete(uri, bucket, key)``: delete the object, or raise NotFound.
 
 The version is whatever changes when the bytes change: the ETag on S3, the
 generation on GCS, the ETag on Azure. The cache keeps it, and fetches a file
@@ -52,6 +55,12 @@ class ObjectStore(Store):
 
     @abstractmethod
     def _get(self, uri: Uri, bucket: str, key: str, out: BinaryIO) -> str: ...
+
+    @abstractmethod
+    def _put(self, uri: Uri, bucket: str, key: str, src: Path) -> str: ...
+
+    @abstractmethod
+    def _delete(self, uri: Uri, bucket: str, key: str) -> None: ...
 
     def _is_marker(self, uri: Uri, bucket: str, key: str) -> bool:
         """True if the key is a folder marker that is not a file, as on ADLS Gen2."""
@@ -181,6 +190,40 @@ class ObjectStore(Store):
                 return self._fetch_folder(uri, key, cache)
         except OSError as e:
             raise StoreError(f"cannot lock {cache.path(self.name, key)} in the cache: {e}") from e
+
+    def _write_target(self, uri: Uri) -> tuple[str, str]:
+        self._online(uri)
+        bucket, key = self.locate(uri)
+        if not key or key.endswith("/"):
+            raise UriError(f"{uri}: name an object to write, not a bucket or folder")
+        return bucket, key
+
+    def _is_folder(self, uri: Uri, bucket: str, key: str) -> bool:
+        """True if some key starts with key + "/", or key is a folder marker."""
+        if self._is_marker(uri, bucket, key):
+            return True
+        prefix = key + "/"
+        for folders, objects in self._pages(uri, bucket, prefix, delimiter=False, limit=1):
+            # ADLS Gen2 lists the file a/b itself for the prefix a/b/, so filter.
+            return any(f.startswith(prefix) for f in folders) or any(o[0].startswith(prefix) for o in objects)
+        return False
+
+    def put(self, uri: Uri, src: Path, cache: LocalCache) -> Entry:
+        bucket, key = self._write_target(uri)
+        if self._is_folder(uri, bucket, key):
+            raise StoreError(f"{uri}: a folder; write to a name inside it")
+        size = Path(src).stat().st_size
+        version = self._put(uri, bucket, key, Path(src))
+        return Entry(uri, "file", size, version)
+
+    def delete(self, uri: Uri, cache: LocalCache) -> None:
+        bucket, key = self._write_target(uri)
+        try:
+            self._delete(uri, bucket, key)
+        except NotFound:
+            if self._is_folder(uri, bucket, key):
+                raise StoreError(f"{uri}: a folder; delete the objects in it") from None
+            raise
 
     def _fetch_folder(self, uri: Uri, key: list[str], cache: LocalCache) -> Path:
         cache.unmark_folder(self.name, key)
