@@ -21,12 +21,15 @@ between stat and download. ObjectStore in objects.py holds the rest.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..errors import NotFound, StoreError, UriError
 from ..uri import Uri
 from . import register_driver
 from .objects import ObjectStore
 
 _CHUNK = 1 << 20
+_SINGLE = 64 << 20  # files up to this size go in one request
 
 
 @register_driver
@@ -67,7 +70,7 @@ class S3Store(ObjectStore):
 
     def locate(self, uri: Uri) -> tuple[str, str]:
         if uri.selector is not None:
-            raise UriError(f"{uri}: S3 has no ?at= selector; put the version in the path")
+            self._selector(uri)
         if not uri.authority:
             raise UriError(f"{uri}: write {uri.scheme}://bucket/key")
         return uri.authority, uri.path
@@ -82,7 +85,13 @@ class S3Store(ObjectStore):
             return getattr(self._client, method)(**kw)
         except ClientError as e:
             code = str(e.response.get("Error", {}).get("Code", ""))
-            if code in ("404", "NoSuchKey", "NoSuchBucket", "NotFound"):
+            if "IfNoneMatch" in kw and code in ("412", "PreconditionFailed", "ConditionalRequestConflict"):
+                # Only a conditional write sends a condition. A conflict is
+                # another conditional write to the key at the same time.
+                from .objects import Exists
+
+                raise Exists(f"{uri}: already there ({code})") from e
+            if code in ("404", "NoSuchKey", "NoSuchBucket", "NotFound", "NoSuchVersion"):
                 raise NotFound(f"{uri}: not found ({code})") from e
             if code in ("400", "BadRequest") and uri.segments and self.options.get("endpoint_url"):
                 # The lakeFS S3 gateway answers a branch or commit that does not
@@ -94,15 +103,60 @@ class S3Store(ObjectStore):
             raise StoreError(f"{uri}: {e}") from e
 
     def _put(self, uri, bucket, key, src):
-        # upload_file switches to a multipart upload for a large file, so a
-        # file over 5 GB works. Its ETag is then not an MD5, but it still
-        # changes when the bytes change, which is all the cache needs.
+        # A small file goes in one request, whose reply gives the ETag of these
+        # bytes. upload_file switches to a multipart upload for a large file, so
+        # a file over 5 GB works, but it gives no ETag, so a HEAD reads it; a
+        # write by someone else in between gives their ETag.
+        if Path(src).stat().st_size <= _SINGLE:
+            with open(src, "rb") as f:
+                return self._call(uri, "put_object", Bucket=bucket, Key=key, Body=f)["ETag"].strip('"')
         self._call(uri, "upload_file", Filename=str(src), Bucket=bucket, Key=key)
         return self._head(uri, bucket, key)[1]
 
     def _delete(self, uri, bucket, key):
         self._head(uri, bucket, key)  # S3 deletes a missing key without a word
         self._call(uri, "delete_object", Bucket=bucket, Key=key)
+
+    def _versioned(self, uri, bucket):
+        status = self._call(uri, "get_bucket_versioning", Bucket=bucket).get("Status")
+        if status != "Enabled":
+            raise StoreError(f"{uri}: versioning is {(status or 'off').lower()} on bucket {bucket}, so S3 "
+                             "does not keep old versions to pin; turn it on")
+
+    def _version_of(self, uri, bucket, key):
+        self._versioned(uri, bucket)
+        version = self._call(uri, "head_object", Bucket=bucket, Key=key).get("VersionId")
+        if not version:
+            raise StoreError(f"{uri}: S3 gave no version ID")
+        return version
+
+    def _history(self, uri, bucket, prefix):
+        self._versioned(uri, bucket)
+        out, args = [], dict(Bucket=bucket, Prefix=prefix)
+        while True:
+            page = self._call(uri, "list_object_versions", **args)
+            out += [(v["Key"], v["VersionId"], v["Size"], v["IsLatest"]) for v in page.get("Versions", [])]
+            out += [(m["Key"], m["VersionId"], None, m["IsLatest"]) for m in page.get("DeleteMarkers", [])]
+            if not page.get("IsTruncated"):
+                return out
+            args.update(KeyMarker=page["NextKeyMarker"], VersionIdMarker=page["NextVersionIdMarker"])
+
+    def _create(self, uri, bucket, key, src):
+        with open(src, "rb") as f:
+            self._call(uri, "put_object", Bucket=bucket, Key=key, Body=f, IfNoneMatch="*")
+
+    def _head_version(self, uri, bucket, key, version):
+        return self._call(uri, "head_object", Bucket=bucket, Key=key, VersionId=version)["ContentLength"]
+
+    def _get_version(self, uri, bucket, key, version, out):
+        obj = self._call(uri, "get_object", Bucket=bucket, Key=key, VersionId=version)
+        for chunk in obj["Body"].iter_chunks(_CHUNK):
+            out.write(chunk)
+
+    def _copy(self, uri, bucket, key, version, to):
+        # copy is the managed copy: one request, or a multipart copy over 5 GB.
+        source = {"Bucket": bucket, "Key": key, **({"VersionId": version} if version else {})}
+        self._call(uri, "copy", CopySource=source, Bucket=bucket, Key=to)
 
     def _head(self, uri, bucket, key):
         head = self._call(uri, "head_object", Bucket=bucket, Key=key)

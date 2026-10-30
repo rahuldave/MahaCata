@@ -27,18 +27,25 @@ class S3Backend:
             self.store["lake"]["profile"] = profile
         self.created = []
 
+    versions = True  # the bucket can keep every version of an object
+    account_versions = False  # true where versioning is set for the whole account, as on Azure
+
     def uri(self, bucket, key=""):
         return f"lake://{bucket}/{key}".rstrip("/")
 
-    def make_bucket(self, name):
+    def make_bucket(self, name, versioned=False):
         self.client.create_bucket(Bucket=name)
         self.created.append(name)
+        if versioned:
+            self.client.put_bucket_versioning(Bucket=name, VersioningConfiguration={"Status": "Enabled"})
 
     def cleanup(self):
         for name in self.created:
-            pages = self.client.get_paginator("list_objects_v2").paginate(Bucket=name)
+            # Every version and delete marker, so a versioned bucket empties too.
+            pages = self.client.get_paginator("list_object_versions").paginate(Bucket=name)
             for page in pages:
-                keys = [{"Key": o["Key"]} for o in page.get("Contents", [])]
+                keys = [{"Key": o["Key"], "VersionId": o["VersionId"]}
+                        for o in page.get("Versions", []) + page.get("DeleteMarkers", [])]
                 if keys:
                     self.client.delete_objects(Bucket=name, Delete={"Objects": keys})
             self.client.delete_bucket(Bucket=name)
@@ -72,13 +79,20 @@ class GcsBackend:
     def uri(self, bucket, key=""):
         return f"lake://{bucket}/{key}".rstrip("/")
 
-    def make_bucket(self, name):
-        self.client.create_bucket(name, location="us-east1")
+    versions = True
+    account_versions = False
+
+    def make_bucket(self, name, versioned=False):
+        bucket = self.client.bucket(name)
+        bucket.versioning_enabled = versioned
+        self.client.create_bucket(bucket, location="us-east1")
         self.created.append(name)
 
     def cleanup(self):
         for name in self.created:
-            self.client.bucket(name).delete(force=True)
+            for blob in self.client.list_blobs(name, versions=True):
+                blob.bucket.blob(blob.name, generation=blob.generation).delete()
+            self.client.bucket(name).delete()
 
     def put(self, bucket, key, data):
         self.client.bucket(bucket).blob(key).upload_from_string(data)
@@ -100,11 +114,15 @@ class AzureBackend:
         self.store = {"lake": {"driver": "azure", "connection_string_env": "PROVCAT_TEST_AZURE"}}
         self.created = []
         self.hns = False  # true for an ADLS Gen2 account, which keeps folders as marker blobs
+        self.versions = False  # true for an account with blob versioning on; Azurite has none
+        self.account_versions = True  # Azure turns versioning on for a whole account
 
     def uri(self, bucket, key=""):
         return f"lake://{self.account}/{bucket}/{key}".rstrip("/")
 
-    def make_bucket(self, name):
+    def make_bucket(self, name, versioned=False):
+        if versioned and not self.versions:
+            raise ValueError("this Azure account keeps no versions")
         self.client.create_container(name)
         self.created.append(name)
 
@@ -131,6 +149,8 @@ class AzureBackend:
 class LakefsBackend(S3Backend):
     """lakeFS through its S3 gateway. A bucket is a repository whose default
     branch is main, so the suite's keys "main/..." are paths on branch main."""
+
+    versions = False  # lakeFS has its own commits; the bucket versions are not for it
 
     prefix = "provcat-test-"  # the start of every repository name that cleanup deletes
 
@@ -177,7 +197,7 @@ class LakefsBackend(S3Backend):
     def log(self, repo, ref):
         return self._api("GET", f"/repositories/{repo}/refs/{ref}/commits?amount=1000")["results"]
 
-    def make_bucket(self, name):
+    def make_bucket(self, name, versioned=False):
         # Recorded first, so a create that times out after the server made
         # the repository is still cleaned up.
         self.created.append(name)
@@ -397,3 +417,133 @@ def test_put_and_delete_refuse_a_folder(backend, bucket, tmp_path):
     with pytest.raises(StoreError, match="a folder"):
         c.delete(backend.uri(bucket, "main/data"))
     assert c.read(backend.uri(bucket, "main/data/a.txt")) == b"A1"
+
+
+# Versions and commits, on a bucket that keeps every version
+
+@pytest.fixture
+def vbucket(backend):
+    if not backend.versions:
+        pytest.skip("this backend keeps no versions")
+    name = "provcat-test-" + uuid.uuid4().hex[:12]
+    backend.make_bucket(name, versioned=True)
+    backend.put(name, "main/t/a.csv", b"A1")
+    backend.put(name, "main/t/sub/b.csv", b"B1")
+    backend.put(name, "main/other.csv", b"O")
+    return name
+
+
+def test_pin_a_file_gives_its_version(backend, vbucket, tmp_path):
+    c = cat(backend, tmp_path)
+    pinned = c.pin(backend.uri(vbucket, "main/t/a.csv"))
+    assert pinned.selector.kind == "version"
+    backend.put(vbucket, "main/t/a.csv", b"A2 longer")
+    assert c.read(pinned) == b"A1"
+    assert c.read(backend.uri(vbucket, "main/t/a.csv")) == b"A2 longer"
+    assert c.stat(pinned).size == 2
+    assert c.pin(pinned) == pinned
+    # A real version ID, of another file. A made-up one is malformed on AWS and Azure.
+    other = c.pin(backend.uri(vbucket, "main/other.csv")).selector
+    with pytest.raises(NotFound):
+        c.read(str(pinned.without_selector()) + f"?at={other}")
+
+
+def test_commit_keeps_a_folder_as_it_was(backend, vbucket, tmp_path):
+    c = cat(backend, tmp_path)
+    folder = backend.uri(vbucket, "main/t")
+    first = c.commit(folder, "first", {"run": "42"})
+    assert first.selector.kind == "commit" and len(first.selector.value) == 64
+    backend.put(vbucket, "main/t/a.csv", b"A2")
+    backend.delete(vbucket, "main/t/sub/b.csv")
+    backend.put(vbucket, "main/t/c.csv", b"C")
+
+    assert c.read(f"{folder}/a.csv?at={first.selector}") == b"A1"
+    assert c.read(f"{folder}/sub/b.csv?at={first.selector}") == b"B1"
+    with pytest.raises(NotFound):
+        c.stat(f"{folder}/c.csv?at={first.selector}")
+    assert sorted((str(e.uri), e.kind) for e in c.list(first)) == [
+        (f"{folder}/a.csv?at={first.selector}", "file"), (f"{folder}/sub?at={first.selector}", "folder")]
+    got = c.fetch(first)
+    assert sorted(str(p.relative_to(got)) for p in got.rglob("*") if p.is_file()) == ["a.csv", "sub/b.csv"]
+    assert (got / "a.csv").read_bytes() == b"A1"
+    # The live folder is cached apart from the commit.
+    live = c.fetch(folder)
+    assert (live / "a.csv").read_bytes() == b"A2" and (got / "a.csv").read_bytes() == b"A1"
+
+    assert c.pin(folder) == first
+    assert c.pin(f"{folder}/sub") == first.child("sub")
+    second = c.commit(folder, "second")
+    assert second != first and c.pin(folder) == second
+    with pytest.raises(StoreError, match="nothing to commit"):
+        c.commit(folder, "again")
+    # A commit of the folder above holds this folder too, and is newer.
+    top = c.commit(backend.uri(vbucket, "main"), "all of main")
+    assert c.pin(folder).selector == top.selector
+    assert c.read(f"{folder}/c.csv?at={top.selector}") == b"C"
+    # A commit holds only its own folder.
+    with pytest.raises(NotFound, match="does not hold"):
+        c.stat(backend.uri(vbucket, "main/other.csv") + f"?at={first.selector}")
+
+    offline = cat(backend, tmp_path, offline=True)
+    assert (offline.fetch(first) / "sub" / "b.csv").read_bytes() == b"B1"
+
+
+def test_a_changed_commit_is_refused(backend, vbucket, tmp_path):
+    c = cat(backend, tmp_path)
+    first = c.commit(backend.uri(vbucket, "main/t"), "first")
+    key = f".provcat/commits/{first.selector.value}.json"
+    backend.put(vbucket, key, backend.get(vbucket, key).replace(b"first", b"forged"))
+    with pytest.raises(StoreError, match="does not match its ID"):
+        cat(backend, tmp_path / "fresh").stat(first)
+
+
+def test_branch_copies_a_branch_or_a_commit(backend, vbucket, tmp_path):
+    c = cat(backend, tmp_path)
+    first = c.commit(backend.uri(vbucket, "main/t"), "first")
+    backend.put(vbucket, "main/t/a.csv", b"A2")
+    assert c.branch(backend.uri(vbucket, "dev"), "main") == c.resolve(backend.uri(vbucket, "dev")).physical
+    assert c.read(backend.uri(vbucket, "dev/t/a.csv")) == b"A2"
+    assert c.read(backend.uri(vbucket, "dev/other.csv")) == b"O"
+    c.branch(backend.uri(vbucket, "old"), first.selector.value)
+    assert c.read(backend.uri(vbucket, "old/t/a.csv")) == b"A1"
+    assert c.read(backend.uri(vbucket, "old/t/sub/b.csv")) == b"B1"
+    with pytest.raises(NotFound):
+        c.stat(backend.uri(vbucket, "old/other.csv"))
+    with pytest.raises(StoreError, match="already exists"):
+        c.branch(backend.uri(vbucket, "dev"), "main")
+    with pytest.raises(NotFound):
+        c.branch(backend.uri(vbucket, "x"), "nosuch")
+    with pytest.raises(UriError):
+        c.branch(backend.uri(vbucket, "dev/deeper"), "main")
+
+
+def test_writes_keep_out_of_the_commits_and_fixed_versions(backend, vbucket, tmp_path):
+    c = cat(backend, tmp_path)
+    with pytest.raises(UriError, match="holds provcat's commits"):
+        c.put(backend.uri(vbucket, ".provcat/commits/x.json"), b"x")
+    pinned = c.pin(backend.uri(vbucket, "main/t/a.csv"))
+    with pytest.raises(UriError, match="fixed version"):
+        c.put(pinned, b"x")
+    with pytest.raises(UriError, match="a file"):
+        c.commit(backend.uri(vbucket, "main/t/a.csv"), "m")
+    with pytest.raises(StoreError, match="no files"):
+        c.commit(backend.uri(vbucket, "main/empty"), "m")
+    with pytest.raises(UriError, match="64 hex"):
+        c.stat(backend.uri(vbucket, "main/t") + "?at=commit:abc")
+    with pytest.raises(UriError, match="version:ID or"):
+        c.stat(backend.uri(vbucket, "main/t") + "?at=branch:main")
+
+
+def test_a_bucket_without_versions_refuses_pins_and_commits(backend, bucket, tmp_path):
+    if not backend.versions or backend.account_versions:
+        pytest.skip("this backend has no bucket without versions")
+    c = cat(backend, tmp_path)
+    with pytest.raises(StoreError, match="versioning"):
+        c.pin(backend.uri(bucket, "main/top.txt"))
+    with pytest.raises(StoreError, match="versioning"):
+        c.commit(backend.uri(bucket, "main/data"), "m")
+    with pytest.raises(StoreError, match="no provcat commit"):
+        c.pin(backend.uri(bucket, "main/data"))
+    # A branch from a branch needs no versions.
+    c.branch(backend.uri(bucket, "dev"), "main")
+    assert c.read(backend.uri(bucket, "dev/data/sub/b.txt")) == b"B1"

@@ -59,7 +59,7 @@ class GcsStore(ObjectStore):
 
     def locate(self, uri: Uri) -> tuple[str, str]:
         if uri.selector is not None:
-            raise UriError(f"{uri}: GCS has no ?at= selector; put the version in the path")
+            self._selector(uri)
         if not uri.authority:
             raise UriError(f"{uri}: write {uri.scheme}://bucket/key")
         return uri.authority, uri.path
@@ -75,6 +75,10 @@ class GcsStore(ObjectStore):
             return fn(self._client)
         except exceptions.NotFound as e:
             raise NotFound(f"{uri}: not found ({e.message})") from e
+        except exceptions.PreconditionFailed as e:
+            from .objects import Exists  # only a conditional write sends a precondition
+
+            raise Exists(f"{uri}: already there") from e
         except exceptions.GoogleAPICallError as e:
             raise StoreError(f"{uri}: GCS error {e.code}: {e.message}") from e
         except GoogleAuthError as e:
@@ -97,6 +101,58 @@ class GcsStore(ObjectStore):
 
     def _delete(self, uri, bucket, key):
         self._call(uri, lambda c: c.bucket(bucket).blob(key).delete())
+
+    def _versioned(self, uri, bucket):
+        # Without versioning a generation is gone once the object is written again.
+        if not self._call(uri, lambda c: c.get_bucket(bucket)).versioning_enabled:
+            raise StoreError(f"{uri}: versioning is off on bucket {bucket}, so GCS does not keep "
+                             "old generations to pin; turn it on")
+
+    def _version_of(self, uri, bucket, key):
+        self._versioned(uri, bucket)
+        return self._head(uri, bucket, key)[1]
+
+    def _history(self, uri, bucket, prefix):
+        # GCS has no delete markers: a delete makes the live generation old,
+        # which sets its time_deleted, so a listing still shows the change.
+        self._versioned(uri, bucket)
+
+        def history(c):
+            return [(b.name, str(b.generation), b.size, b.time_deleted is None)
+                    for b in c.list_blobs(bucket, prefix=prefix, versions=True)]
+
+        return self._call(uri, history)
+
+    def _create(self, uri, bucket, key, src):
+        blob = self._call(uri, lambda c: c.bucket(bucket).blob(key))
+        self._call(uri, lambda c: blob.upload_from_filename(str(src), if_generation_match=0))
+
+    @staticmethod
+    def _generation(uri, version):
+        if not version.isdigit():
+            raise UriError(f"{uri}: a GCS version is a generation, a number")
+        return int(version)
+
+    def _head_version(self, uri, bucket, key, version):
+        g = self._generation(uri, version)
+        blob = self._call(uri, lambda c: c.bucket(bucket).get_blob(key, generation=g))
+        if blob is None:
+            raise NotFound(f"{uri}: no generation {version}")
+        return blob.size
+
+    def _get_version(self, uri, bucket, key, version, out):
+        g = self._generation(uri, version)
+        blob = self._call(uri, lambda c: c.bucket(bucket).blob(key, generation=g))
+        self._call(uri, lambda c: blob.download_to_file(out))
+
+    def _copy(self, uri, bucket, key, version, to):
+        g = self._generation(uri, version) if version else None
+
+        def copy(c):
+            b = c.bucket(bucket)
+            b.copy_blob(b.blob(key), b, to, source_generation=g)
+
+        self._call(uri, copy)
 
     def _head(self, uri, bucket, key):
         blob = self._call(uri, lambda c: c.bucket(bucket).get_blob(key))

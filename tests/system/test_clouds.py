@@ -8,8 +8,10 @@ the test fails. Everything is made and deleted with the Python SDKs.
   picks a profile.
 - PROVCAT_SYSTEM_GCS=<project>: Google Cloud Storage in that project, with
   Application Default Credentials (gcloud auth application-default login).
-- PROVCAT_SYSTEM_AZURE=<subscription id>: makes a resource group with one ADLS
-  Gen2 storage account for the session, and deletes the group at the end.
+- PROVCAT_SYSTEM_AZURE=<subscription id>: makes a resource group for the
+  session with two storage accounts, and deletes the group at the end. One is
+  ADLS Gen2, with a hierarchical namespace, which keeps no blob versions. The
+  other is plain Blob storage with blob versioning on, for pins and commits.
   PROVCAT_SYSTEM_AZURE_LOCATION picks the region (default eastus). It uses
   DefaultAzureCredential, for example az login.
 - PROVCAT_SYSTEM_LAKEFS=<url>: lakeFS, for example http://localhost:8000, with
@@ -36,38 +38,77 @@ def _need(var):
     return value
 
 
+def _wait_for_versions(connection, seconds=180):
+    """Versioning takes a while to apply after it is turned on. Wait until a
+    probe blob gets a version ID."""
+    import time
+
+    from azure.storage.blob import BlobServiceClient
+
+    service = BlobServiceClient.from_connection_string(connection)
+    probe = service.get_container_client("provcat-probe")
+    probe.create_container()
+    try:
+        deadline = time.monotonic() + seconds
+        while not probe.get_blob_client("probe").upload_blob(b"x", overwrite=True).get("version_id"):
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"blob versioning did not apply within {seconds} s")
+            time.sleep(5)
+    finally:
+        probe.delete_container()
+
+
 @pytest.fixture(scope="session")
-def azure_connection():
+def azure_accounts():
+    """Connection strings for {"adls": ..., "blob": ...}, made on first use."""
     subscription = _need("PROVCAT_SYSTEM_AZURE")
     from azure.identity import DefaultAzureCredential
     from azure.mgmt.resource.resources import ResourceManagementClient
-    from azure.mgmt.storage import StorageManagementClient
+    from azure.mgmt.storage import StorageManagementClient, models
 
     credential = DefaultAzureCredential()
     location = os.environ.get("PROVCAT_SYSTEM_AZURE_LOCATION", "eastus")
-    suffix = uuid.uuid4().hex[:12]
-    group, account = f"provcat-test-{suffix}", f"provcattest{suffix}"
+    suffix = uuid.uuid4().hex[:11]
+    group = f"provcat-test-{suffix}"
     groups = ResourceManagementClient(credential, subscription).resource_groups
-    accounts = StorageManagementClient(credential, subscription).storage_accounts
-    try:
-        groups.create_or_update(group, {"location": location, "tags": {"purpose": "provcat system test"}})
-        from azure.mgmt.storage import models
+    storage = StorageManagementClient(credential, subscription)
+    made = {}
 
-        accounts.begin_create(group, account, models.StorageAccountCreateParameters(
+    def connection(kind):
+        if kind in made:
+            return made[kind]
+        if not made:
+            groups.create_or_update(group, {"location": location, "tags": {"purpose": "provcat system test"}})
+        account = f"provcat{kind[0]}{suffix}"  # 3 to 24 lowercase letters and digits
+        storage.storage_accounts.begin_create(group, account, models.StorageAccountCreateParameters(
             location=location, kind="StorageV2", sku=models.Sku(name="Standard_LRS"),
             properties=models.StorageAccountPropertiesCreateParameters(
-                is_hns_enabled=True, minimum_tls_version="TLS1_2", allow_blob_public_access=False),
+                is_hns_enabled=kind == "adls", minimum_tls_version="TLS1_2", allow_blob_public_access=False),
         )).result()
-        key = accounts.list_keys(group, account).keys_property[0].value
-        yield (f"DefaultEndpointsProtocol=https;AccountName={account};AccountKey={key};"
-               "EndpointSuffix=core.windows.net")
+        if kind == "blob":
+            storage.blob_services.set_service_properties(
+                group, account, models.BlobServiceProperties(is_versioning_enabled=True))
+        key = storage.storage_accounts.list_keys(group, account).keys_property[0].value
+        made[kind] = (f"DefaultEndpointsProtocol=https;AccountName={account};AccountKey={key};"
+                      "EndpointSuffix=core.windows.net")
+        if kind == "blob":
+            _wait_for_versions(made[kind])
+        return made[kind]
+
+    try:
+        yield connection
     finally:
         # Delete the group only if it exists, so a failed setup shows its own error.
         if groups.check_existence(group):
             groups.begin_delete(group).result()
 
 
-@pytest.fixture(params=["aws", "gcs", "azure", "lakefs"])
+@pytest.fixture(scope="session")
+def azure_connection(azure_accounts):
+    return azure_accounts("adls")
+
+
+@pytest.fixture(params=["aws", "gcs", "azure", "azure-blob", "lakefs"])
 def backend(request, monkeypatch):
     if request.param == "aws":
         _need("PROVCAT_SYSTEM_AWS")
@@ -77,6 +118,9 @@ def backend(request, monkeypatch):
     elif request.param == "azure":
         b = AzureBackend(request.getfixturevalue("azure_connection"), monkeypatch)
         b.hns = True
+    elif request.param == "azure-blob":
+        b = AzureBackend(request.getfixturevalue("azure_accounts")("blob"), monkeypatch)
+        b.versions = True
     else:
         b = LakefsBackend(_need("PROVCAT_SYSTEM_LAKEFS"),
                           os.environ.get("PROVCAT_SYSTEM_LAKEFS_PROFILE", "lakefs"),
@@ -149,3 +193,21 @@ def test_lakefs_ts_ignores_merged_commits(lakefs, tmp_path):
     assert c.read(f"{uri}?at=ts:{between}") == b"main v1"
     assert sorted(str(e.uri) for e in c.list(lakefs.uri(repo))) == [lakefs.uri(repo, "feature"),
                                                                     lakefs.uri(repo, "main")]
+
+
+def test_adls_gen2_says_it_cannot_pin(azure_connection, monkeypatch, tmp_path):
+    b = AzureBackend(azure_connection, monkeypatch)
+    b.hns = True
+    name = "provcat-test-" + uuid.uuid4().hex[:12]
+    b.make_bucket(name)
+    try:
+        b.put(name, "main/a.txt", b"A")
+        c = cat(b, tmp_path)
+        from provcat.errors import StoreError
+
+        with pytest.raises(StoreError, match="ADLS Gen2"):
+            c.pin(b.uri(name, "main/a.txt"))
+        with pytest.raises(StoreError, match="ADLS Gen2"):
+            c.commit(b.uri(name, "main"), "m")
+    finally:
+        b.cleanup()

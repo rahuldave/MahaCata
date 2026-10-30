@@ -281,7 +281,8 @@ def _stop(cid: str) -> None:
 @pytest.fixture(scope="session")
 def gcs_endpoint():
     port = _free_port()
-    cid = _container(GCS_IMAGE, port, 4443, "-scheme", "http", "-port", "4443",
+    # The memory backend, because the file backend keeps no versions.
+    cid = _container(GCS_IMAGE, port, 4443, "-scheme", "http", "-port", "4443", "-backend", "memory",
                      "-public-host", f"127.0.0.1:{port}", "-external-url", f"http://127.0.0.1:{port}")
     yield f"http://127.0.0.1:{port}"
     _stop(cid)

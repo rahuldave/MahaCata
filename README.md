@@ -2,7 +2,7 @@
 
 provcat turns a catalog URI into a local path. A catalog URI names a dataset, a model, a prompt or some code in words that stay the same when the storage changes. provcat resolves the URI to a physical location, downloads the object into a local cache, and returns the path.
 
-The first commit of this repository is the provcat code as it was found in `~/Catalog/provcat`. Read [docs/tour.md](docs/tour.md) for a guided tour with commands to run. Read [docs/setup.md](docs/setup.md) to install lakeFS, etcd and the tools that the tests need. Read [docs/design.md](docs/design.md) for what that code did, what changed and how the parts fit together. Read [docs/reference-server.md](docs/reference-server.md) to run and operate the shared lakeFS that keeps orgs apart.
+The first commit of this repository is the provcat code as it was found in `~/Catalog/provcat`. Read [docs/tour.md](docs/tour.md) for a guided tour with commands to run. Read [docs/setup.md](docs/setup.md) to install lakeFS, etcd and the tools that the tests need. Read [docs/design.md](docs/design.md) for what that code did, what changed and how the parts fit together. Read [docs/reference-server.md](docs/reference-server.md) to run and operate the shared lakeFS that keeps orgs apart. Read [docs/transactions.md](docs/transactions.md) for what a write and a commit guarantee, in lakeFS and in a bucket.
 
 ## Install and run
 
@@ -101,15 +101,15 @@ provcat stores a GitHub file under its commit, so the file never goes stale. pro
 | Command | Output |
 |---|---|
 | `provc resolve URI` | The physical URI and the steps taken, as JSON. |
-| `provc pin URI` | The URI with a branch or tag replaced by its commit. |
+| `provc pin URI` | The URI with a branch or tag replaced by its commit. In a versioned bucket, a file gets its version and a folder its newest commit. |
 | `provc stat URI` | One entry with its kind, size and version, as JSON. |
 | `provc ls URI` | The entries in a folder, as JSON. |
 | `provc fetch URI` | The local path of the file or folder. |
 | `provc cat URI` | The bytes of a file. |
 | `provc put URI PATH` | Writes a local file or folder at the URI, or standard input for `-`. |
 | `provc rm URI` | Deletes one object. |
-| `provc commit URI -m MSG [--meta K=V]` | Commits a lakeFS branch, and prints the URI pinned to the new commit. |
-| `provc branch URI --from REF` | Makes a lakeFS branch from a branch, a tag or a commit. |
+| `provc commit URI -m MSG [--meta K=V]` | Commits a lakeFS branch or a folder in a versioned bucket, and prints the URI pinned to the new commit. |
+| `provc branch URI --from REF` | Makes a lakeFS branch from a branch, a tag or a commit. In a bucket, copies a branch or a commit to a new branch. See [Commits in a bucket](docs/design.md#commits-in-a-bucket). |
 | `provc config show` | The configuration and its source. |
 | `provc config push --to etcd://...` | Copies the configuration into etcd. |
 

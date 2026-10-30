@@ -87,7 +87,7 @@ class AzureStore(ObjectStore):
 
     def locate(self, uri: Uri) -> tuple[str, str]:
         if uri.selector is not None:
-            raise UriError(f"{uri}: Azure has no ?at= selector; put the version in the path")
+            self._selector(uri)
         if not uri.authority or not uri.segments:
             raise UriError(f"{uri}: write {uri.scheme}://account/container/key")
         return uri.segments[0], "/".join(uri.segments[1:])
@@ -98,6 +98,10 @@ class AzureStore(ObjectStore):
         container = uri.segments[0]
         try:
             return fn(self._service(uri.authority).get_container_client(container))
+        except exceptions.ResourceExistsError as e:
+            from .objects import Exists  # only a write with overwrite=False finds the blob there
+
+            raise Exists(f"{uri}: already there") from e
         except exceptions.ResourceNotFoundError as e:
             raise NotFound(f"{uri}: not found ({getattr(e, 'error_code', None) or e.reason})") from e
         except exceptions.ClientAuthenticationError as e:
@@ -128,6 +132,50 @@ class AzureStore(ObjectStore):
             raise NotFound(f"{uri}: a folder, not a file")
         return props.size, props.etag.strip('"')
 
+    def _root(self, uri):
+        return Uri(uri.scheme, uri.authority, uri.segments[:1])
+
+    def _no_versions(self, uri):
+        hns = False
+        try:
+            hns = bool(self._call(uri, lambda c: c.get_account_information()).get("is_hns_enabled"))
+        except StoreError:
+            pass
+        if hns:
+            return StoreError(f"{uri}: account {uri.authority} is ADLS Gen2, which keeps no blob versions, "
+                              "so provcat cannot pin or commit there; use an account without a hierarchical namespace")
+        return StoreError(f"{uri}: Azure gave no version ID; turn on blob versioning for account {uri.authority}")
+
+    def _version_of(self, uri, bucket, key):
+        version = self._call(uri, lambda c: c.get_blob_client(key).get_blob_properties()).version_id
+        if not version:
+            raise self._no_versions(uri)
+        return version
+
+    def _history(self, uri, bucket, prefix):
+        def history(c):
+            return list(c.list_blobs(name_starts_with=prefix or None, include=["metadata", "versions"]))
+
+        out = []
+        for item in self._call(uri, history):
+            if _is_folder(item):
+                continue
+            if not item.version_id:
+                raise self._no_versions(uri)
+            out.append((item.name, item.version_id, item.size, bool(item.is_current_version)))
+        return out
+
+    def _create(self, uri, bucket, key, src):
+        with open(src, "rb") as f:
+            self._call(uri, lambda c: c.get_blob_client(key).upload_blob(f, overwrite=False))
+
+    def _head_version(self, uri, bucket, key, version):
+        return self._call(uri, lambda c: c.get_blob_client(key, version_id=version).get_blob_properties()).size
+
+    def _get_version(self, uri, bucket, key, version, out):
+        stream = self._call(uri, lambda c: c.get_blob_client(key, version_id=version).download_blob())
+        self._call(uri, lambda c: stream.readinto(out))
+
     def _is_marker(self, uri, bucket, key):
         try:
             return _is_folder(self._call(uri, lambda c: c.get_blob_client(key).get_blob_properties()))
@@ -136,6 +184,8 @@ class AzureStore(ObjectStore):
 
     def stat(self, uri, cache):
         # On ADLS Gen2 an empty folder is a marker blob with nothing below it.
+        if uri.selector is not None:
+            return super().stat(uri, cache)
         self._online(uri)
         bucket, key = self.locate(uri)
         if key:

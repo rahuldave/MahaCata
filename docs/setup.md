@@ -288,7 +288,7 @@ The project holds no data between runs. GCS can keep deleted objects for a few d
    az login --tenant <tenant id>
    ```
 
-3. Run the tests with your subscription id. The tests make one resource group with one ADLS Gen2 storage account, and delete the group at the end.
+3. Run the tests with your subscription id. The tests make one resource group with two storage accounts, and delete the group at the end. One account is ADLS Gen2. The other is plain Blob storage with blob versioning on, because ADLS Gen2 keeps no versions, and the tests of pins and commits need them.
 
    ```
    PROVCAT_SYSTEM_AZURE=<subscription id> uv run pytest -m system

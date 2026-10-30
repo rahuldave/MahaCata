@@ -246,8 +246,8 @@ provcat writes as well as reads. `Catalog` has four methods for writing, and `pr
 |---|---|---|
 | `put(uri, src)` | `provc put URI PATH` | Writes a local file, a local folder, or bytes. A folder is written file by file under the URI. `-` reads standard input. |
 | `delete(uri)` | `provc rm URI` | Deletes one object. |
-| `commit(uri, message, metadata)` | `provc commit URI -m MSG --meta K=V` | Commits the lakeFS branch that the URI is on. It returns the URI pinned to the new commit. |
-| `branch(uri, source)` | `provc branch URI --from REF` | Makes a lakeFS branch from a branch, a tag or a commit. |
+| `commit(uri, message, metadata)` | `provc commit URI -m MSG --meta K=V` | Commits the lakeFS branch that the URI is on, or a folder in a versioned bucket. It returns the URI pinned to the new commit. |
+| `branch(uri, source)` | `provc branch URI --from REF` | Makes a lakeFS branch from a branch, a tag or a commit. In a bucket, it copies a branch or a commit to a new branch. |
 
 A write takes a logical or a physical URI, and goes to a branch:
 
@@ -264,6 +264,72 @@ The cache needs no change for writes. An online read asks the store for the vers
 
 Access control is the store's. With the shared lakeFS, each org's keys write, commit and branch only its own repositories. The system test `tests/system/test_lakefs_acl.py` checks this.
 
+## Commits in a bucket
+
+A bucket on S3, GCS or Azure Blob has no branches and no commits. provcat keeps both by a layout and by the bucket's versions.
+
+### The layout
+
+A bucket holds one project. Its first folders are the branches, `main` among them:
+
+```
+s3://acme-sales/main/tables/agreements/part-0.parquet
+s3://acme-sales/dev/tables/agreements/part-0.parquet
+```
+
+A scheme maps a logical URI onto that layout with `{ref}`. This needs no new code in the resolver:
+
+```yaml
+schemes:
+  data:
+    parts: [org, project]
+    rest: path
+    target: "s3://{org}-{project}/{ref}/{path}"
+    ref: main
+    match: {org: "[a-z0-9]+", project: "[a-z0-9-]+"}
+```
+
+So `data://acme/sales/tables/agreements?at=branch:dev` is `s3://acme-sales/dev/tables/agreements`. An org has many buckets, one for each project, and the cloud's access control works on each bucket.
+
+### Fixed versions
+
+A bucket with versioning on keeps every version of an object, and gives each an ID. Two selectors name fixed versions:
+
+- **`?at=version:ID`** names one version of one file. `provc pin` of a file gives it.
+- **`?at=commit:ID`** names a provcat commit of a folder. It works on the folder and on every file and folder in it.
+
+A pin of a folder gives the newest commit of that folder, or of a folder above it, that holds the folder. A folder with no commit cannot be pinned. A bucket without versioning cannot pin or commit, and provcat says so.
+
+### What a commit is
+
+`provc commit s3://acme-sales/main/tables -m "qa run 42"` writes two objects at the top of the bucket:
+
+| Object | What it holds |
+|---|---|
+| `.provcat/commits/<ID>.json` | The folder, the commit number, the parent commit, the message, the metadata, the time, and each file's version ID and size. The ID is the SHA-256 of this object. |
+| `.provcat/log/<SHA-256 of the folder>/<10^15 - N>` | The ID of commit N of the folder. |
+
+A reader checks that the commit object hashes to its ID, so a changed commit is refused. A read at a commit gets each file's listed version. The cache keeps it apart from the live files.
+
+`provc branch s3://acme-sales/dev --from main` copies every file of `main` to `dev`. `--from <commit ID>` copies the versions in a commit. S3 and GCS copy inside the cloud. Azure downloads and uploads.
+
+### What is guaranteed
+
+A bucket writes one object at a time. It never writes several objects in one step. So a commit is made safe in two ways:
+
+- **The file list is a snapshot.** A commit lists every version under the folder twice, deleted versions too. Every write makes a new version ID. So if the two listings are equal, nothing changed between them, and every listed version was current at one moment. If they differ, the commit lists again, up to five times, and then fails.
+- **Each folder's commits have one order.** The commit creates log entry N only if no object has that name. S3 and Azure do this with `If-None-Match: *`, and GCS with `ifGenerationMatch=0`. Of two commits at once, one gets N. The other lists the files again and takes N + 1, or finds nothing to commit. Each commit names its parent.
+
+lakeFS works differently. It keeps each branch pointer in its database, and a commit moves the pointer with one compare-and-swap. [Transactions](transactions.md) has the details, and compares Nessie, Delta Lake, Iceberg and SlateDB.
+
+What a bucket commit does not give:
+
+- **Several files written as one step.** Writers write files one by one, and a reader of the live folder can see half a change. Read at a commit to get one moment. Write through lakeFS to make several files appear at once.
+- **Commits that outlive their versions.** A lifecycle rule that deletes old versions, or a person who deletes one, breaks the commits that name it. A read of such a file fails with "not found". Keep old versions while their commits matter.
+- **One order across folders.** Each folder has its own log. A pin compares the commits of a folder and of the folders above it by their time, which comes from each writer's clock.
+- **ADLS Gen2.** An account with a hierarchical namespace keeps no blob versions, so it can neither pin nor commit.
+- **An atomic branch.** A branch copies file by file. If it fails halfway, the new branch is half made. Delete it and copy again.
+
 ## Known limits
 
 | Limit | What to do |
@@ -275,7 +341,8 @@ Access control is the store's. With the shared lakeFS, each org's keys write, co
 | Lock files under `.provcat/locks` are never deleted. | Delete them when no provcat process runs. |
 | A folder and a folder inside it can be fetched at the same time, under different locks. | Avoid it. If a fetch fails with an error, run it again. |
 | A `${oc.env:...}` value in etcd reads the environment of each reader. | Let only trusted people write to the etcd prefix. |
-| `ts:` works on lakeFS only. GitHub refuses it. | Pin a GitHub ref with `commit:`. |
+| `ts:` works on lakeFS only. GitHub and buckets refuse it. | Pin a GitHub ref with `commit:`, and a bucket folder with a provcat commit. |
+| A bucket commit lists every version under its folder, twice, so it slows as history grows. | Commit small folders, or delete old versions that no commit names. |
 | A `ts:` search reads at most 100,000 commits of a branch. | Use `commit:` or a stage for older versions. |
 
 ## Next steps
