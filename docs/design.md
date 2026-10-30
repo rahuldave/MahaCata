@@ -159,7 +159,7 @@ The rules for a field in a store name keep this mapping safe:
 - **One field.** The store name holds one field, next to fixed text with a `-`, as in `lakefs-{org}`. So no value can make a built-in name such as `file` or `s3`.
 - **A plain value.** The value must match its `match` pattern, and must be lowercase letters and digits only. So two different values never give one store name.
 
-The mapping is not access control. provcat does not know who runs it, and a physical URI, such as `lakefs-globex://...`, skips the mapping. The real boundary is the keys that a reader holds. Give each tenant a configuration with only its own store, and only its own profile in its AWS files. The example configuration also has the admin store `lakefs`, which reads every repository. Leave it out of a tenant's configuration.
+The mapping is not access control. provcat does not know who runs it, and a physical URI, such as `lakefs-globex://...`, skips the mapping. The real boundary is the keys that a reader holds. Give each tenant a view with only its own stores, as the next section shows. Give it only its own profiles in its AWS files.
 
 A shared cache is not a boundary either. Its folders, such as `<cache>/lakefs-globex/...`, are plain files. Give each tenant its own cache. Pins live under the store name, so a pin made through the `lakefs` store is not found through `lakefs-acme`.
 
@@ -215,9 +215,39 @@ The access-list server route has these limits:
 - **The admin is made in the access-list server.** In this mode the lakeFS setup call makes no user, and `lakefs superuser` refuses to run. The script makes the admin in the access-list server, in its `Admins` group.
 - **A missing repository looks like a refused one.** For a user with limited access, the S3 gateway answers a repository that does not exist with 403. The `lakefs` driver then asks the API, which tells the two apart.
 
-These parts of tenancy are not built yet:
+### A configuration for each tenant
 
-- **A configuration for each tenant.** All tenants share one configuration. An etcd prefix for each org, for example `etcd://host/provcat/acme`, works today but has no tooling.
+One configuration holds every tenant. The schemes are shared, so every tenant maps URIs by the same rules. Two sections hold the parts that are not shared:
+
+| Section | What it holds | Who sees it |
+|---|---|---|
+| `tenants.<name>` | The tenant's stores, stages and cache root. | That tenant and the admin. |
+| `admin` | Stores, stages and a cache root for the admin, such as the store `lakefs`, whose keys read every repository. | The admin only. |
+
+`provc --tenant acme`, or `PROVCAT_TENANT=acme`, opens acme's view. It holds the shared sections and acme's part. provcat cuts the view before it fills in `${...}` values, so another tenant's part is never read. Without a tenant, `provc` opens the admin's view, which holds every part. `provc config show --tenant acme` prints a view.
+
+A scheme names the part that says whose a URI is, with `tenant: org`. In acme's view, a URI of such a scheme with another org is refused. A scheme without `tenant`, such as `code`, serves every tenant.
+
+Three rules keep one tenant from passing for another:
+
+- **Store names.** A tenant's store names end with `-<tenant>`, as in `lakefs-acme` and `s3-acme`. So no tenant can define `lakefs-globex`, which globex's URIs resolve to.
+- **Stages.** A tenant's stages must be URIs of that tenant. So acme cannot point globex's `stage:production` anywhere.
+- **One name, one place.** A store or stage named in two parts is an error. Two ways of writing one stage URI, such as with a trailing `/`, count as one name.
+- **The tenant picks the store.** In a scheme whose store name has a field, as in `lakefs-{org}`, the tenant part must be that field.
+
+In etcd, each part has its own keys:
+
+| Key | Holds |
+|---|---|
+| `<prefix>/schemes`, `/stores`, `/stages`, `/cache` | The shared sections. |
+| `<prefix>/tenants` | The list of tenant names, for the admin. |
+| `<prefix>/tenants/<name>/<section>` | One section of a tenant's part. |
+| `<prefix>/tenants/<name>/name` | The tenant's name, which marks that the tenant exists, even with an empty part. |
+| `<prefix>/admin/<section>` | One section of the admin's part. |
+
+A reader for acme reads the shared keys and the keys under `<prefix>/tenants/acme/` only. It does not read the list of names. So etcd's own access control can keep the tenants apart. Give acme's etcd user read access to those keys only. Grant the prefix with its trailing `/`, as `<prefix>/tenants/acme/`, or the grant also covers `acme2`. The configuration holds no keys, only profile names, but it does show other tenants' stores and endpoints.
+
+The views are not access control on their own. A tenant who can read the YAML file, or the etcd keys of another tenant, can read that part. The boundary stays the keys each tenant holds.
 
 ### The lakeFS driver
 

@@ -20,6 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--config", help="a YAML path or etcd://host:port/prefix (default: PROVCAT_CONFIG, ./provcat.yaml)")
     ap.add_argument("--cache", help="the cache folder (default: PROVCAT_CACHE, ~/.cache/provcat)")
     ap.add_argument("--offline", action="store_true", help="use only the cache")
+    ap.add_argument("--tenant", help="see only this tenant's part of the configuration (default: PROVCAT_TENANT)")
     sp = ap.add_subparsers(dest="cmd", required=True)
     for name, text in [("resolve", "show the physical URI"), ("pin", "show the URI with a fixed version"),
                        ("stat", "show one entry"), ("ls", "list a folder"),
@@ -47,13 +48,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "config":
             source = open_config(args.config)
             if args.ccmd == "show":
-                _print({"source": source.location, "config": source.load()})
+                tenant = args.tenant if args.tenant is not None else os.environ.get("PROVCAT_TENANT")
+                tenant = tenant or None
+                _print({"source": source.location, "tenant": tenant, "config": source.load(tenant)})
             else:
                 data = source.raw()  # keep ${...} so each reader fills in its own environment
                 EtcdConfig(args.to).save(data)
                 _print({"ok": True, "from": source.location, "to": args.to, "sections": sorted(data)})
             return 0
-        cat = Catalog.open(args.config, cache_root=args.cache, offline=args.offline)
+        cat = Catalog.open(args.config, cache_root=args.cache, offline=args.offline, tenant=args.tenant)
         if args.cmd == "resolve":
             r = cat.resolve(args.uri)
             _print({"logical": str(r.logical), "physical": str(r.physical), "via": list(r.via)})

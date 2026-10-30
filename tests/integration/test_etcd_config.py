@@ -68,3 +68,64 @@ def test_cli(tmp_path, capsys, etcd):
     assert main(["--config", str(f), "config", "push", "--to", etcd.url + "/p"]) == 0
     assert "/p/schemes" in etcd.kv
     assert main(["--config", etcd.url + "/p", "resolve", "t://x.txt"]) == 0
+
+
+TENANTS = {
+    "schemes": {"t": {"parts": ["org", "a"], "target": "file-{org}:///{a}", "tenant": "org",
+                      "match": {"org": "[a-z0-9]+"}}},
+    "admin": {"stores": {"all": {"driver": "file"}}},
+    "tenants": {"acme": {"stores": {"file-acme": {"driver": "file"}}, "cache": {"root": "/c/acme"}},
+                "globex": {"stores": {"file-globex": {"driver": "file"}}}},
+}
+
+
+def test_each_tenant_has_its_own_keys(etcd):
+    src = EtcdConfig(etcd.url + "/p")
+    src.save(TENANTS)
+    assert set(etcd.kv) == {"/p/schemes", "/p/admin/stores", "/p/tenants",
+                            "/p/tenants/acme/name", "/p/tenants/acme/stores", "/p/tenants/acme/cache",
+                            "/p/tenants/globex/name", "/p/tenants/globex/stores"}
+    assert json.loads(etcd.kv["/p/tenants"]) == ["acme", "globex"]
+    assert src.raw() == TENANTS
+    assert set(src.load()["stores"]) == {"all", "file-acme", "file-globex"}
+
+
+def test_a_tenant_reads_only_the_shared_keys_and_its_own(etcd):
+    src = EtcdConfig(etcd.url + "/p")
+    src.save(TENANTS)
+    etcd.reads.clear()
+    acme = src.load("acme")
+    assert set(acme["stores"]) == {"file-acme"} and acme["cache"] == {"root": "/c/acme"}
+    assert all(not k.startswith(("/p/tenants/globex", "/p/admin")) for k in etcd.reads), etcd.reads
+    assert "/p/tenants" not in etcd.reads  # not even the list of names
+    with pytest.raises(ConfigError, match="no tenant 'initech'"):
+        src.load("initech")
+
+
+def test_push_drops_a_tenant_that_is_gone(etcd):
+    src = EtcdConfig(etcd.url + "/p")
+    src.save(TENANTS)
+    smaller = {**TENANTS, "tenants": {"acme": TENANTS["tenants"]["acme"]}}
+    del smaller["admin"]
+    src.save(smaller)
+    assert not any(k.startswith(("/p/tenants/globex", "/p/admin")) for k in etcd.kv)
+    assert json.loads(etcd.kv["/p/tenants"]) == ["acme"]
+    src.save({"schemes": TENANTS["schemes"]})
+    assert set(etcd.kv) == {"/p/schemes"}
+
+
+def test_a_tenant_with_an_empty_part_loads(etcd):
+    # Review finding 5: an empty part read as "no tenant" from etcd.
+    src = EtcdConfig(etcd.url + "/p")
+    src.save({**TENANTS, "tenants": {**TENANTS["tenants"], "initech": {}}})
+    assert src.load("initech").tenant == "initech"
+    assert "initech" in src.raw()["tenants"]
+
+
+def test_save_refuses_what_load_would_refuse(etcd):
+    # Review finding 6: a save that every later load refused.
+    src = EtcdConfig(etcd.url + "/p")
+    bad = {**TENANTS, "tenants": {"acme": {"stores": {"file-globex": {"driver": "file"}}}}}
+    with pytest.raises(ConfigError, match="must end with -acme"):
+        src.save(bad)
+    assert etcd.kv == {}

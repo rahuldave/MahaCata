@@ -14,6 +14,7 @@ reads the ``schemes`` and ``stages`` sections of the configuration::
         rest: path              # extra segments are joined into {path}
         target: "github://{org}/{repo}/{path}"
         pass_selector: true     # hand ?at= on to the physical URI
+      # tenant: org             # the part that names the tenant (see below)
 
     stages:
       "data+table://acme/shared/prod/agreements/qa_outputs":
@@ -37,6 +38,10 @@ With ``pass_selector``, the physical URI gets the selector that the resolver
 used: a stage becomes the selector it points at, and a scheme with a ``ref``
 default passes ``branch:<ref>`` when the URI has no selector. With ``version:``,
 only the version is passed.
+
+``tenant`` names the part that says whose a URI is, for example ``org``. A
+resolver made for one tenant refuses a URI of another tenant of such a scheme.
+A scheme without ``tenant`` serves every tenant.
 
 ``match`` gives a regular expression for a part. A URI whose part does not
 match the whole expression is refused, so that names such as lakeFS
@@ -84,13 +89,14 @@ class SchemeSpec:
     pass_selector: bool = False
     match: tuple[tuple[str, re.Pattern], ...] = ()
     store_field: str | None = None  # the part that picks the store, as in lakefs-{org}
+    tenant: str | None = None  # the part that names the tenant
 
     @classmethod
     def from_config(cls, name: str, raw: object) -> SchemeSpec:
         where = f"schemes.{name}"
         if not isinstance(raw, dict):
             raise ResolveError(f"{where} must be a mapping")
-        unknown = set(raw) - {"parts", "target", "rest", "ref", "pass_selector", "match"}
+        unknown = set(raw) - {"parts", "target", "rest", "ref", "pass_selector", "match", "tenant"}
         if unknown:
             raise ResolveError(f"{where}: unknown keys {sorted(unknown)}")
         parts = raw.get("parts")
@@ -167,12 +173,20 @@ class SchemeSpec:
                 patterns.append((part, re.compile(pattern)))
             except re.error as e:
                 raise ResolveError(f"{where}.match.{part}: bad pattern: {e}") from None
+        tenant = raw.get("tenant")
+        if tenant is not None and (tenant not in parts or not isinstance(tenant, str)):
+            raise ResolveError(f"{where}.tenant must be one of the parts {list(parts)}")
+        if tenant is not None and store_field is not None and tenant != store_field:
+            # Else acme's URI could name another tenant's store.
+            raise ResolveError(f"{where}: the tenant part {tenant!r} must be the part that picks "
+                               f"the store, {store_field!r}")
         return cls(name, tuple(parts), target, raw.get("rest"), raw.get("ref"),
-                   bool(raw.get("pass_selector", False)), tuple(patterns), store_field)
+                   bool(raw.get("pass_selector", False)), tuple(patterns), store_field, tenant)
 
 
 class TemplateResolver(Resolver):
-    def __init__(self, schemes: dict | None = None, stages: dict | None = None):
+    def __init__(self, schemes: dict | None = None, stages: dict | None = None, tenant: str | None = None):
+        self.tenant = tenant
         self.specs = {n: SchemeSpec.from_config(n, s) for n, s in (schemes or {}).items()}
         self.stages = {}
         for key, pointers in (stages or {}).items():
@@ -185,6 +199,8 @@ class TemplateResolver(Resolver):
             if parsed.selector is not None:
                 raise ResolveError(f"stages: key {key!r} must not have ?at=")
             canon = str(parsed)
+            if canon in self.stages:
+                raise ResolveError(f"stages: {key!r} is {canon!r}, which another key also names")
             if not isinstance(pointers, dict):
                 raise ResolveError(f"stages.{key} must be a mapping of stage name to selector")
             self.stages[canon] = pointers
@@ -220,6 +236,9 @@ class TemplateResolver(Resolver):
             return quote(v, safe=_SAFE.replace("&", ""))
 
         named = dict(zip(spec.parts, given))
+        if self.tenant is not None and spec.tenant and named[spec.tenant] != self.tenant:
+            raise ResolveError(f"{uri}: {spec.tenant} {named[spec.tenant]!r} is another tenant; "
+                               f"this catalog is for {self.tenant}")
         for part, pattern in spec.match:
             if not pattern.fullmatch(named[part]):
                 raise ResolveError(f"{uri}: {part} {named[part]!r} does not match {pattern.pattern}")

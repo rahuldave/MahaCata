@@ -149,6 +149,7 @@ class FakeGithub:
 class FakeEtcd:
     def __init__(self):
         self.kv = {}
+        self.reads = []  # every key read, in order
 
     def handle(self, h: BaseHTTPRequestHandler):
         body = json.loads(h.rfile.read(int(h.headers["Content-Length"])))
@@ -165,6 +166,7 @@ class FakeEtcd:
             self.kv[key] = dec(body["value"])
             out = {}
         elif h.path == "/v3/kv/range":
+            self.reads.append(key)
             out = {"kvs": [{"value": base64.b64encode(self.kv[key].encode()).decode()}]} if key in self.kv else {}
         else:
             return h.send_error(404)

@@ -4,6 +4,10 @@
     cat.resolve("data+table://acme/shared/prod/agreements/qa_outputs?at=stage:production")
     path = cat.fetch("github://rahuldave/provcat/README.md?at=branch:main")
 
+A catalog for one tenant, ``Catalog.open(tenant="acme")`` or PROVCAT_TENANT,
+sees only the shared configuration and that tenant's part, and refuses the
+logical URIs of other tenants.
+
 A URI whose scheme is a store is already physical, so resolve returns it as it
 is. A URI whose scheme is a logical scheme goes through the resolver once, and
 the result must name a store.
@@ -19,11 +23,12 @@ version, which cannot change, so it is refused.
 """
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 
 from .cache import LocalCache
-from .config import ConfigSource, check, open_config
+from .config import ConfigSource, View, check, open_config, view
 from .errors import ConfigError, ResolveError, StoreError, UriError
 from .resolver import Resolution, Resolver, TemplateResolver
 from .stores import DEFAULT_STORES, Entry, Store, make_store
@@ -32,13 +37,23 @@ from .uri import Uri, parse
 
 class Catalog:
     def __init__(self, config: dict | None = None, *, cache_root: str | Path | None = None,
-                 offline: bool = False, resolver: Resolver | None = None):
+                 offline: bool = False, resolver: Resolver | None = None, tenant: str | None = None):
+        tenant = tenant or None
         cfg = check(config or {}, "config")
+        if isinstance(cfg, View):
+            if cfg.tenant != tenant:
+                raise ConfigError(f"this configuration is the view of {cfg.tenant or 'the admin'}, "
+                                  f"not of {tenant or 'the admin'}")
+        elif "tenants" in cfg or "admin" in cfg:
+            cfg = view(cfg, tenant)
+        elif tenant is not None:
+            raise ConfigError(f"no tenant {tenant!r}: the configuration has no tenants section")
+        self.tenant = tenant
         self.config = cfg
         self.offline = offline
         stores = {**DEFAULT_STORES, **cfg.get("stores", {})}
         self.stores: dict[str, Store] = {n: make_store(n, s or {}, offline=offline) for n, s in stores.items()}
-        self.resolver = resolver or TemplateResolver(cfg.get("schemes"), cfg.get("stages"))
+        self.resolver = resolver or TemplateResolver(cfg.get("schemes"), cfg.get("stages"), tenant)
         clash = [n for n in self.stores if self.resolver.handles(n)]
         if clash:
             raise ConfigError(f"{clash} are both stores and logical schemes; rename one")
@@ -49,9 +64,14 @@ class Catalog:
         self.cache = LocalCache(cache_root or cache_cfg.get("root"))
 
     @classmethod
-    def open(cls, spec: str | ConfigSource | None = None, **kw) -> Catalog:
+    def open(cls, spec: str | ConfigSource | None = None, *, tenant: str | None = None, **kw) -> Catalog:
+        """Open a configuration source. The tenant comes from the argument or
+        PROVCAT_TENANT; with none, the catalog is the admin's."""
+        if tenant is None:
+            tenant = os.environ.get("PROVCAT_TENANT")
+        tenant = tenant or None
         source = spec if isinstance(spec, ConfigSource) else open_config(spec)
-        return cls(source.load(), **kw)
+        return cls(source.load(tenant), tenant=tenant, **kw)
 
     def resolve(self, uri: str | Uri) -> Resolution:
         u = parse(uri)

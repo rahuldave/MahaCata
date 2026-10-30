@@ -17,25 +17,46 @@
 # repository. Each repository needs a branch for each environment, for
 # example prod and dev.
 
-stores:
-  # file, s3, github, gs and az exist without configuration. Add named stores here.
-  lakefs:
-    driver: lakefs           # S3 gateway for data, REST API for pins and ?at=ts:
-    endpoint_url: ${oc.env:LAKEFS_S3_ENDPOINT,http://localhost:8000}
-    profile: lakefs          # keys in ~/.aws/credentials under [lakefs]
+# The admin's own part, which no tenant sees. "provc" without a tenant is the
+# admin.
+admin:
+  stores:
+    lakefs:
+      driver: lakefs         # S3 gateway for data, REST API for pins and ?at=ts:
+      endpoint_url: ${oc.env:LAKEFS_S3_ENDPOINT,http://localhost:8000}
+      profile: lakefs        # keys in ~/.aws/credentials under [lakefs], which read every repository
 
-  # One store for each org, with that org's own keys. The logical schemes
-  # below name the store lakefs-{org}, so a logical URI of an org resolves only
-  # to that org's store. The admin store "lakefs" above reads every repository;
-  # leave it out of a tenant's configuration. See "Tenants" in docs/design.md.
-  lakefs-acme:
-    driver: lakefs
-    endpoint_url: ${oc.env:LAKEFS_S3_ENDPOINT,http://localhost:8000}
-    profile: lakefs-acme
-  lakefs-globex:
-    driver: lakefs
-    endpoint_url: ${oc.env:LAKEFS_S3_ENDPOINT,http://localhost:8000}
-    profile: lakefs-globex
+# Each tenant's own part: its stores, with its own keys, and its stages and
+# cache. "provc --tenant acme", or PROVCAT_TENANT=acme, sees the shared
+# sections and acme's part, and nothing of globex or the admin. The stores
+# file, s3, github, gs and az exist in every view without configuration. See
+# "Tenants" in docs/design.md.
+#
+# A tenant's store names end with -<tenant>, as the schemes below name them
+# lakefs-{org} and s3-{org}. So a logical URI of an org resolves only to that
+# org's store.
+tenants:
+  acme:
+    stores:
+      lakefs-acme:
+        driver: lakefs
+        endpoint_url: ${oc.env:LAKEFS_S3_ENDPOINT,http://localhost:8000}
+        profile: lakefs-acme
+      s3-acme:
+        driver: s3
+        profile: acme        # acme's AWS keys, for its own buckets
+    stages:
+      "data+table://acme/shared/prod/agreements/qa_outputs":
+        production: "commit:b8a2f9c123456"
+  globex:
+    stores:
+      lakefs-globex:
+        driver: lakefs
+        endpoint_url: ${oc.env:LAKEFS_S3_ENDPOINT,http://localhost:8000}
+        profile: lakefs-globex
+      s3-globex:
+        driver: s3
+        profile: globex
 
 cache:
   root: ${oc.env:PROVCAT_CACHE,${oc.env:HOME}/.cache/provcat}
@@ -46,6 +67,7 @@ schemes:
     parts: [org, domain, env, family, name]
     target: "lakefs-{org}://{org}-data-{domain}/{ref}/tables/{family}/{name}"
     ref: "{env}"
+    tenant: org
     match:
       org: "[a-z0-9]{1,20}"
       env: "[a-z0-9][a-z0-9_-]{0,19}"
@@ -56,6 +78,7 @@ schemes:
     parts: [org, team, env, project, pipeline]
     target: "lakefs-{org}://{org}-ml-{project}/{ref}/{team}/experiments/{pipeline}"
     ref: "{env}"
+    tenant: org
     match: &ml_names
       org: "[a-z0-9]{1,20}"
       env: "[a-z0-9][a-z0-9_-]{0,19}"
@@ -66,6 +89,7 @@ schemes:
     parts: [org, team, env, project, model_name]
     target: "lakefs-{org}://{org}-ml-{project}/{ref}/{team}/models/{model_name}/v{version}"
     ref: "{env}"
+    tenant: org
     match: *ml_names
 
   # artifact+prompt://org/team/env/project/name
@@ -73,14 +97,32 @@ schemes:
     parts: [org, team, env, project, name]
     target: "lakefs-{org}://{org}-ml-{project}/{ref}/{team}/prompts/{name}"
     ref: "{env}"
+    tenant: org
     match: *ml_names
   artifact+card:
     parts: [org, team, env, project, name]
     target: "lakefs-{org}://{org}-ml-{project}/{ref}/{team}/cards/{name}"
     ref: "{env}"
+    tenant: org
     match: *ml_names
 
+  # files://org/project/path[?at=branch:X|version:ID|commit:ID]
+  # A plain bucket for each project, named org-project, whose first folders
+  # are the branches, main among them. See "Commits in a bucket" in
+  # docs/design.md.
+  files:
+    parts: [org, project]
+    rest: path
+    target: "s3-{org}://{org}-{project}/{ref}/{path}"
+    ref: main
+    tenant: org
+    match:
+      org: "[a-z0-9]{1,20}"
+      project: "[a-z0-9][a-z0-9-]{0,40}[a-z0-9]"   # {org}-{project} stays a valid bucket name
+
   # code://org/repo/env/path[?at=branch:X|tag:X|commit:X]
+  # The org here is the GitHub owner, and the scheme names no tenant, so
+  # every tenant reads code through the one github store.
   # The env is the GitHub branch, as it is the lakeFS branch for data.
   code:
     parts: [org, repo, env]
@@ -95,7 +137,3 @@ schemes:
       org: '(?=.{1,39}\Z)[A-Za-z0-9](?:-?[A-Za-z0-9])*'
       repo: '[A-Za-z0-9._-]{1,100}'
       env: '(?!.*\.\.)(?!.*\.lock\Z)(?!.*\.\Z)(?!@\Z)[A-Za-z0-9_@+][A-Za-z0-9._+@-]{0,99}'
-
-stages:
-  "data+table://acme/shared/prod/agreements/qa_outputs":
-    production: "commit:b8a2f9c123456"

@@ -84,6 +84,8 @@ To copy a YAML configuration into etcd, run the command below. It copies the `${
 uv run provc --config config/provcat.example.yaml config push --to etcd://localhost:2379/provcat
 ```
 
+A configuration can hold a part for each tenant, in its `tenants` section, and a part for the admin, in its `admin` section. `provc --tenant acme`, or `PROVCAT_TENANT=acme`, sees the shared sections and acme's part only. Without a tenant, `provc` is the admin, and sees every part. Read "A configuration for each tenant" in [docs/design.md](docs/design.md).
+
 ## The cache
 
 The cache folder is `~/.cache/provcat`. The environment variable `PROVCAT_CACHE`, the `cache.root` setting or the `--cache` option can change it. The files have readable paths, so a container can mount a part of the cache.
