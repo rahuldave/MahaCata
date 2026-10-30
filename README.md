@@ -6,7 +6,14 @@ The first commit of this repository is the provcat code as it was found in `~/Ca
 
 ## Layout
 
-This repository is a uv workspace. A uv workspace is one repository with several Python packages, one lock file and editable installs between them. provcat lives in `packages/provcat`, with its tests, scripts and example configuration. Run `uv sync` and `uv run pytest` from the root.
+This repository is a uv workspace with two Python packages. A uv workspace is one repository with several packages, one lock file and editable installs between them.
+
+| Package | Folder | What it does |
+|---|---|---|
+| provcat | `packages/provcat` | Resolves catalog URIs, caches files and writes through to stores. Its command is `provc`. |
+| provrun | `packages/provrun` | Runs agents and model calls on data that provcat resolves, and records the evidence of each run. Its command is `provr`. Read [docs/provrun.md](docs/provrun.md). |
+
+provrun depends on provcat, and provcat does not depend on provrun. [docs/provrun-plan.md](docs/provrun-plan.md) is the plan that provrun follows.
 
 ## Install and run
 
@@ -101,6 +108,8 @@ The cache folder is `~/.cache/provcat`. The environment variable `PROVCAT_CACHE`
 ```
 
 provcat stores a GitHub file under its commit, so the file never goes stale. provcat checks an S3 file against its ETag before each use, and downloads it again when the ETag changed. With `--offline`, provcat reads only the cache. For a branch, it uses the last commit that it pinned.
+
+A fetch can rewrite a cached file in place when a branch moves. So do not mount a cached path into a container. Mount a snapshot instead. `Catalog.snapshot(uri)` pins the URI, fetches that version, and copies it into `<cache>/.provcat/snapshots/<kind>/<sha256>/<name>`. The kind is `file` or `folder`, the folder name is the SHA-256 of the content, and the copy is read-only. Before provcat uses a snapshot again, it checks the digest, and it replaces a snapshot that someone changed.
 
 ## Commands
 

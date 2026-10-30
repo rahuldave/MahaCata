@@ -17,6 +17,12 @@ Writes take a logical or a physical URI:
     cat.put("data+table://acme/shared/dev/agreements/qa_outputs/part-0.parquet", "out.parquet")
     pinned = cat.commit("data+table://acme/shared/dev/agreements/qa_outputs", "qa run 42")
 
+A snapshot pins a URI, fetches the pinned version, and copies it into a
+read-only folder of the cache named by its content:
+
+    snap = cat.snapshot("data+table://acme/shared/prod/agreements/qa_outputs")
+    snap.pinned, snap.path, snap.digest
+
 A write goes to a branch: a URI with no ?at=, which writes to the scheme's
 default branch, or one with ?at=branch:NAME. Any other selector names a fixed
 version, which cannot change, so it is refused.
@@ -25,14 +31,26 @@ from __future__ import annotations
 
 import os
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
-from .cache import LocalCache
+from .cache import LocalCache, snapshot
 from .config import ConfigSource, View, check, open_config, view
 from .errors import ConfigError, ResolveError, StoreError, UriError
 from .resolver import Resolution, Resolver, TemplateResolver
 from .stores import DEFAULT_STORES, Entry, Store, make_store
 from .uri import Uri, parse
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    """A read-only copy of one pinned version of a file or a folder."""
+
+    uri: Uri  # as asked for
+    pinned: Uri  # the physical URI, pinned to a version where the store has versions
+    path: Path
+    digest: str  # the SHA-256 of the file, or of the folder (see cache.tree_digest)
+    kind: str  # "file" or "folder"
 
 
 class Catalog:
@@ -106,6 +124,17 @@ class Catalog:
         """Return a local path that holds the file or folder."""
         store, u = self._store(uri)
         return store.fetch(u, self.cache)
+
+    def snapshot(self, uri: str | Uri) -> Snapshot:
+        """Pin uri, fetch that version, and copy it into a read-only folder of
+        the cache that no later fetch changes. A store without versions, such
+        as file, pins a URI to itself; the digest still names the bytes."""
+        u = parse(uri)
+        pinned = self.pin(u)
+        src = self.fetch(pinned)
+        name = pinned.segments[-1] if pinned.segments else (pinned.authority or "root")
+        path, digest = snapshot(self.cache, src, name)
+        return Snapshot(u, pinned, path, digest, "folder" if path.is_dir() else "file")
 
     def read(self, uri: str | Uri) -> bytes:
         p = self.fetch(uri)

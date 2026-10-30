@@ -1,10 +1,11 @@
 [project]
 name = "mahacata"
 version = "0.1.0"
-description = "Workspace root for provcat"
+description = "Workspace root for provcat and provrun"
 requires-python = ">=3.13"
 dependencies = [
     "provcat",
+    "provrun[litellm,pydantic-ai]",
 ]
 
 [tool.uv]
@@ -15,9 +16,10 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 provcat = { workspace = true }
+provrun = { workspace = true }
 
 [tool.pytest.ini_options]
-testpaths = ["packages/provcat/tests"]
+testpaths = ["packages/provcat/tests", "packages/provrun/tests"]
 addopts = "-m 'not system'"
 markers = [
     "unit: no servers; only the code and temporary files",

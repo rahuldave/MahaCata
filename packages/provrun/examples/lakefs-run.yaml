@@ -1,0 +1,18 @@
+# Run one model call on a file in lakeFS. It needs the local lakeFS, whose
+# quickstart repository has this README, and the store "lakefs" of the example
+# provcat configuration:
+#   provr run packages/provrun/examples/lakefs-run.yaml --config packages/provcat/config/provcat.example.yaml
+run:
+  org: acme
+  domain: demo
+  env: dev
+  actor: you@example.com
+agent:
+  name: readme-summary
+  backend: litellm
+  model: openai/gpt-4o-mini
+  prompt: Summarize this README in one sentence.
+  inputs:
+    - lakefs://quickstart/main/README.md
+  settings:
+    mock_response: The README explains the lakeFS quickstart.

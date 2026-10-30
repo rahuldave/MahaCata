@@ -1,0 +1,43 @@
+[project]
+name = "provrun"
+version = "0.1.0"
+description = "Run agents and model calls on catalog data, and record the evidence of each run"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "provcat",
+    "opentelemetry-api>=1.30.0",
+    "pyyaml>=6.0.3",
+]
+
+[project.optional-dependencies]
+# litellm releases after 1.82.6 were compromised; keep the upper limit.
+litellm = ["litellm<=1.82.6"]
+pydantic-ai = [
+    "pydantic-ai-slim>=1.70.0",
+    "pydantic-ai-filesystem-sandbox>=0.9.0",
+]
+
+[project.scripts]
+provr = "provrun.cli:main"
+
+[project.entry-points."provrun.backends"]
+litellm = "provrun.backends.litellm:LiteLLMBackend"
+pydantic-ai = "provrun.backends.pydantic_ai:PydanticAIBackend"
+
+[project.entry-points."provrun.stagers"]
+in-process = "provrun.stagers:InProcessStager"
+
+[project.entry-points."provrun.tools"]
+grep_file = "provrun.tools.grep:grep_file"
+add_note = "provrun.tools.note:add_note"
+
+[tool.uv.sources]
+provcat = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/provrun"]

@@ -1,0 +1,19 @@
+# Run one model call on a local file. Make the file first:
+#   mkdir -p /tmp/provrun-example && echo "Revenue in 2025 was 42 million." > /tmp/provrun-example/report.txt
+# mock_response makes litellm answer without a model or a key. Remove it, and
+# set the key of the model's provider, to call the model.
+run:
+  org: acme
+  domain: demo
+  env: dev
+  actor: you@example.com
+agent:
+  name: revenue-question
+  backend: litellm
+  model: openai/gpt-4o-mini
+  instructions: Answer from the document only.
+  prompt: What was revenue in 2025?
+  inputs:
+    - file:///tmp/provrun-example/report.txt
+  settings:
+    mock_response: Revenue in 2025 was 42 million.
