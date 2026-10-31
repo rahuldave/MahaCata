@@ -102,7 +102,7 @@ A run checks its settings before it makes the run folder. Each of these raises `
 
 An error after that fails the run. The outcome holds the error, and the evidence records it.
 
-Every error that provrun raises on purpose is a `ProvrunError`, so a program can catch them in one place. An error from the system, such as a runs root that cannot be written, comes through as it is. `provr verify` still holds its own checks of the outputs and the bundle; they move into a library later.
+Every error that provrun raises on purpose is a `ProvrunError`, so a program can catch them in one place. An error from the system, such as a runs root that cannot be written, comes through as it is. The checks behind `provr verify` are in provevi's library, and [provevi's page](provevi.md) shows how a program calls them.
 
 Two settings in provrun affect the whole process:
 
@@ -172,14 +172,15 @@ The run folder holds the evidence:
 <run folder>/scratch/                    working space, not in the bundle
 ```
 
-Each event holds the SHA-256 of the line before it. `provr verify` checks these things:
+Each event holds the SHA-256 of the line before it. `provr verify` checks these things, by calling provevi, which also has the command `prove verify`:
 
 - the chain, and the sequence number of each event
 - that the first event is `run_created`, and that the last event is `run_completed` or `run_failed`
 - that the manifest counts every event and ends at the last one
 - that every event and the manifest belong to the run of the folder
-- the payloads, by their SHA-256
+- the payloads, by their SHA-256, and that the payload folder holds exactly the payloads that the manifest lists
 - that the output folder holds exactly the recorded outputs, with the recorded SHA-256
+- that each output is a regular file, recorded once, and named by the reference of its event
 
 If someone changes, removes, adds or reorders an event, or changes a payload or an output, the check fails.
 

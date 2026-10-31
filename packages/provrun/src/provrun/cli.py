@@ -15,63 +15,13 @@ import json
 import sys
 from pathlib import Path
 
+import provevi
+from provcat import ProvcatError
+from provevi.cli import add_verify_arguments, verify_command
+
 from .context import default_runs_root, find_run
 from .errors import ProvrunError
-from .evidence import EvidenceError, read_events, sha256_bytes, verify, verify_against
-
-
-def _run_folder(run: str, root: Path) -> Path:
-    return find_run(run, root)
-
-
-def _verify_outputs(folder: Path) -> list[str]:
-    """The files in output/ must be exactly the recorded outputs, with their bytes."""
-    problems = []
-    recorded = {}
-    for e in read_events(folder / "evidence"):
-        if e.type == "output_artifact_created":
-            recorded[e.data["path"].split("/", 2)[-1]] = e.data["sha256"]
-    out = folder / "output"
-    present = {f.relative_to(out).as_posix() for f in out.rglob("*") if f.is_file() or f.is_symlink()} \
-        if out.is_dir() else set()
-    for rel in sorted(present - set(recorded)):
-        problems.append(f"output {rel} is not in the evidence")
-    for rel, digest in sorted(recorded.items()):
-        f = out / rel
-        if rel not in present:
-            problems.append(f"output {rel} is missing")
-        elif f.is_symlink() or sha256_bytes(f.read_bytes()) != digest:
-            problems.append(f"output {rel} was changed")
-    return problems
-
-
-def _bundle_pin(folder: Path, args) -> str | None:
-    """The commit to compare with: --bundle if given, else the one that
-    bundle.json names. bundle.json is in the run folder, so whoever can change
-    the folder can remove it or point it elsewhere; --bundle takes the commit
-    from outside the folder."""
-    record = folder / "bundle.json"
-    named = json.loads(record.read_text()).get("pinned") if record.exists() else None
-    return args.bundle or named
-
-
-def _verify_bundle(folder: Path, args) -> list[str]:
-    """Compare the evidence with the committed bundle, if the run has one."""
-    pinned = _bundle_pin(folder, args)
-    if not pinned:
-        return ["no committed bundle to compare with, and --require-bundle is set"] if args.require_bundle else []
-    from provcat import Catalog, parse
-
-    if parse(pinned).selector is None:
-        return [f"the bundle {pinned} is not pinned; give the URI with ?at= from the commit"]
-    catalog = Catalog.open(args.config, tenant=args.tenant)
-    base = parse(pinned).child("evidence")
-    try:
-        events = catalog.read(base.child("events.jsonl"))
-        manifest = catalog.read(base.child("manifest.json"))
-    except Exception as e:
-        return [f"cannot read the committed bundle {pinned}: {e}"]
-    return verify_against(folder / "evidence", events, manifest)
+from .evidence import read_events
 
 
 def cmd_run(args) -> int:
@@ -89,7 +39,7 @@ def cmd_run(args) -> int:
 
 
 def cmd_show(args) -> int:
-    folder = _run_folder(args.run, args.runs)
+    folder = find_run(args.run, args.runs)
     for e in read_events(folder / "evidence"):
         refs = " ".join(e.refs)
         data = json.dumps(e.data, ensure_ascii=False, default=str)
@@ -98,17 +48,7 @@ def cmd_show(args) -> int:
 
 
 def cmd_verify(args) -> int:
-    folder = _run_folder(args.run, args.runs)
-    problems = verify(folder / "evidence", run_id=folder.name)
-    if not problems:
-        problems = _verify_outputs(folder) + _verify_bundle(folder, args)
-    for p in problems:
-        print(f"provr: {p}", file=sys.stderr)
-    if not problems:
-        anchored = _bundle_pin(folder, args)
-        print(f"{folder.name}: the evidence and the outputs verify"
-              + (", and match the committed bundle" if anchored else "; no committed bundle to compare with"))
-    return 1 if problems else 0
+    return verify_command(args, "provr", find_run(args.run, args.runs))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -125,22 +65,16 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("show", help="print the events of a run")
     s.add_argument("run")
     s.set_defaults(fn=cmd_show)
-    v = sub.add_parser("verify", help="check the evidence and the outputs of a run")
-    v.add_argument("run")
-    v.add_argument("--config", help="the provcat configuration, to read the committed bundle")
-    v.add_argument("--tenant", help="the provcat tenant")
-    v.add_argument("--bundle", help="the pinned URI of the committed bundle, taken from outside the run folder; "
-                                    "used instead of bundle.json")
-    v.add_argument("--require-bundle", action="store_true",
-                   help="fail if there is no committed bundle to compare with")
+    v = sub.add_parser("verify", help="check the evidence and the outputs of a run, as prove verify does")
+    add_verify_arguments(v)
     v.set_defaults(fn=cmd_verify)
     args = ap.parse_args(argv)
     try:
         return args.fn(args)
-    except EvidenceError as e:
+    except provevi.EvidenceError as e:  # provrun's EvidenceError is one too
         print(f"provr: {e}", file=sys.stderr)
         return 2
-    except ProvrunError as e:
+    except (ProvrunError, provevi.ProveviError, ProvcatError) as e:
         print(f"provr: {e}", file=sys.stderr)
         return 1
 

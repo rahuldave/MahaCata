@@ -4,7 +4,7 @@ project:
 
 website:
   title: MahaCata
-  description: provcat, which resolves, reads and writes catalog URIs, and provrun, which runs agents on them and records the evidence
+  description: provcat, which resolves, reads and writes catalog URIs, provrun, which runs agents on them, and provevi, which stores and checks the evidence
   repo-url: https://github.com/rahuldave/MahaCata
   repo-subdir: docs
   page-navigation: true
@@ -17,7 +17,7 @@ website:
         text: provcat
       - href: provrun.md
         text: provrun
-      - href: provevi-design.md
+      - href: provevi.md
         text: provevi
       - href: api/index.md
         text: Reference
@@ -44,6 +44,7 @@ website:
           - provrun-plan.md
       - section: provevi
         contents:
+          - provevi.md
           - provevi-design.md
           - provevi-plan.md
           - provevi-research/earlier-runtime-traces.md
@@ -58,6 +59,6 @@ toc: true
 code-copy: true
 linkify: true
 api:
-  packages: [provcat, provrun]
+  packages: [provcat, provrun, provevi]
   root: ..
   source: https://github.com/rahuldave/MahaCata/blob/main

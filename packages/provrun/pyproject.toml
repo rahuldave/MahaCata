@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "provcat",
+    "provevi",
     "opentelemetry-api>=1.30.0",
     "pyyaml>=6.0.3",
 ]
@@ -38,6 +39,7 @@ add_note = "provrun.tools.note:add_note"
 
 [tool.uv.sources]
 provcat = { workspace = true }
+provevi = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

@@ -377,7 +377,8 @@ chmod -R u+w /tmp/provrun-tour && rm -rf /tmp/provrun-tour
 | Hash, clone and freeze | `packages/provcat/src/provcat/cache.py` |
 | Stage and verify inputs | `packages/provrun/src/provrun/stagers.py` |
 | Run the model | `packages/provrun/src/provrun/backends/litellm.py` |
-| Write the events | `packages/provrun/src/provrun/evidence.py` |
+| Write the events | `packages/provrun/src/provrun/evidence.py`, through a store in `packages/provevi/src/provevi/store.py` |
+| Check the evidence, the outputs and the bundle | `packages/provevi/src/provevi/checks.py` |
 | Commit the bundle | `packages/provrun/src/provrun/context.py` |
 | The library entry and its errors | `packages/provrun/src/provrun/runner.py`, `spec.py` and `errors.py` |
-| The commands | `packages/provrun/src/provrun/cli.py` |
+| The commands | `packages/provrun/src/provrun/cli.py`; `provr verify` calls `packages/provevi/src/provevi/cli.py` |

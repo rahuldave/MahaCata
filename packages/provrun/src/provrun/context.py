@@ -24,7 +24,6 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import json
-import os
 import re
 import secrets
 import warnings
@@ -33,6 +32,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import provevi
+from provevi import EvidenceStore, default_runs_root, verify_against
 
 from .errors import RunNotFound, RunSettingError
 from .evidence import MODES, EvidenceError, EvidenceRecorder
@@ -69,31 +71,12 @@ def new_run_id() -> str:
     return f"run-{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{secrets.token_hex(4)}"
 
 
-def default_runs_root() -> Path:
-    env = os.environ.get("PROVRUN_RUNS")
-    if env:
-        return Path(env)
-    xdg = os.environ.get("XDG_DATA_HOME")
-    return (Path(xdg) if xdg else Path.home() / ".local" / "share") / "provrun" / "runs"
-
-
 def find_run(run: str | Path, root: str | Path | None = None, *, ids_only: bool = False) -> Path:
-    """The folder of a run, as an absolute path. run is a run ID under root
-    (the default runs root when None), or else a path to a run folder. With
-    ids_only, run must be a run ID, so a name from a user cannot reach
-    another folder. Raises RunNotFound."""
-    text = str(run)
-    root = Path(root) if root is not None else default_runs_root()
-    if text and text not in (".", "..") and not re.search(r"[/\\]", text):
-        p = root / text
-        if (p / "evidence").is_dir():
-            return p.resolve()
-    elif ids_only:
-        raise RunNotFound(f"{text!r} is not a run ID")
-    p = Path(run)
-    if not ids_only and text and p.is_dir() and (p / "evidence").is_dir():
-        return p.resolve()
-    raise RunNotFound(f"no run {text!r} under {root}")
+    """The folder of a run, as provevi.find_run finds it. Raises RunNotFound."""
+    try:
+        return provevi.find_run(run, root, ids_only=ids_only)
+    except provevi.RunNotFound as e:
+        raise RunNotFound(str(e)) from None
 
 
 def current_run() -> RunContext:
@@ -133,11 +116,12 @@ class RunContext:
     def open(cls, *, org: str, domain: str, env: str, actor: str, broker: Broker, resolver: Resolver,
              catalog: Catalog | None = None, runs_root: Path | None = None, mode: str | None = None,
              bundle_scheme: str | None = None, run_id: str | None = None,
-             data: dict | None = None) -> RunContext:
+             data: dict | None = None, store: EvidenceStore | None = None) -> RunContext:
         """Make the run ID and the run folder, and write run_created. The
         evidence mode is lenient in dev and strict in every other environment,
-        unless mode says otherwise. A bad setting raises RunSettingError
-        before the folder is made."""
+        unless mode says otherwise. The evidence goes through store, a
+        provevi store, by default the file store. A bad setting raises
+        RunSettingError before the folder is made."""
         for name, value in (("org", org), ("domain", domain), ("env", env)):
             check_segment(name, value)
         if mode is not None and mode not in MODES:
@@ -150,7 +134,7 @@ class RunContext:
         for sub in ("output", "input", "scratch"):
             (folder / sub).mkdir()
         recorder = EvidenceRecorder(run_id, actor, folder / "evidence",
-                                    mode=mode or ("lenient" if env == "dev" else "strict"))
+                                    mode=mode or ("lenient" if env == "dev" else "strict"), store=store)
         ctx = cls(run_id, org, domain, env, actor, folder, recorder, broker, resolver, catalog, bundle_scheme)
         recorder.emit("run_created", "RunContext", refs=[ctx.run_uri],
                       data={"org": org, "domain": domain, "env": env, "mode": recorder.mode, **(data or {})})
@@ -235,11 +219,10 @@ class RunContext:
         try:
             pinned = self.catalog.pin(self.run_uri)
             base = parse(str(pinned)).child("evidence")
-            same = all(self.catalog.read(base.child(n)) == (self.folder / "evidence" / n).read_bytes()
-                       for n in ("events.jsonl", "manifest.json"))
+            events, manifest = (self.catalog.read(base.child(n)) for n in ("events.jsonl", "manifest.json"))
         except Exception:
             return None
-        return str(pinned) if same else None
+        return None if verify_against(self.folder / "evidence", events, manifest) else str(pinned)
 
     def _bundle_failed(self, bundle: Bundle, message: str) -> Bundle:
         if self.recorder.mode == "strict":

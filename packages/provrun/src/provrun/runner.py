@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Literal
 
 from provcat import Catalog
+from provevi import EvidenceStore
 
 from .access import Broker, StubBroker
 from .backends import Backend, RunResult, load_backend
@@ -69,9 +70,11 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
                     allow: list[str] | None = None, broker: Broker | None = None,
                     resolver: Resolver | None = None, stager: Stager | None = None,
                     backend: Backend | None = None, runs_root: Path | None = None,
-                    mode: str | None = None, bundle_scheme: str | None = None) -> RunOutcome:
+                    mode: str | None = None, bundle_scheme: str | None = None,
+                    store: EvidenceStore | None = None) -> RunOutcome:
     """Run agent once. With no broker, a StubBroker allows the inputs of the
-    spec and the URIs in allow. A bad setting or an unknown backend raises
+    spec and the URIs in allow. The evidence goes through store, a provevi
+    store, by default the file store in the run folder. A bad setting or an unknown backend raises
     RunSettingError before the run folder is made; any later error fails the
     run, and the outcome holds it."""
     if backend is None:
@@ -84,7 +87,7 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
         broker = StubBroker(allow, physical_schemes=catalog.stores.keys())
     ctx = RunContext.open(org=org, domain=domain, env=env, actor=actor, broker=broker,
                           resolver=resolver or ProvcatResolver(catalog), catalog=catalog,
-                          runs_root=runs_root, mode=mode, bundle_scheme=bundle_scheme,
+                          runs_root=runs_root, mode=mode, bundle_scheme=bundle_scheme, store=store,
                           data={"agent": agent.name, "backend": agent.backend, "spec": agent.to_dict()})
     stager = stager or InProcessStager()
     outcome = RunOutcome(ctx.run_id, "failed", ctx.folder, Bundle(ctx.folder))
@@ -119,7 +122,8 @@ async def run_file(rf: RunFile, *, catalog: Catalog, runs_root: Path | None = No
                    bundle_scheme: str | Literal[False] | None = None, **parts) -> RunOutcome:
     """Run a checked run file. bundle_scheme, when given, takes the place of
     the run file's; False writes no bundle through the catalog. The other
-    keyword arguments (broker, resolver, stager, backend) go to run_agent."""
+    keyword arguments (broker, resolver, stager, backend, store) go to
+    run_agent."""
     s = rf.settings
     scheme = s.bundle_scheme if bundle_scheme is None else (None if bundle_scheme is False else bundle_scheme)
     return await run_agent(rf.agent, catalog=catalog, org=s.org, domain=s.domain, env=s.env, actor=s.actor,

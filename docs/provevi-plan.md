@@ -22,6 +22,8 @@ provrun depends on provevi, and provevi depends on provcat. provevi never import
 
 ## Phase 1: the package, and the `file` store
 
+**Status: done, but for one part of step 3.** [provevi's page](provevi.md) describes what it built. A store cannot yet read a run back. So each store keeps the files in the run folder, where the checks and the bundle read them. Phase 2 adds reading through the store, because the `sqlite` store needs it.
+
 Move what stores and checks evidence out of provrun, into a new package at `packages/provevi`.
 
 1. Make the package, with its command `prove`. Add it to the workspace and to the site's reference pages.
@@ -44,8 +46,9 @@ Write provevi's own tables, as [the design](provevi-design.md#the-run-record) gi
 2. Write the `sqlite` store. Its sink writes each event as it happens. It writes the run row at the start and the last hash and manifest hash at the seal.
 3. Keep the payloads in a folder, each named by its hash, as the `file` store does. Record each one in the payloads table.
 4. Write the bundle files at the seal, so that provrun commits the same bundle through provcat as before.
-5. Add queries to the library and to `prove`. They find the runs that read a URI, the runs of an experiment, and the grants and refusals of a run.
-6. Choose the store from a URI, such as `sqlite:///path/evidence.db`, given to `run_file`, to `provr run --store`, or in the run file.
+5. Let a store read a run back, with its events, payloads and manifest, and run the checks through it. Phase 1 left this part of its step 3 for this phase.
+6. Add queries to the library and to `prove`. They find the runs that read a URI, the runs of an experiment, and the grants and refusals of a run.
+7. Choose the store from a URI, such as `sqlite:///path/evidence.db`, given to `run_file`, to `provr run --store`, or in the run file.
 
 **Tests:** a run in the `sqlite` store verifies, and its bundle equals the bundle of the same run in the `file` store. A changed or removed row fails `verify`. Two runs at once write one file without losing an event.
 

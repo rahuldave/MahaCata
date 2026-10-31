@@ -1,6 +1,8 @@
 """Errors raised by provrun. Every error that provrun raises on purpose is a
 ProvrunError, so a program that calls provrun can catch them in one place."""
 
+import provevi
+
 
 class ProvrunError(Exception):
     """Base class for every provrun error."""
@@ -14,5 +16,6 @@ class RunSettingError(ProvrunError, ValueError):
     """A setting passed to a run, such as its environment or evidence mode, is bad."""
 
 
-class RunNotFound(ProvrunError, LookupError):
-    """No run folder has the run ID or path that was given."""
+class RunNotFound(ProvrunError, provevi.RunNotFound):
+    """No run folder has the run ID or path that was given. It is also a
+    provevi RunNotFound."""
