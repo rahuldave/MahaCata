@@ -51,7 +51,7 @@ The hooks control the code that uses the catalog API. They do not stop code that
 So a gate is a security control only when the gated code cannot reach the keys or the cache folder:
 
 - **Now.** provrun runs the agent in its own process. The sandbox is a set of paths, `/input`, `/output` and `/scratch`, that the tools of the agent see. The keys and the cache folder are in the same process. So the sandbox holds only while the agent has no tool that runs code.
-- **Step 6 of the plan.** The agent moves to its own process or container, which holds no keys and no cache folder. Code there asks the provrun process to open a URI, and the provrun process runs the catalog with the gate. Undeclared opens are a security control only after this move.
+- **Step 6 of the plan of pull requests below.** The agent moves to its own process or container, which holds no keys and no cache folder. Code there asks the provrun process to open a URI, and the provrun process runs the catalog with the gate. Undeclared opens are a security control only after this move.
 - **Later.** The access layer gives short-lived keys for each grant, so the keys themselves carry the limits.
 
 Outside a sandbox, for example in a notebook, the hooks are a policy for code that cooperates. They are not a wall.
@@ -75,7 +75,9 @@ Each operation of the catalog passes through fixed spots:
 
 Each spot gets the logical URI that started the operation too, also at `fetch` and `snapshot`. So a hook can decide by the logical name at every spot.
 
-The catalog calls the `pin` spot before every `fetch`, `snapshot` and `open` for reading. The drivers pin inside `fetch` now. Step 4 of the plan moves that pin out of the drivers, so a hook at `pin` sees the pin of every read. `stat` and `list` do not pin first. A file that a session put on a lakeFS branch, and did not commit yet, is on the branch but in no commit. So a `stat` or a `list` of the branch must still find it.
+The catalog calls the `pin` spot before every `fetch`, `snapshot` and `open` for reading. The drivers pin inside `fetch` now.
+
+Step 4 of the plan of pull requests below moves that pin out of the drivers. Then a hook at `pin` sees the pin of every read. `stat` and `list` do not pin first. A file that a session put on a lakeFS branch, and did not commit yet, is on the branch but in no commit. So a `stat` or a `list` of the branch must still find it.
 
 ## Hooks
 
@@ -206,7 +208,7 @@ The provcat GitHub driver does not handle Git LFS now. A live test confirmed the
 3. **Catalog entries.** The lookup takes entries by the rules above, in the YAML file and in etcd.
 4. **The lifecycle spots and the hooks.** The catalog runs each operation through its spots, and it pins before each read. The proxy configuration and the entry points come in. Nothing changes for users who have no hooks file.
 5. **The fsspec file system.** `catalog.fs()` gives the adapter, with a pin at open and the cache of blocks. The logical schemes register as fsspec protocols.
-6. **provrun on the hooks.** The broker becomes a gate hook, and the evidence becomes a recorder hook. The agent moves to its own process or container, and undeclared opens go from it to the provrun process. provrun belongs to another session, so this step needs agreement with it first.
+6. **provrun on the hooks.** The broker becomes a gate hook, and the evidence becomes a recorder hook. The agent moves to its own process or container, and undeclared opens go from it to the provrun process. This step changes provrun, so it needs agreement on provrun's design first.
 
 Steps 1 to 3 do not depend on each other. Step 5 needs step 4, and step 6 needs steps 4 and 5.
 
