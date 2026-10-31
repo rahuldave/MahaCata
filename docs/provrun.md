@@ -60,11 +60,60 @@ uv run provr run packages/provrun/examples/claude-agent.yaml
 
 To call another model, change `model` in the run file, and set the key of its provider, for example `OPENAI_API_KEY`. The evidence holds the prompts and the responses, but not the key. An agent spec refuses a setting that can carry a key, such as `api_key` or `extra_headers`, because the spec goes into the evidence.
 
+## Use provrun from a program
+
+An orchestrator, or any other program, can do all that `provr run` and `provr show` do by calling provrun. `provr` only reads its arguments, calls these functions and prints. The library prints nothing, and it takes its catalog, runs root and settings as arguments.
+
+```python
+from provcat import Catalog
+from provrun import RunFile, find_run, run_file_sync
+
+rf = RunFile.load("packages/provrun/examples/file-run.yaml")
+outcome = run_file_sync(rf, catalog=Catalog.open())
+print(outcome.status, outcome.run_id)
+print(find_run(outcome.run_id))
+```
+
+`Catalog.open()` reads the provcat configuration as `provr run` does. With the input file of step 1 above and `PROVRUN_RUNS=/tmp/provrun-example/runs`, it prints:
+
+```
+completed run-20261031T173013Z-38c86007
+/private/tmp/provrun-example/runs/run-20261031T173013Z-38c86007
+```
+
+On macOS `/tmp` is a link to `/private/tmp`, and `find_run` gives the real path.
+
+| Function | What it does |
+|---|---|
+| `RunFile.load(path)` | Reads and checks a run file. A missing or bad part raises `RunFileError`. |
+| `run_file(rf, catalog=..., runs_root=..., mode=..., bundle_scheme=...)` | Runs it, as a coroutine. It also takes `broker`, `resolver`, `stager` and `backend`, which replace the defaults. `bundle_scheme=False` writes no bundle through the catalog, even if the run file sets a scheme. |
+| `run_file_sync(rf, ...)` | The same, for a program with no event loop running. |
+| `outcome.to_dict()` | The summary that `provr run` prints. |
+| `find_run(run, root, ids_only=False)` | The absolute folder of a run, from its ID or its path. A run ID under `root` comes before a folder in the working directory. With `ids_only=True`, only a run ID is taken, so a name from a user cannot reach another folder. A missing run raises `RunNotFound`. |
+| `read_events(folder)` | The events in the evidence folder of a run, as `provr show` prints them. |
+| `run_agent(agent, catalog=..., org=..., ...)` | Runs an agent spec with the run settings given one by one. |
+
+A run checks its settings before it makes the run folder. Each of these raises `RunSettingError` and leaves no folder behind:
+
+- a mode that is not `strict` or `lenient`;
+- an org, domain or environment that is not one part of a URI;
+- a bundle scheme that is not a plain scheme name, or that names a store;
+- an unknown backend.
+
+An error after that fails the run. The outcome holds the error, and the evidence records it.
+
+Every error that provrun raises on purpose is a `ProvrunError`, so a program can catch them in one place. An error from the system, such as a runs root that cannot be written, comes through as it is. `provr verify` still holds its own checks of the outputs and the bundle; they move into a library later.
+
+Two settings in provrun affect the whole process:
+
+- When the LiteLLM backend first calls LiteLLM, it sets `litellm.suppress_debug_info`, so LiteLLM prints nothing on stdout. This also applies to the program's own LiteLLM calls.
+- Before each LiteLLM call, the backend sets the environment variable `USE_OTEL_LITELLM_REQUEST_SPAN` to `true`, so that LiteLLM's tracing does not write onto provrun's span. A value that is already set is kept, with a warning if it is not `true`.
+
 ## The run file
 
 A run file has two sections:
 
-- **`run`** names the org, the domain, the environment and the actor of the run. It can also hold `allow`, a list of more URIs that the stub broker allows, and `bundle_scheme`.
+- **`run`** names the org, the domain, the environment and the actor of the run. It can also hold `allow`, a list of more URIs that the stub broker allows, and `bundle_scheme`. Any other key is refused. The org, the domain and the environment become parts of the run URI. So each must be one part, with no `/`, `?`, `#` or space. Each entry of `allow` must be a URI.
 - **`agent`** is an agent spec.
 
 | Key of the agent spec | Meaning |

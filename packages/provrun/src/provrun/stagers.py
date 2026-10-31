@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from provcat.cache import copy_readonly, tree_digest
 
+from .errors import ProvrunError
 from .spec import RunSpec, StagedInput
 
 if TYPE_CHECKING:
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
     from .resolve import Snapshot
 
 
-class InputCheckError(Exception):
+class InputCheckError(ProvrunError):
     """A staged input changed during the run."""
 
 

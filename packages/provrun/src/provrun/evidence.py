@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from . import otel
+from .errors import ProvrunError
 
 EVENT_TYPES = frozenset({
     "run_created", "run_completed", "run_failed",
@@ -48,7 +49,7 @@ CONFIDENCE = ("observed", "parsed", "inferred", "verified")
 MODES = ("strict", "lenient")
 
 
-class EvidenceError(Exception):
+class EvidenceError(ProvrunError):
     """Evidence could not be written or does not verify."""
 
 

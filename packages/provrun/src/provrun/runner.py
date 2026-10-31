@@ -11,20 +11,31 @@ The steps, each of which writes its evidence:
 7. Finish the run and write the bundle.
 
 A failure at any step writes run_failed, and the bundle is still written.
+
+A program runs a run file the way ``provr run`` does::
+
+    outcome = run_file_sync(RunFile.load("run.yaml"), catalog=Catalog.open())
+    outcome.to_dict()
+
+``run_agent`` takes the parts one by one, and the broker, resolver, stager
+and backend can be passed in.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from provcat import Catalog
 
 from .access import Broker, StubBroker
 from .backends import Backend, RunResult, load_backend
 from .context import Bundle, RunContext
+from .errors import RunSettingError
 from .outputs import Artifact, Outputter
 from .resolve import ProvcatResolver, Resolver
-from .spec import AgentSpec
+from .spec import AgentSpec, RunFile
 from .stagers import InProcessStager, Stager
 
 
@@ -37,6 +48,12 @@ class RunOutcome:
     result: RunResult | None = None
     artifacts: list[Artifact] | None = None
     error: BaseException | None = None
+
+    def to_dict(self) -> dict:
+        """The summary that ``provr run`` prints, as plain values."""
+        return {"run_id": self.run_id, "status": self.status, "folder": str(self.folder),
+                "bundle": self.bundle.uri, "pinned": self.bundle.pinned, "note": self.bundle.note,
+                "error": f"{self.error.__class__.__name__}: {self.error}" if self.error else None}
 
 
 def input_name(uri: str, given: str | None) -> str:
@@ -54,7 +71,14 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
                     backend: Backend | None = None, runs_root: Path | None = None,
                     mode: str | None = None, bundle_scheme: str | None = None) -> RunOutcome:
     """Run agent once. With no broker, a StubBroker allows the inputs of the
-    spec and the URIs in allow."""
+    spec and the URIs in allow. A bad setting or an unknown backend raises
+    RunSettingError before the run folder is made; any later error fails the
+    run, and the outcome holds it."""
+    if backend is None:
+        try:
+            backend = load_backend(agent.backend)
+        except ValueError as e:
+            raise RunSettingError(str(e)) from e
     if broker is None:
         allow = list(allow or []) + [i.uri for i in agent.inputs]
         broker = StubBroker(allow, physical_schemes=catalog.stores.keys())
@@ -72,7 +96,6 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
             grant = ctx.broker.request(ctx, i.uri, i.mode, purpose=agent.name)
             snapshots.append((input_name(i.uri, i.name), ctx.resolver.snapshot(ctx, grant)))
         run = stager.stage(ctx, snapshots)
-        backend = backend or load_backend(agent.backend)
         outcome.result = await backend.run(ctx, agent, run)
         stager.verify_inputs(ctx, run)
         outcome.artifacts = Outputter().collect(ctx, run)
@@ -90,3 +113,19 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
     if error is not None and not isinstance(error, Exception):
         raise error  # a cancel or an interrupt goes on after the run is recorded
     return outcome
+
+
+async def run_file(rf: RunFile, *, catalog: Catalog, runs_root: Path | None = None, mode: str | None = None,
+                   bundle_scheme: str | Literal[False] | None = None, **parts) -> RunOutcome:
+    """Run a checked run file. bundle_scheme, when given, takes the place of
+    the run file's; False writes no bundle through the catalog. The other
+    keyword arguments (broker, resolver, stager, backend) go to run_agent."""
+    s = rf.settings
+    scheme = s.bundle_scheme if bundle_scheme is None else (None if bundle_scheme is False else bundle_scheme)
+    return await run_agent(rf.agent, catalog=catalog, org=s.org, domain=s.domain, env=s.env, actor=s.actor,
+                           allow=list(s.allow), runs_root=runs_root, mode=mode, bundle_scheme=scheme, **parts)
+
+
+def run_file_sync(rf: RunFile, **kw) -> RunOutcome:
+    """run_file, for a caller with no event loop running."""
+    return asyncio.run(run_file(rf, **kw))
