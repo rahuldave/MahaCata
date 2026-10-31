@@ -283,3 +283,76 @@ def test_a_commit_folder_with_case_twins_is_refused(cat, tmp_path):
         cat.fetch(pinned)
     assert cat.read(f"mem://b/main/t/A.csv?at={pinned.selector}") == b"upper"
     assert cat.read(f"mem://b/main/t/a.csv?at={pinned.selector}") == b"A1"
+
+
+def _frozen_clock(monkeypatch):
+    import provcat.stores.objects as objects
+    from datetime import UTC, datetime
+
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 1, 1, tzinfo=UTC)
+
+    monkeypatch.setattr(objects, "datetime", Frozen)
+
+
+def test_in_one_clock_tick_the_folder_above_wins(cat, monkeypatch):
+    """The flaky case: a folder and the folder above it committed in one tick.
+    Commit IDs are hashes, so the answer must not hang on them."""
+    _frozen_clock(monkeypatch)
+    cat.commit("mem://b/main/t", "t")
+    top = cat.commit("mem://b/main", "main")
+    for _ in range(3):
+        assert cat.pin("mem://b/main/t").selector == top.selector
+
+
+def test_a_commit_time_has_microseconds(cat):
+    pinned = cat.commit("mem://b/main/t", "t")
+    store = cat.stores["mem"]
+    cid = pinned.selector.value
+    m = json.loads(store._read_small(pinned, "b", f".provcat/commits/{cid}.json"))
+    assert len(m["time"].split(".")[1].split("+")[0]) == 6
+
+
+def test_a_commit_with_no_time_is_named(cat):
+    pinned = cat.commit("mem://b/main/t", "t")
+    store = cat.stores["mem"]
+    cid = pinned.selector.value
+    m = json.loads(store._read_small(pinned, "b", f".provcat/commits/{cid}.json"))
+    del m["time"]
+    store._manifest = lambda uri, c, cache: m
+    with pytest.raises(StoreError, match="records no time"):
+        cat.pin("mem://b/main/t/sub")
+
+
+@pytest.mark.parametrize("time, message", [
+    ("2026-01-01T00:00:00.000", "without a zone"),
+    ("yesterday", "which is not a time"),
+])
+def test_a_bad_commit_time_is_named(cat, time, message):
+    pinned = cat.commit("mem://b/main/t", "t")
+    store = cat.stores["mem"]
+    m = json.loads(store._read_small(pinned, "b", f".provcat/commits/{pinned.selector.value}.json"))
+    m["time"] = time
+    store._manifest = lambda uri, c, cache: m
+    with pytest.raises(StoreError, match=message):
+        cat.pin("mem://b/main/t")
+
+
+@pytest.mark.parametrize("old", ["2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000+00:00"])
+def test_an_old_millisecond_time_sorts_with_new_ones(cat, old):
+    """Commits made before this change stored milliseconds."""
+    first = cat.commit("mem://b/main/t", "t")
+    store = cat.stores["mem"]
+    top = cat.commit("mem://b/main", "main")
+    real = store._manifest
+
+    def manifest(uri, c, cache):
+        m = dict(real(uri, c, cache))
+        if c == first.selector.value:
+            m["time"] = old
+        return m
+
+    store._manifest = manifest
+    assert cat.pin("mem://b/main/t").selector == top.selector

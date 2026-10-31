@@ -521,6 +521,18 @@ class ObjectStore(Store):
         self._get(uri, bucket, key, buf)
         return buf.getvalue()
 
+    def _commit_time(self, uri: Uri, cid: str, cache: LocalCache | None) -> datetime:
+        text = self._manifest(uri, cid, cache).get("time")
+        if text is None:
+            raise StoreError(f"{uri}: commit {cid} records no time")
+        try:
+            made = datetime.fromisoformat(str(text))  # milliseconds before, microseconds now
+        except ValueError:
+            raise StoreError(f"{uri}: commit {cid} has the time {text!r}, which is not a time") from None
+        if made.tzinfo is None:
+            raise StoreError(f"{uri}: commit {cid} has a time without a zone")
+        return made
+
     def _newest_commit(self, uri: Uri, bucket: str, folder: str) -> tuple[int, str] | None:
         """The number and ID of folder's newest commit, or None."""
         prefix = self._log_prefix(folder)
@@ -552,13 +564,15 @@ class ObjectStore(Store):
             if entry.kind == "file":
                 return uri.with_selector(Selector("version", self._version_of(uri, bucket, key)))
         # Each folder above has its own log, so only their times compare them.
+        # Two commits in one clock tick tie; then the folder higher up wins, so
+        # the answer is the same every time and does not hang on the IDs.
         parts = key.split("/") if key else []
         found = []
         for n in range(len(parts), -1, -1):
             newest = self._newest_commit(uri, bucket, "/".join(parts[:n]))
             if newest:
-                found.append((self._manifest(uri, newest[1], cache)["time"], newest[1]))
-        for _, cid in sorted(found, reverse=True):
+                found.append((self._commit_time(uri, newest[1], cache), -n, newest[1]))
+        for _, _, cid in sorted(found, reverse=True):
             pinned = uri.with_selector(Selector("commit", cid))
             try:
                 self._stat_at(pinned, cache)
@@ -631,10 +645,11 @@ class ObjectStore(Store):
             if last and not allow_empty and self._manifest(uri, last[1], None)["files"] == files:
                 raise StoreError(f"{uri}: nothing to commit; no file changed since commit {last[1]}")
             number = last[0] + 1 if last else 1
+            made = datetime.now(UTC)
             manifest = {"format": _FORMAT, "folder": key, "number": number,
                         "parent": last[1] if last else None, "message": message,
                         "metadata": {str(k): str(v) for k, v in (metadata or {}).items()},
-                        "time": datetime.now(UTC).isoformat(timespec="milliseconds"), "files": files}
+                        "time": made.isoformat(timespec="microseconds"), "files": files}
             data = _canonical(manifest)
             cid = hashlib.sha256(data).hexdigest()
             where = f"{META}/commits/{cid}.json"

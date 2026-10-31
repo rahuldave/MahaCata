@@ -425,7 +425,7 @@ What a bucket commit does not give:
 
 - **Several files written as one step.** Writers write files one by one, and a reader of the live folder can see half a change. Read at a commit to get one moment. Write through lakeFS to make several files appear at once.
 - **Commits that outlive their versions.** A lifecycle rule that deletes old versions, or a person who deletes one, breaks the commits that name it. A read of such a file fails with "not found". Keep old versions while their commits matter.
-- **One order across folders.** Each folder has its own log. A pin compares the commits of a folder and of the folders above it by their time, which comes from each writer's clock.
+- **One order across folders.** Each folder has its own log. A pin compares the commits of a folder and of the folders above it by their time, which comes from each writer's clock. A commit records its time to the microsecond. If a folder and a folder above it have the same time, the folder above counts as newer. So a pin gives the same answer every time, but the answer is wrong when the folder below came second. When two writers' clocks differ, a later commit can also get an earlier time and sort as older.
 - **ADLS Gen2.** An account with a hierarchical namespace keeps no blob versions, so it can neither pin nor commit.
 - **An atomic branch.** A branch copies file by file. If it fails halfway, the new branch is half made. Delete it and copy again.
 
