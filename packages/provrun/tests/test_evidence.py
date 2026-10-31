@@ -152,3 +152,27 @@ def test_spans_carry_the_ids_into_the_event(tmp_path):
     assert span.attributes["gen_ai.operation.name"] == "chat"
     assert span.attributes["gen_ai.request.model"] == "m"
     assert e.data["span_id"] == format(span.context.span_id, "016x")
+
+
+def test_the_tracer_claims_no_schema_url(monkeypatch):
+    """The GenAI names have no released schema, so provrun names none."""
+    import importlib
+
+    from opentelemetry import trace
+
+    from provrun import otel
+
+    seen = {}
+    real = trace.get_tracer
+
+    def spy(*a, **kw):
+        seen.update(kw, name=a[0])
+        return real(*a, **kw)
+
+    monkeypatch.setattr(trace, "get_tracer", spy)
+    try:
+        importlib.reload(otel)
+    finally:
+        monkeypatch.undo()
+        importlib.reload(otel)
+    assert seen["name"] == "provrun" and seen.get("schema_url") is None

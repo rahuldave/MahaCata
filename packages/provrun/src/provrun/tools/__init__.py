@@ -11,7 +11,8 @@ The registry finds tools in two places:
 - the entry point group ``provrun.tools``, one function for each entry
 - a tools folder, in which each module lists its tools in ``TOOLS``
 
-The PydanticAI backend wraps every tool, so each call writes ``tool_called``.
+The PydanticAI backend records every tool through its evidence capability, so each
+call writes ``tool_called``.
 """
 from __future__ import annotations
 
