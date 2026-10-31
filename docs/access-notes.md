@@ -1,6 +1,6 @@
 # Notes on how code reads and writes data through provcat and provrun
 
-These notes describe the intended way to use provcat and provrun from code. They are a design for review, and nothing in them is built yet. They cover the lookup, the lifecycle spots and their hooks, a file API in the style of fsspec and the evidence of a read. They end with a plan of pull requests and the open questions.
+These notes describe the intended way to use provcat and provrun from code. They began as a design for review. The lookup with its entries and the hooks are built now, as the plan of pull requests at the end says. They cover the lookup, the lifecycle spots and their hooks, a file API in the style of fsspec and the evidence of a read. They end with a plan of pull requests and the open questions.
 
 ## Terms
 
@@ -75,9 +75,9 @@ Each operation of the catalog passes through fixed spots:
 
 Each spot gets the logical URI that started the operation too, also at `fetch` and `snapshot`. So a hook can decide by the logical name at every spot.
 
-The catalog calls the `pin` spot before every `fetch`, `snapshot` and `open` for reading. The drivers pin inside `fetch` now.
+The catalog calls the `pin` spot before every `snapshot`. It calls it before a `fetch` from GitHub or Hugging Face, whose drivers pin inside `fetch`. lakeFS and the object stores still fetch a branch without a pin, because a pin first would change the path in the cache. "Hooks" in [the design](design.md#hooks) lists this and the other ways that step 4 differs from these notes.
 
-Step 4 of the plan of pull requests below moves that pin out of the drivers. Then a hook at `pin` sees the pin of every read. `stat` and `list` do not pin first. A file that a session put on a lakeFS branch, and did not commit yet, is on the branch but in no commit. So a `stat` or a `list` of the branch must still find it.
+`stat` and `list` do not pin first. A file that a session put on a lakeFS branch, and did not commit yet, is on the branch but in no commit. So a `stat` or a `list` of the branch must still find it.
 
 ## Hooks
 
@@ -206,9 +206,9 @@ The provcat GitHub driver did not handle Git LFS before step 1 below. `provc fet
 1. **Git LFS in the GitHub driver. Done in commit 8609a4c.** The driver replaces each pointer file with its content, in a single file and in a folder. It gets the content through the Git LFS batch API, and it checks the size and the SHA-256 against the pointer. A copy of a pointer file in the cache from before the fix is fetched again. A snapshot of such a copy named the pointer, so the evidence of a run that used it named the pointer too.
 2. **The `hf` driver. Done in commit 780052f.** It reads Hugging Face models, datasets and Spaces through the Hub API. It pins to a commit, and it takes `branch:`, `tag:`, `commit:` and `ts:`. It is read-only at first.
 3. **Catalog entries. Done.** The lookup takes entries by the rules above, in the YAML file and in etcd.
-4. **The lifecycle spots and the hooks.** The catalog runs each operation through its spots, and it pins before each read. The proxy configuration and the entry points come in. Nothing changes for users who have no hooks file.
+4. **The lifecycle spots and the hooks. Done.** The catalog runs each operation through its spots. The proxy configuration and the entry points come in, with two hooks, `provcat.log` and `provcat.logical_only`. Nothing changes for users who have no hooks file. The catalog pins before a fetch only where the driver already did, and cache layers are not built yet.
 5. **The fsspec file system.** `catalog.fs()` gives the adapter, with a pin at open and the cache of blocks. The logical schemes register as fsspec protocols.
-6. **provrun on the hooks.** The broker becomes a gate hook, and the evidence becomes a recorder hook. The agent moves to its own process or container, and undeclared opens go from it to the provrun process. This step changes provrun, so it needs agreement on provrun's design first.
+6. **provrun on the hooks.** The broker becomes a gate hook, and the evidence becomes a recorder hook. The agent moves to its own process or container, and undeclared opens go from it to the provrun process. This step changes provrun, so it needs agreement on provrun's design first. provrun now reads pinned physical URIs to check a bundle, so a gate that refuses physical URIs would stop it.
 
 Steps 1 to 3 do not depend on each other. Step 5 needs step 4, and step 6 needs steps 4 and 5.
 

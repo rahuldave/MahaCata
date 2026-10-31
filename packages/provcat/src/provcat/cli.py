@@ -61,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     push.add_argument("--to", required=True, help="etcd://host:port/prefix")
     args = ap.parse_args(argv)
 
+    cat = None
     try:
         if args.cmd == "config":
             source = open_config(args.config)
@@ -100,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "merge":
             print(cat.merge(args.uri, args.source, args.message, _meta(args.meta), args.strategy))
         sys.stdout.flush()
+        done, cat = cat, None
+        done.close()  # a hook at close can still refuse
         return 0
     except BrokenPipeError:
         # The reader closed the pipe, for example "provc ls x | head".
@@ -108,6 +111,12 @@ def main(argv: list[str] | None = None) -> int:
     except (ProvcatError, OSError) as e:
         print(f"provc: {e}", file=sys.stderr)
         return 1
+    finally:
+        if cat is not None:
+            try:
+                cat.close()
+            except (ProvcatError, OSError) as e:
+                print(f"provc: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

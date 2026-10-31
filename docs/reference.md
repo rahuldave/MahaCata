@@ -147,9 +147,48 @@ With these entries, `code://acme/tokenizer/prod/src/a.py` reads GitHub, and `cod
 
 `provc resolve` shows the entry that a URI went through, in its `via` list. A tenant's part of the configuration can hold entries too. Each key must be a URI of that tenant, of a scheme that names its tenant part with `tenant:`. Each target must go to a store whose name ends with `-` and the tenant, as in `s3-acme`. Its bucket or repository must be named for the tenant, as `acme` or `acme-...`, as the templates name them. A tenant's entry cannot hold `${...}` values, because provcat checks it before it fills them in.
 
+## Hooks
+
+A hook is a function that runs at a lifecycle spot of the catalog. A recorder writes down each request. A gate refuses a request. The proxy configuration names the hooks of each app. It is a local YAML file, never in etcd:
+
+```yaml
+# ~/.config/provcat/hooks.yaml, or the file in PROVCAT_HOOKS
+apps:
+  default: {}
+  notebook:
+    cache_root: ~/.cache/provcat-notebook
+    "*": [provcat.log]
+    fetch: [provcat.logical_only]
+```
+
+The spots are `session`, `resolve`, `pin`, `stat`, `list`, `fetch`, `snapshot`, `put`, `delete`, `commit`, `branch` and `merge`.
+
+| Rule | What it means |
+|---|---|
+| The app comes from `PROVCAT_APP`. | A process reads it and the hooks file once, when it opens its first catalog. `Catalog(app=...)` can name only that app. A later change to `PROVCAT_HOOKS` or to the file has no effect. |
+| No app gets `default`. | With no `PROVCAT_APP`, the process gets the `default` section of the file. If the file has no `default` section, it gets no hooks. |
+| No file means no hooks. | With no `PROVCAT_APP`, no `PROVCAT_HOOKS` and no file at `~/.config/provcat/hooks.yaml`, provcat runs no hooks. |
+| A missing file or app is an error. | provcat refuses to start when `PROVCAT_APP` names an app that the file does not have. It also refuses when `PROVCAT_APP` or `PROVCAT_HOOKS` is set and the file is missing. So a missing file never turns a gate off quietly. |
+| Names are entry points. | Each name is a Python entry point in the group `provcat.hooks`. If two packages register one name, provcat refuses to start. |
+| `"*"` runs first. | The hooks under `"*"` run at every spot, before the hooks under the spot. A name runs once at most in a chain. |
+| Hooks come before the cache. | A read from the cache passes the gates too. |
+| A fetch from GitHub or Hugging Face pins first. | It runs the `pin` spot and asks the store for the commit, and then it runs `fetch`. So a gate that must stop every call to the store goes under `"*"` or `pin`. |
+| `cache_root` moves the cache. | It takes the place of `cache.root` for that app. |
+
+provcat comes with two hooks:
+
+| Name | Kind | What it does |
+|---|---|---|
+| `provcat.log` | recorder | It writes one JSON line on stderr for each request: the spot, the logical and physical URIs, and the answer or the error. |
+| `provcat.logical_only` | gate | It refuses a physical URI, so the app reads and writes only through names. The names come from the configuration that the app opens. |
+
+A hook takes three arguments, `hook(ctx, req, next)`. `ctx` holds the app, the principal and the tenant. `req` holds the spot, the logical URI, the physical URI and the other arguments. `next(req)` runs the rest of the chain and returns the answer. A gate raises `provcat.AccessDenied`.
+
+Hooks hold back code that uses the catalog. Code that calls a store directly, or writes its own configuration, gets past them. "Hooks" in [the design](design.md#hooks) explains the rest.
+
 ## The cache
 
-The cache folder is `~/.cache/provcat`, or `$XDG_CACHE_HOME/provcat` if that variable is set. The `--cache` option changes it, and so does the `cache.root` setting or the environment variable `PROVCAT_CACHE`. The first of these three that is set wins, in that order. The example configuration sets `cache.root` to `PROVCAT_CACHE` or `~/.cache/provcat`, so it ignores `XDG_CACHE_HOME`. The files have readable paths.
+The cache folder is `~/.cache/provcat`, or `$XDG_CACHE_HOME/provcat` if that variable is set. The `--cache` option changes it. So does the `cache_root` of the app in the hooks file, the `cache.root` setting or the environment variable `PROVCAT_CACHE`. The first of these four that is set wins, in that order. The example configuration sets `cache.root` to `PROVCAT_CACHE` or `~/.cache/provcat`, so it ignores `XDG_CACHE_HOME`. The files have readable paths.
 
 ```
 <cache>/github/<owner>/<repo>/<commit>/<path>
