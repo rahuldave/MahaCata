@@ -9,6 +9,8 @@ MahaCata holds two Python packages that work together.
 
 provrun depends on provcat, and provcat does not depend on provrun.
 
+A third package, **provevi**, is designed and not yet built. It will store the evidence and traces of runs, and its command will be `prove`. [The design](provevi-design.md) and [the plan](provevi-plan.md) describe it.
+
 ## Start here
 
 | To do this | Read |
@@ -21,6 +23,7 @@ provrun depends on provcat, and provcat does not depend on provrun.
 | Learn what a write and a commit guarantee | [Transactions](transactions.md) |
 | Run the shared lakeFS that keeps orgs apart | [The reference server](reference-server.md) |
 | Read why provrun is built as it is | [The provrun plan](provrun-plan.md) |
+| Read how the evidence store will be built | [The provevi design](provevi-design.md) and [plan](provevi-plan.md) |
 | Look up a class or a function | [Reference](api/index.md) |
 | Look up the `provc` commands, URI forms, stores and configuration | [The provcat reference](reference.md) |
 

@@ -17,6 +17,8 @@ website:
         text: provcat
       - href: provrun.md
         text: provrun
+      - href: provevi-design.md
+        text: provevi
       - href: api/index.md
         text: Reference
     tools:
@@ -40,6 +42,14 @@ website:
           - provrun.md
           - provrun-tour.md
           - provrun-plan.md
+      - section: provevi
+        contents:
+          - provevi-design.md
+          - provevi-plan.md
+          - provevi-research/earlier-runtime-traces.md
+          - provevi-research/mlflow-tracing.md
+          - provevi-research/agent-hooks-claude-codex.md
+          - provevi-research/agent-hooks-pydanticai-litellm.md
       - section: Reference
         contents: api/*
 
