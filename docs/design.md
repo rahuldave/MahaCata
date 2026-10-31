@@ -119,6 +119,10 @@ Some disks, for example the default disks of macOS and Windows, store `Guide.md`
 
 The GitHub driver checks the kind of a ref through the git refs API, so `tag:main` reads the tag and not the branch. It follows an annotated tag to its commit. It fetches a folder as one tarball of the commit. It skips links, devices and names with `..` in the tarball, and unpacks with the Python `data` filter. Offline mode serves a file inside a folder that was fetched whole. The token goes only to the host of `api_url`, and `gh auth token` is asked for that host.
 
+The GitHub driver also reads files that Git LFS keeps. Git LFS is the Git extension that keeps large files outside the repository, with a small pointer file in their place. The contents API and the tarball both give the pointer file. So after each download, the driver looks for pointer files and asks the Git LFS batch API for their content, 100 at a time. It checks the size and the SHA-256 of each object against its pointer, and it keeps nothing that does not match.
+
+The LFS server is on the web host, for example `github.com` for `api.github.com`, so the token goes there too. A download link must use HTTPS, and a redirect can go only to HTTP or HTTPS. The download links from the batch API carry their own headers, and the token never goes to them.
+
 An object store fetches a folder object by object, and then deletes cached files whose objects no longer exist. It removes the folder marker first, and writes it again only after the whole folder is current. It refuses a folder that holds keys no URI can name, for example `a//b`. It records the version that came with the downloaded bytes. The version is the ETag on S3 and Azure, and the generation on GCS. The S3 driver does not send `If-Match`, because S3-compatible servers do not all support it.
 
 ## Tenants
@@ -405,6 +409,11 @@ What a bucket commit does not give:
 | A GitHub `ts:` goes by committer dates, not push times. | Pin with `commit:` when the exact state matters. |
 | A bucket commit lists every version under its folder, twice, so it slows as history grows. | Commit small folders, or delete old versions that no commit names. |
 | A `ts:` search reads at most 100,000 commits on lakeFS, and 10,000 on GitHub. | Use `commit:` or a stage for older versions. |
+| The GitHub driver reads Git LFS content only from the LFS server of GitHub. A repository whose `.lfsconfig` names another server fails. | Fetch the files from that server with its own store. |
+| A GitHub file that is a valid Git LFS pointer, but whose object the LFS server does not have, fails the fetch. | Fetch the files around it one by one. |
+| A Git LFS pointer that names Git LFS extensions fails the fetch. | Fetch the file with the `git lfs` command. |
+| `provc ls` on GitHub gives the size of the pointer of a Git LFS file, because the contents API lists it so. `provc stat` and a fetch give the size of the content. | Use `provc stat` for the size of one file. |
+| Files that an older provcat cached from GitHub may be pointer files, so the driver fetches them again. Offline mode does not serve them. | Fetch them once online. |
 
 ## Next steps
 

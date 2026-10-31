@@ -353,3 +353,165 @@ def test_ts_on_a_logical_uri_keeps_its_branch(history, tmp_path):
     assert str(r.physical) == "github://owner/repo/README.md?at=ts:dev@2026-03-12"
     assert c.pin("code://owner/repo/dev/README.md?at=ts:2026-03-12").selector.value == F1
     assert c.pin("code://owner/repo/main/README.md?at=ts:2026-03-12").selector.value == M1
+
+
+# Git LFS
+
+
+def lfs_commit(github, files):
+    """Make commit A hold files, with each bytes value given as ("lfs", data) kept in LFS."""
+    out = {}
+    for name, data in files.items():
+        out[name] = github.add_lfs(data[1]) if isinstance(data, tuple) else data
+    github.commits[SHA_A] = out
+
+
+def test_lfs_file_is_fetched_as_its_content(github, tmp_path):
+    big = os.urandom(5000)
+    lfs_commit(github, {"model.bin": ("lfs", big), "README.md": b"hi\n"})
+    c = cat(github, tmp_path)
+    assert c.read(f"github://owner/repo/model.bin?at=commit:{SHA_A}") == big
+    assert c.read(f"github://owner/repo/README.md?at=commit:{SHA_A}") == b"hi\n"
+    assert len(github.lfs_batches) == 1  # README.md needed no LFS call
+
+
+def test_lfs_files_in_a_folder_share_one_batch(github, tmp_path):
+    a, b = os.urandom(3000), os.urandom(10)
+    lfs_commit(github, {"d/a.bin": ("lfs", a), "d/copy.bin": ("lfs", a), "d/b.bin": ("lfs", b), "d/plain.txt": b"p\n"})
+    p = cat(github, tmp_path).fetch(f"github://owner/repo/d?at=commit:{SHA_A}")
+    assert (p / "a.bin").read_bytes() == a and (p / "copy.bin").read_bytes() == a
+    assert (p / "b.bin").read_bytes() == b and (p / "plain.txt").read_bytes() == b"p\n"
+    assert len(github.lfs_batches) == 1 and sorted(github.lfs_batches[0]) == sorted({
+        __import__("hashlib").sha256(x).hexdigest() for x in (a, b)})
+    assert not list(p.rglob("*.lfs-part"))
+
+
+def test_lfs_asks_for_at_most_100_objects_at_a_time(github, tmp_path):
+    lfs_commit(github, {f"d/{i}.bin": ("lfs", b"%d" % i) for i in range(101)})
+    p = cat(github, tmp_path).fetch(f"github://owner/repo/d?at=commit:{SHA_A}")
+    assert (p / "100.bin").read_bytes() == b"100"
+    assert [len(b) for b in github.lfs_batches] == [100, 1]
+
+
+@pytest.mark.parametrize("bad", [b"short", b"Y" * 4000])  # a wrong size, and the right size with other bytes
+def test_lfs_content_that_does_not_match_its_pointer_is_refused(github, tmp_path, bad):
+    data = b"X" * 4000
+    lfs_commit(github, {"f.bin": ("lfs", data), "d/f.bin": ("lfs", data)})
+    oid = __import__("hashlib").sha256(data).hexdigest()
+    github.lfs_bad[oid] = bad
+    c = cat(github, tmp_path)
+    for uri in (f"github://owner/repo/f.bin?at=commit:{SHA_A}", f"github://owner/repo/d?at=commit:{SHA_A}"):
+        with pytest.raises(StoreError, match="other content than its pointer"):
+            c.fetch(uri)
+    assert not (tmp_path / "cache" / "github" / "owner" / "repo" / SHA_A / "f.bin").exists()
+    assert not (tmp_path / "cache" / "github" / "owner" / "repo" / SHA_A / "d").exists()
+    del github.lfs_bad[oid]
+    assert c.read(f"github://owner/repo/f.bin?at=commit:{SHA_A}") == data  # nothing bad was kept
+
+
+def test_lfs_object_the_server_lacks_is_an_error(github, tmp_path):
+    lfs_commit(github, {"f.bin": ("lfs", b"gone")})
+    github.lfs.clear()
+    with pytest.raises(StoreError, match="has no object .*404"):
+        cat(github, tmp_path).fetch(f"github://owner/repo/f.bin?at=commit:{SHA_A}")
+
+
+def test_lfs_transfer_other_than_basic_is_refused(github, tmp_path):
+    lfs_commit(github, {"f.bin": ("lfs", b"data")})
+    github.lfs_transfer = "ssh"
+    with pytest.raises(StoreError, match="transfer 'ssh'"):
+        cat(github, tmp_path).fetch(f"github://owner/repo/f.bin?at=commit:{SHA_A}")
+
+
+def test_lfs_token_goes_to_the_batch_api_and_not_to_the_download(github, tmp_path, monkeypatch):
+    monkeypatch.setenv("PROVCAT_TEST_TOKEN", "ghp_SECRET123")
+    lfs_commit(github, {"f.bin": ("lfs", b"data")})
+    cfg = {"stores": {"github": {"api_url": github.api_url, "token_env": ["PROVCAT_TEST_TOKEN"], "use_gh_cli": False}}}
+    assert Catalog(cfg, cache_root=tmp_path / "cache").read(f"github://owner/repo/f.bin?at=commit:{SHA_A}") == b"data"
+    (batch_path, batch), (dl_path, dl) = github.lfs_seen
+    assert batch_path.endswith("/objects/batch")
+    want = "Basic " + __import__("base64").b64encode(b"x-access-token:ghp_SECRET123").decode()
+    assert batch.get("Authorization") == want
+    assert dl_path.startswith("/lfs-objects/") and "Authorization" not in dl
+    assert dl.get("X-Lfs-Ticket", "").startswith("t-")  # the headers the batch reply gave
+
+
+def test_pointer_cached_before_lfs_support_is_fetched_again(github, tmp_path):
+    data = b"Z" * 2000
+    lfs_commit(github, {"f.bin": ("lfs", data), "d/g.bin": ("lfs", data)})
+    ptr = github.commits[SHA_A]["f.bin"]
+    c = cat(github, tmp_path)
+    # What an older provcat left: the pointers, recorded under the bare commit.
+    c.cache.put("github", ["owner", "repo", SHA_A, "f.bin"], lambda tmp: tmp.write_bytes(ptr) and SHA_A)
+    c.cache.install_folder("github", ["owner", "repo", SHA_A, "d"], SHA_A,
+                           lambda tmp: (tmp / "g.bin").write_bytes(ptr))
+    assert c.read(f"github://owner/repo/f.bin?at=commit:{SHA_A}") == data
+    assert c.read(f"github://owner/repo/d/g.bin?at=commit:{SHA_A}") == data
+
+
+def test_lfs_content_is_served_offline(github, tmp_path):
+    lfs_commit(github, {"f.bin": ("lfs", b"data"), "d/g.bin": ("lfs", b"more")})
+    cat(github, tmp_path).fetch(f"github://owner/repo/f.bin?at=commit:{SHA_A}")
+    cat(github, tmp_path).fetch(f"github://owner/repo/d?at=commit:{SHA_A}")
+    off = cat(github, tmp_path, offline=True)
+    assert off.read(f"github://owner/repo/f.bin?at=commit:{SHA_A}") == b"data"
+    assert off.read(f"github://owner/repo/d/g.bin?at=commit:{SHA_A}") == b"more"
+    assert off.stat(f"github://owner/repo/f.bin?at=commit:{SHA_A}").size == 4
+
+
+def test_files_that_only_look_like_pointers_are_kept(github, tmp_path):
+    almost = b"version https://git-lfs.github.com/spec/v1\noid sha256:xyz\nsize 3\n"
+    long = github.add_lfs(b"q")[:-1] + b"\n" + b"#" * 1100 + b"\n"
+    lfs_commit(github, {"a.txt": almost, "b.txt": long})
+    c = cat(github, tmp_path)
+    assert c.read(f"github://owner/repo/a.txt?at=commit:{SHA_A}") == almost
+    assert c.read(f"github://owner/repo/b.txt?at=commit:{SHA_A}") == long
+    assert github.lfs_batches == []
+
+
+@pytest.mark.parametrize("real", ["d/x.lfs-part", "d/x.LFS-PART"])
+def test_lfs_keeps_a_real_file_whose_name_ends_like_a_download(github, tmp_path, real):
+    # Review finding: the download for d/x went to d/x.lfs-part, and then deleted it.
+    lfs_commit(github, {"d/x": ("lfs", b"content"), real: b"I am a real file\n"})
+    p = cat(github, tmp_path).fetch(f"github://owner/repo/d?at=commit:{SHA_A}")
+    assert (p / "x").read_bytes() == b"content"
+    assert (p / real.split("/")[1]).read_bytes() == b"I am a real file\n"
+
+
+def test_lfs_with_a_folder_named_like_a_download(github, tmp_path):
+    lfs_commit(github, {"d/x": ("lfs", b"content"), "d/x.lfs-part/inner.txt": b"in\n"})
+    p = cat(github, tmp_path).fetch(f"github://owner/repo/d?at=commit:{SHA_A}")
+    assert (p / "x").read_bytes() == b"content" and (p / "x.lfs-part" / "inner.txt").read_bytes() == b"in\n"
+
+
+@pytest.mark.parametrize("action, match", [
+    ({"href": "{api}/lfs-objects/{oid}", "header": {"X": "a\r\nInjected: 1"}}, "download of object"),
+    ({"href": "{api}/lfs-objects/{oid}", "header": {"X Y:": "1"}}, "download of object"),
+    ({"href": "https://[::1/x"}, "not a URL"),
+    ({"href": "http://example.com/x"}, "not HTTPS"),
+    ({"href": "file:///etc/passwd"}, "not HTTPS"),
+])
+def test_lfs_odd_download_actions_are_store_errors(github, tmp_path, action, match):
+    lfs_commit(github, {"f.bin": ("lfs", b"data")})
+    oid = __import__("hashlib").sha256(b"data").hexdigest()
+    github.lfs_actions[oid] = {k: (v.format(api=github.api_url, oid=oid) if isinstance(v, str) else v)
+                               for k, v in action.items()}
+    with pytest.raises(StoreError, match=match):
+        cat(github, tmp_path).fetch(f"github://owner/repo/f.bin?at=commit:{SHA_A}")
+
+
+def test_lfs_pointer_with_extensions_is_refused(github, tmp_path):
+    ptr = github.add_lfs(b"data").replace(b"oid ", b"ext-0-foo sha256:" + b"b" * 64 + b"\noid ")
+    lfs_commit(github, {"f.bin": ptr})
+    with pytest.raises(StoreError, match="names extensions"):
+        cat(github, tmp_path).fetch(f"github://owner/repo/f.bin?at=commit:{SHA_A}")
+    assert github.lfs_batches == []
+
+
+def test_list_gives_the_size_of_an_lfs_pointer(github, tmp_path):
+    # GitHub lists an LFS file by the size of its pointer; docs/design.md says so.
+    lfs_commit(github, {"d/f.bin": ("lfs", b"X" * 5000)})
+    c = cat(github, tmp_path)
+    (entry,) = c.list(f"github://owner/repo/d?at=commit:{SHA_A}")
+    assert entry.size == len(github.commits[SHA_A]["d/f.bin"]) < 1024
+    assert len(c.read(f"github://owner/repo/d/f.bin?at=commit:{SHA_A}")) == 5000

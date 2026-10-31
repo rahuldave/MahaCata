@@ -10,6 +10,7 @@
 Each test gets the marker of its folder, so "pytest -m unit" runs one kind.
 """
 import base64
+import hashlib
 import io
 import json
 import tarfile
@@ -59,6 +60,45 @@ class FakeGithub:
         # The history for ts: sha -> (committer date, parents). Commits that
         # are not here get dates long ago, so the history ends with them.
         self.history = {}
+        # Git LFS: oid -> content. A file in commits whose bytes are a pointer
+        # to one of these is an LFS file.
+        self.lfs = {}
+        self.lfs_batches = []  # the oids of each batch request, in order
+        self.lfs_bad = {}  # oid -> other bytes that its download sends
+        self.lfs_errors = {}  # oid -> (code, message) in the batch reply
+        self.lfs_transfer = "basic"
+        self.lfs_seen = []  # (path, headers) of each LFS request
+        self.lfs_actions = {}  # oid -> the download action to give in place of the usual one
+
+    def add_lfs(self, data: bytes) -> bytes:
+        """Keep data on the fake LFS server, and return its pointer file."""
+        oid = hashlib.sha256(data).hexdigest()
+        self.lfs[oid] = data
+        return f"version https://git-lfs.github.com/spec/v1\noid sha256:{oid}\nsize {len(data)}\n".encode()
+
+    def handle_lfs(self, h: BaseHTTPRequestHandler, path: str):
+        self.lfs_seen.append((path, dict(h.headers)))
+        if path == "/owner/repo.git/info/lfs/objects/batch":
+            req = json.loads(h.rfile.read(int(h.headers["Content-Length"])))
+            self.lfs_batches.append([o["oid"] for o in req["objects"]])
+            out = []
+            for o in req["objects"]:
+                if o["oid"] in self.lfs_errors:
+                    code, msg = self.lfs_errors[o["oid"]]
+                    out.append({"oid": o["oid"], "size": o["size"], "error": {"code": code, "message": msg}})
+                elif o["oid"] in self.lfs_actions:
+                    out.append({"oid": o["oid"], "size": o["size"], "actions": {"download": self.lfs_actions[o["oid"]]}})
+                elif o["oid"] in self.lfs:
+                    out.append({"oid": o["oid"], "size": o["size"], "actions": {"download": {
+                        "href": f"{self.api_url}/lfs-objects/{o['oid']}", "header": {"X-Lfs-Ticket": "t-" + o["oid"][:8]}}}})
+                else:
+                    out.append({"oid": o["oid"], "size": o["size"], "error": {"code": 404, "message": "Object does not exist"}})
+            return self.send(h, json.dumps({"transfer": self.lfs_transfer, "objects": out}).encode(), "application/vnd.git-lfs+json")
+        oid = path[len("/lfs-objects/"):]
+        if oid not in self.lfs:
+            return h.send_error(404)
+        data = self.lfs[oid]
+        return self.send(h, self.lfs_bad.get(oid, data), "application/octet-stream")
 
     def commit_json(self, sha):
         date, parents = self.history.get(sha, ("2000-01-01T00:00:00Z", []))
@@ -85,6 +125,9 @@ class FakeGithub:
         accept = h.headers.get("Accept", "")
         self.headers_seen.append(dict(h.headers))
         prefix = "/repos/owner/repo"
+        if path.startswith(("/owner/repo.git/info/lfs/", "/lfs-objects/")):
+            self.hits["lfs"] += 1
+            return self.handle_lfs(h, path)
         if not path.startswith(prefix):
             return h.send_error(404)
         rest = path[len(prefix):]

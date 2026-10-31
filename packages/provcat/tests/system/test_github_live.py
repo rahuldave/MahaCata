@@ -31,3 +31,16 @@ def test_live_github_ts_follows_first_parents(tmp_path):
     assert at("2012-03-07") == "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d"
     with pytest.raises(NotFound, match="no commit at or before"):
         at("2011-01-01")
+
+
+@pytest.mark.skipif(not os.environ.get("PROVCAT_SYSTEM_GITHUB"), reason="set PROVCAT_SYSTEM_GITHUB=1 to call github.com")
+def test_live_github_lfs(tmp_path):
+    """araines/serverless-php keeps the 27 MB file php in Git LFS."""
+    import hashlib
+    c = Catalog(cache_root=tmp_path)
+    uri = "github://araines/serverless-php/php?at=commit:e06f887c06fa1ddd970d69ad4e765a3786ab6f3e"
+    p = c.fetch(uri)
+    assert p.stat().st_size == c.stat(uri).size == 27841495
+    with p.open("rb") as f:
+        assert hashlib.file_digest(f, "sha256").hexdigest() == \
+            "194d86d7ced5c742905986acff13be2f701b92ecd6b389601eb0f2c53c9d77ea"
