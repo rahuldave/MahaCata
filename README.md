@@ -2,9 +2,9 @@
 
 MahaCata holds two Python packages, provcat and provrun.
 
-provcat resolves catalog URIs. A catalog URI names a dataset, a model, a prompt or some code in words that stay the same when the storage changes. provcat turns it into the URI of a store, such as S3, lakeFS or GitHub, or into a pinned version. It reads the object, or fetches it into a local cache and returns the path. A local file needs no cache.
+provcat resolves catalog URIs. A catalog URI names a dataset, a model, a prompt or some code in words that stay the same when the storage changes. provcat turns it into the URI of a store, such as S3, lakeFS, GitHub or Hugging Face, or into a pinned version. It reads the object, or fetches it into a local cache and returns the path. A local file needs no cache.
 
-provcat writes to every store but GitHub. It commits in lakeFS and in versioned buckets, branches in lakeFS and in any bucket, and merges in lakeFS. It makes read-only snapshots of pinned versions.
+provcat writes to every store but GitHub and Hugging Face. It commits in lakeFS and in versioned buckets, branches in lakeFS and in any bucket, and merges in lakeFS. It makes read-only snapshots of pinned versions.
 
 The first commit of this repository is the provcat code as it was found in `~/Catalog/provcat`. Read [docs/tour.md](docs/tour.md) for a guided tour with commands to run. Read [docs/setup.md](docs/setup.md) to install lakeFS, etcd and the tools that the tests need. Read [docs/design.md](docs/design.md) for what that code did, what changed and how the parts fit together. Read [docs/reference-server.md](docs/reference-server.md) to run and operate the shared lakeFS that keeps orgs apart. Read [docs/transactions.md](docs/transactions.md) for what a write and a commit guarantee, in lakeFS and in a bucket.
 
@@ -31,14 +31,15 @@ uv run provc --help
 uv run pytest
 ```
 
-The base package reads local files, GitHub, S3 and lakeFS. Google Cloud Storage and Azure each need an extra, which installs that cloud's Python SDK:
+The base package reads local files, GitHub, S3 and lakeFS. Google Cloud Storage, Azure and Hugging Face each need an extra, which installs the Python SDK of that service:
 
 ```
 pip install 'provcat[gcs]'
 pip install 'provcat[azure]'
+pip install 'provcat[hf]'
 ```
 
-`uv sync` installs both for development.
+`uv sync` installs all three for development.
 
 ## Catalog URIs
 
@@ -61,11 +62,11 @@ In the example configuration, the org is the tenant and the first part of every 
 | `branch:X`, `tag:X`, `commit:X` | Use the git or lakeFS ref X. |
 | `version:N` | Fill `{version}` in the template, for a model version. |
 | `stage:NAME` | Look up NAME in the `stages` section and use the selector stored there. |
-| `ts:TIME` | Use the newest commit of the branch made at or before TIME. TIME is a date, a date and time, or Unix seconds. The `lakefs` and `github` drivers resolve it. A GitHub URI names a branch other than the default as `ts:BRANCH@TIME`. |
+| `ts:TIME` | Use the newest commit of the branch made at or before TIME. TIME is a date, a date and time, or Unix seconds. The `lakefs`, `github` and `hf` drivers resolve it. A GitHub or Hugging Face URI names a branch other than the default as `ts:BRANCH@TIME`. |
 
 ## Stores
 
-A store is a named instance of a driver. Every driver reads. All but `github` also write, as docs/design.md explains under "Writes". The stores `file`, `s3`, `github`, `gs` and `az` exist without configuration. So a logical scheme cannot use one of those five names. The configuration can add more, for example a store `lakefs` that uses the `lakefs` driver with the lakeFS endpoint.
+A store is a named instance of a driver. Every driver reads. All but `github` and `hf` also write, as docs/design.md explains under "Writes". The stores `file`, `s3`, `github`, `gs`, `az` and `hf` exist without configuration. So a logical scheme cannot use one of those six names. The configuration can add more, for example a store `lakefs` that uses the `lakefs` driver with the lakeFS endpoint.
 
 | Driver | URI | What it does |
 |---|---|---|
@@ -73,6 +74,7 @@ A store is a named instance of a driver. Every driver reads. All but `github` al
 | `s3` | `s3://bucket/key` | Reads and writes AWS S3 or any S3-compatible server, for example MinIO. It branches in any bucket. In a bucket with versioning on, it also pins and commits. Options are `endpoint_url`, `region`, `profile` and `addressing_style`. |
 | `lakefs` | `lakefs://repo/ref/path?at=ts:TIME` | Reads and writes lakeFS through its S3 gateway. It pins, commits, branches and merges through its REST API. `pin` turns a branch or a time into a commit. `ls` of an empty branch gives `[]`, and `ls lakefs://repo` lists the branches. Options are those of `s3`, plus `api_url`. |
 | `github` | `github://owner/repo/path?at=branch:main` | Reads a file or a folder of a GitHub repository at a commit. `pin` turns a branch, a tag or a time into a commit. Options are `api_url`, `token_env`, `use_gh_cli` and `timeout`. |
+| `hf` | `hf://datasets/owner/repo/path?at=branch:main` | Reads a file or a folder of a Hugging Face model, dataset or Space at a commit. The first part is `models`, `datasets` or `spaces`. `pin` turns a branch, a tag or a time into a commit. Options are `endpoint`, `token_env` and `timeout`. Needs the `hf` extra. |
 | `gcs` | `gs://bucket/key` | Reads and writes Google Cloud Storage. It branches in any bucket. In a bucket with versioning on, it also pins and commits. Options are `project`, `endpoint_url` and `anonymous`. Needs the `gcs` extra. |
 | `azure` | `az://account/container/key` | Reads and writes Azure Blob Storage and ADLS Gen2. It branches in any container. In a Blob Storage account with versioning on, it also pins and commits. ADLS Gen2 has no versions. Options are `account_url` and `connection_string_env`. Needs the `azure` extra. |
 
@@ -82,7 +84,7 @@ Each cloud driver uses that cloud's Python SDK and takes credentials from the us
 - **GCS:** Application Default Credentials.
 - **Azure:** `DefaultAzureCredential`, for example `az login`, or a connection string in the environment variable that `connection_string_env` names.
 
-Do not put keys in the provcat configuration. The GitHub driver reads a token from `GITHUB_TOKEN` or `GH_TOKEN`. If neither is set, it runs `gh auth token`.
+Do not put keys in the provcat configuration. The GitHub driver reads a token from `GITHUB_TOKEN` or `GH_TOKEN`. If neither is set, it runs `gh auth token`. The Hugging Face driver lets `huggingface_hub` find a token, in `HF_TOKEN` or in the file that `hf auth login` writes.
 
 ## Configuration
 
@@ -167,6 +169,7 @@ Run the system tests with `-m system`. [docs/setup.md](docs/setup.md) shows how 
 | `PROVCAT_SYSTEM_LAKEFS_B=<url>` | A second lakeFS, with the keys of the profile `lakefs-b`. With both lakeFS variables set, a test checks that two servers keep two orgs apart. `PROVCAT_SYSTEM_LAKEFS_B_DATA` names its blockstore path. |
 | `PROVCAT_SYSTEM_LAKEFS_ACL=<url>` | A lakeFS run by `packages/provcat/scripts/lakefs_acl_local.py`, with access control for each org. A test checks that one server keeps two orgs apart. `PROVCAT_SYSTEM_LAKEFS_ACL_CREDENTIALS` names the credentials file, `PROVCAT_SYSTEM_LAKEFS_ACL_DATA` the blockstore path, `PROVCAT_SYSTEM_LAKEFS_ACL_SERVER` the access-list server, and `PROVCAT_SYSTEM_LAKEFS_ACL_DIR` the folder of the setup. |
 | `PROVCAT_SYSTEM_GITHUB=1` | github.com. |
+| `PROVCAT_SYSTEM_HF=1` | huggingface.co, with public repositories and no token. |
 | `PROVCAT_SYSTEM_ETCD=<host:port>` | etcd. |
 
 For example:

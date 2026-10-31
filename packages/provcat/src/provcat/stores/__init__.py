@@ -12,15 +12,15 @@ A driver gives four things:
 - ``pin(uri, cache)``: the URI with any moving name (a branch) replaced by a fixed one.
 - ``fetch(uri, cache)``: a local path that holds the object.
 
-Every driver but ``github`` can be written, and also gives:
+Every driver but ``github`` and ``hf`` can be written, and also gives:
 
 - ``put(uri, src, cache)``: write the local file ``src`` at ``uri``, and return its Entry.
 - ``delete(uri, cache)``: delete the object at ``uri``.
 
 The ``lakefs`` driver and the object stores (``s3``, ``gcs`` and ``azure``) also
 give ``commit`` and ``branch``. An object store needs versioning on its bucket
-for a commit. ``lakefs`` also gives ``merge``. ``github`` refuses writes with a
-StoreError.
+for a commit. ``lakefs`` also gives ``merge``. ``github`` and ``hf`` refuse writes
+with a StoreError.
 
 Every method takes the cache, because pinning a moving name records what it
 pointed at, and offline mode reads only the cache.
@@ -114,6 +114,6 @@ def make_store(name: str, raw: dict, *, offline: bool = False) -> Store:
 
 
 DEFAULT_STORES = {"file": {"driver": "file"}, "s3": {"driver": "s3"}, "github": {"driver": "github"},
-                  "gs": {"driver": "gcs"}, "az": {"driver": "azure"}}
+                  "gs": {"driver": "gcs"}, "az": {"driver": "azure"}, "hf": {"driver": "hf"}}
 
-from . import azure, gcs, github, lakefs, local, s3  # noqa: E402,F401  (registers the drivers)
+from . import azure, gcs, github, hf, lakefs, local, s3  # noqa: E402,F401  (registers the drivers)

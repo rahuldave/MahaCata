@@ -1,7 +1,7 @@
 [project]
 name = "provcat"
 version = "0.2.0"
-description = "Resolve, read and write catalog URIs in local files, S3, GCS, Azure, lakeFS and GitHub, with a local cache"
+description = "Resolve, read and write catalog URIs in local files, S3, GCS, Azure, lakeFS, GitHub and Hugging Face, with a local cache"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -20,6 +20,9 @@ gcs = [
 azure = [
     "azure-identity>=1.27.0",
     "azure-storage-blob>=12.31.0",
+]
+hf = [
+    "huggingface_hub>=2.4.0",
 ]
 
 [build-system]
