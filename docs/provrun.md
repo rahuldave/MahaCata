@@ -94,6 +94,16 @@ Each step writes an evidence event:
 
 If a step raises an error, provrun writes `step_failed` with the error, and the run fails. The evidence of a failed run is still complete, and it verifies.
 
+In the PydanticAI backend, one PydanticAI capability writes `model_called` and `tool_called`. A capability is PydanticAI's hook on each step of an agent run. It records:
+
+- each model request, streamed or not, as `model_called`, with `streamed` and `answered_by` in its data. Behind a fallback model, `answered_by` names the model that answered;
+- each call of a function tool as `tool_called`, also for a tool that another capability adds;
+- a call that waits for approval as `tool_called` with `deferred` set, and again when it runs;
+- the output tool, when the agent answers through one, as `tool_called` with `output_tool` set;
+- each tool that the provider ran itself, such as a web search, as `tool_called` with `provider_run` set and confidence `parsed`. provrun sees only the provider's account of such a call.
+
+The backend gives text output and no provider tools, so its runs have neither of the last two. Other code can pass the capability, `evidence_capability`, to its own agent. In a streamed request, the output tool's event comes before the `model_called` that asked for it.
+
 Each `model_called` event lists the tool calls that the model asked for, under `tool_calls`. The list includes a call to an unknown tool, or a call with bad arguments. PydanticAI refuses such a call before the tool runs, so it has no `tool_called` event.
 
 The PydanticAI agent sees `/input` read-only, `/output` and `/scratch`. If the agent tries to write to `/input`, the sandbox refuses. The refusal is in the evidence as `step_failed`, and the model gets the refusal as a message, so it can try another way.
@@ -129,6 +139,10 @@ Someone who can write the folder can delete that file. So a checker who does not
 The runs root is `~/.local/share/provrun/runs`, or `$XDG_DATA_HOME/provrun/runs` if that variable is set. The environment variable `PROVRUN_RUNS` or the option `--runs` changes it.
 
 provrun also opens an OpenTelemetry span for each step, with the names of the GenAI semantic conventions. Each event holds the trace ID and the span ID of its span, if a tracer provider is set.
+
+The names are those of release 1.37.0 of the semantic conventions. The GenAI conventions have since moved to their own repository, `open-telemetry/semantic-conventions-genai`, which has no release and no schema URL yet. So provrun claims no schema URL. `provrun/otel.py` keeps every name in one place.
+
+LiteLLM's OpenTelemetry loggers, such as `otel`, `logfire` and `arize`, make no span of their own when a span is active. They write onto the active span, which is provrun's `model_called` span, often after that span ended. So the LiteLLM backend sets `USE_OTEL_LITELLM_REQUEST_SPAN=true` before each call, and those loggers make their own span. The setting stays for the rest of the process. If you set that variable yourself to another value, provrun keeps it and warns.
 
 The evidence has two modes. In the strict mode, a lost event stops the run. provrun still closes the evidence, writes the manifest and the bundle, and then raises the error. In the lenient mode, provrun warns and goes on. In both modes, the manifest marks the evidence as incomplete and names each lost event.
 
@@ -166,7 +180,6 @@ If the store for bundles is `file`, which has no commits, provrun writes the bun
 | Limit | What to do |
 |---|---|
 | The broker is a stub. It reads no profile and checks no identity. | Use it only for development. |
-| The PydanticAI wrappers do not see a streamed model request. | provrun does not stream. Do not add an event stream handler. |
 | Snapshots and staged inputs are read-only, so `rm -rf` cannot delete them. | Run `chmod -R u+w` on the folder first. |
 | Snapshots are never deleted. | Delete old folders under `<cache>/.provcat/snapshots` when no run uses them. |
 | LiteLLM can print a warning that a logging coroutine was never awaited. | Ignore it. It comes from LiteLLM's logging, after the run ends. |

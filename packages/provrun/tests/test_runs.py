@@ -201,3 +201,27 @@ def test_provr_show_and_a_tampered_output(catalog, runs, docs, capsys):
     (out.folder / "output" / "response.txt").write_text("tampered")
     assert provr(["--runs", str(runs), "verify", str(out.folder)]) == 1
     assert "was changed" in capsys.readouterr().err
+
+
+def test_litellm_otel_loggers_get_their_own_span(catalog, runs, docs, monkeypatch):
+    import warnings
+
+    from provrun.backends.litellm import OTEL_SPAN_SETTING
+
+    seen = []
+
+    async def acompletion(**kw):
+        import os
+        seen.append(os.environ.get(OTEL_SPAN_SETTING))
+        choice = SimpleNamespace(message=SimpleNamespace(content="ok"), finish_reason="stop")
+        return SimpleNamespace(choices=[choice], usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1))
+
+    agent = AgentSpec(name="q", backend="litellm", model="openai/gpt-x", prompt="p")
+    monkeypatch.delenv(OTEL_SPAN_SETTING, raising=False)
+    run(agent, catalog, runs, backend=LiteLLMBackend(acompletion))
+    assert seen == ["true"]  # whatever loggers are on, such as "logfire" or a subclass
+    monkeypatch.setenv(OTEL_SPAN_SETTING, "false")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        run(agent, catalog, runs, backend=LiteLLMBackend(acompletion))
+    assert seen[-1] == "false" and any(OTEL_SPAN_SETTING in str(w.message) for w in caught)

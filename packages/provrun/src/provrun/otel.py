@@ -1,9 +1,12 @@
 """OpenTelemetry spans for evidence steps.
 
-The span names and attributes follow the OpenTelemetry semantic conventions
-for generative AI, version 1.37. Those conventions still have the status
-Development, so provrun keeps their names here, in one place. When no tracer
-provider is set, the spans record nothing and cost little.
+The span names and attributes come from the OpenTelemetry semantic
+conventions for generative AI, as they stood in release 1.37.0 of the
+semantic conventions. Those conventions have the status Development, and they
+have moved to their own repository, open-telemetry/semantic-conventions-genai,
+which has no release and no schema URL yet. So provrun claims no schema URL,
+and keeps the names here, in one place, to change them together. When no
+tracer provider is set, the spans record nothing and cost little.
 """
 from __future__ import annotations
 
@@ -12,9 +15,11 @@ from collections.abc import Iterator
 
 from opentelemetry import trace
 
-SEMCONV_VERSION = "1.37.0"
+# The release of the semantic conventions whose GenAI names provrun uses. It is
+# a note for readers, not a schema URL: the GenAI names have no release now.
+NAMES_FROM = "1.37.0"
 
-_tracer = trace.get_tracer("provrun", schema_url=f"https://opentelemetry.io/schemas/{SEMCONV_VERSION}")
+_tracer = trace.get_tracer("provrun")
 
 # The GenAI operation for each evidence step that has one.
 _OPERATION = {"model_called": "chat", "tool_called": "execute_tool", "sandbox_started": "invoke_agent"}

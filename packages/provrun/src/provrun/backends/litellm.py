@@ -6,12 +6,24 @@ an agent that reads folders or calls tools needs the PydanticAI backend.
 
 The answer is written to /output/response.txt, so every backend leaves its
 output in the same place.
+
+LiteLLM's OpenTelemetry loggers ("otel", and others built on it, such as
+"logfire", "arize" and "langfuse_otel") make no span of their own when a span
+is active. They write their attributes, prompts included, and an OK status
+onto the active span, which is provrun's step, often after that span ended.
+So before each call, provrun sets USE_OTEL_LITELLM_REQUEST_SPAN=true, and
+those loggers make their own span. The setting does nothing when no such
+logger is on. It stays set for the rest of the process, because LiteLLM's
+loggers run after the call returns. A value that someone set already is
+kept, with a warning if it is not "true".
 """
 from __future__ import annotations
 
 import base64
 import json
 import mimetypes
+import os
+import warnings
 from typing import TYPE_CHECKING, Any
 
 from . import InProcessBackend, RunResult
@@ -76,6 +88,17 @@ def _redact_data_uris(messages: list[dict]) -> list[dict]:
     return fix(messages)
 
 
+OTEL_SPAN_SETTING = "USE_OTEL_LITELLM_REQUEST_SPAN"
+
+
+def guard_otel_span() -> None:
+    """Make LiteLLM's OpenTelemetry loggers write their own span, not provrun's."""
+    value = os.environ.setdefault(OTEL_SPAN_SETTING, "true")
+    if value.lower() != "true":
+        warnings.warn(f"{OTEL_SPAN_SETTING}={value}: an OpenTelemetry logger of LiteLLM will write "
+                      f"onto provrun's model_called span", stacklevel=2)
+
+
 class LiteLLMBackend(InProcessBackend):
     name = "litellm"
 
@@ -103,6 +126,7 @@ class LiteLLMBackend(InProcessBackend):
                           refs=[i.uri for i in run.inputs], payload=shown,
                           data={"messages": len(messages)})
         call = self._acompletion()
+        guard_otel_span()
         with ctx.recorder.step("model_called", self.__class__.__name__,
                                data={"model": agent.model, "settings": agent.settings}) as step:
             response = await call(model=agent.model, messages=messages, **agent.settings)
