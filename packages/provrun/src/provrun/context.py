@@ -14,8 +14,9 @@ A run keeps its files in one folder::
 
 The bundle is the evidence and the output folders. At the end of a run they
 are written through provcat under the run URI,
-``run://<org>/<domain>/<env>/<run_id>``, and committed in one commit, if the
-configuration names a store for runs. Code deep inside a tool finds the run
+``<bundle_scheme>://<org>/<domain>/<env>/<run_id>``, and committed in one
+commit, if the run sets ``bundle_scheme``. Otherwise they stay in the run
+folder. Code deep inside a tool finds the run
 with ``current_run()``.
 """
 from __future__ import annotations

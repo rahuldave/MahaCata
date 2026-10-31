@@ -1,6 +1,6 @@
 # provrun
 
-provrun runs agents and model calls on data that provcat resolves, and records the evidence of each run. provrun is the caller of record. It makes the run ID, asks the broker for each input, makes read-only snapshots of the inputs through provcat and runs the agent. Then it writes the evidence and the outputs as one bundle. [provrun-plan.md](provrun-plan.md) has the design and the reasons for it. [provrun-tour.md](provrun-tour.md) is a guided tour that follows one file from a store into a run and its evidence.
+provrun runs agents and model calls on data that provcat resolves, and records the evidence of each run. provrun is the caller of record. It makes the run ID, asks the broker for each input, makes read-only snapshots of the inputs through provcat and runs the agent. Then it writes the evidence and the outputs as one bundle. The file `docs/provrun-plan.md` in the repository has the design and the reasons for it. [provrun-tour.md](provrun-tour.md) is a guided tour that follows one file from a store into a run and its evidence.
 
 ## Terms
 
@@ -74,7 +74,7 @@ A run file has two sections:
 | `model` | The model. LiteLLM takes `provider/model`, for example `openai/gpt-4o-mini`. PydanticAI takes `provider:model`, for example `openai:gpt-4o-mini`. |
 | `instructions` | The system instructions. |
 | `prompt` | The task. |
-| `inputs` | URIs, or objects with `uri` and `name`. Each input appears at `/input/<name>`. |
+| `inputs` | URIs, or objects with `uri` and `name`. Each input is staged at `/input/<name>`. An input must be pinnable: a file or folder in lakeFS or GitHub, a file in a versioned bucket, a bucket folder with a provcat commit, or a local file or folder. An input in a bucket without versioning fails, because provcat cannot pin it. |
 | `tools` | Tool names, for the `pydantic-ai` backend. `grep_file` and `add_note` are built in. |
 | `settings` | Model settings, for example `temperature`. |
 | `limits` | `timeout` in seconds, `request_limit` and `retries`. |
@@ -126,7 +126,7 @@ The local check proves that the folder is consistent. But someone who can write 
 
 Someone who can write the folder can delete that file. So a checker who does not trust the folder passes the commit with `--bundle URI`. `--require-bundle` fails a run that has no commit to compare with.
 
-The runs root is `~/.local/share/provrun/runs`. The environment variable `PROVRUN_RUNS` or the option `--runs` changes it.
+The runs root is `~/.local/share/provrun/runs`, or `$XDG_DATA_HOME/provrun/runs` if that variable is set. The environment variable `PROVRUN_RUNS` or the option `--runs` changes it.
 
 provrun also opens an OpenTelemetry span for each step, with the names of the GenAI semantic conventions. Each event holds the trace ID and the span ID of its span, if a tracer provider is set.
 
@@ -142,7 +142,7 @@ The stub broker grants a URI if all of these are true:
 - A URI with a selector, such as `?at=branch:prod`, is in the `allow` list with that same selector. A selector can name another branch, and the branch is often the environment.
 - The mode is `mounted_snapshot`.
 - For a logical URI, of the form `scheme://org/domain/env/...`, the org and the environment are those of the run.
-- For a physical URI, the run is in the `dev` environment. A URI is physical if its scheme names a store of the catalog, such as `file`, `s3` or a configured store like `local-s3`. A physical URI names no environment, so the stub does not grant one in `staging` or `prod`.
+- For a physical URI, the run is in the `dev` environment. A URI is physical if its scheme names a store of the catalog. The store can be built in, such as `file` or `s3`, or added by the configuration, such as `lakefs-acme`. A physical URI names no environment, so the stub does not grant one in `staging` or `prod`.
 
 ## The bundle
 
@@ -157,7 +157,9 @@ schemes:
     ref: main
 ```
 
-provrun prints the pinned URI of the commit. Another run can commit the same branch first and take in this bundle. Then provrun reads the newest commit, and accepts it if it holds this bundle. If the store has no commits, for example `file`, provrun writes the bundle and says that it is not pinned. If the bundle cannot be written, a strict run fails, and a lenient run warns.
+provrun prints the pinned URI of the commit. Another run can commit the same branch first and take in this bundle. Then provrun reads the newest commit, and accepts it if it holds this bundle. 
+
+If the store for bundles is `file`, which has no commits, provrun writes the bundle and says that it is not pinned. A bucket for bundles must have versioning on. Otherwise the commit fails, and so does the bundle. If the bundle cannot be written or committed, a strict run fails, and a lenient run warns.
 
 ## Known limits
 
@@ -169,4 +171,4 @@ provrun prints the pinned URI of the commit. Another run can commit the same bra
 | Snapshots are never deleted. | Delete old folders under `<cache>/.provcat/snapshots` when no run uses them. |
 | LiteLLM can print a warning that a logging coroutine was never awaited. | Ignore it. It comes from LiteLLM's logging, after the run ends. |
 | PydanticAI prints a banner about Logfire on each run in a terminal. | Set `PYDANTIC_AI_NO_BANNER=1`. |
-| Only the in-process backends exist. | Docker and Foundry backends are planned. See [provrun-plan.md](provrun-plan.md). |
+| Only the in-process backends exist. | Docker and Foundry backends are planned. See `docs/provrun-plan.md` in the repository. |

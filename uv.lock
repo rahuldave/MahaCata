@@ -806,6 +806,15 @@ wheels = [
 ]
 
 [[package]]
+name = "fastcore"
+version = "2.2.35"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5c/19/45837ad449e435da74522340502bafeb66961baccc046df2e4b364a06076/fastcore-2.2.35.tar.gz", hash = "sha256:491e6d8527e1f0f9b5f43ec476991b7484e8254741f3143d96827fa4738ba9ec", size = 145263, upload-time = "2026-10-27T05:01:41.372Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/65/69/9de386c759a02efd21c852f26d265455f6b63613dc7ce2ad38e28d555c81/fastcore-2.2.35-py3-none-any.whl", hash = "sha256:bec75b32e7f2c78cf1c652c75f065e8e6ed94a7a92183ef11509daaf726eab00", size = 151951, upload-time = "2026-10-27T05:01:39.9Z" },
+]
+
+[[package]]
 name = "fastmcp-slim"
 version = "4.1.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1645,6 +1654,9 @@ dev = [
     { name = "moto", extra = ["server"] },
     { name = "pytest" },
 ]
+docs = [
+    { name = "smalldocs" },
+]
 system = [
     { name = "azure-mgmt-resource" },
     { name = "azure-mgmt-storage" },
@@ -1664,6 +1676,7 @@ dev = [
     { name = "moto", extras = ["server"], specifier = ">=5.2.4" },
     { name = "pytest", specifier = ">=9.1.1" },
 ]
+docs = [{ name = "smalldocs", specifier = ">=0.5.4" }]
 system = [
     { name = "azure-mgmt-resource", specifier = ">=26.0.0" },
     { name = "azure-mgmt-storage", specifier = ">=25.3.0" },
@@ -1815,6 +1828,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/9e/2d/7c251e34207f6c51000312fc8839111ac45cfe02023f90b44e7f1051dd8e/mcp_types-2.3.0.tar.gz", hash = "sha256:d1e46549edb35ee19a94940fcee6d1addd7e589ab7ea92dda83f5d84781fc362", size = 65898, upload-time = "2026-10-02T22:06:57.863Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ce/48/32583066b155bb5d4507e7887dc88ee23118cc4de8e2a12870c49719e2a8/mcp_types-2.3.0-py3-none-any.whl", hash = "sha256:968efdbdaedfab06adae40d378a34395f1090c5921d4be3c9cde283aaf76d91d", size = 69108, upload-time = "2026-10-02T22:06:54.099Z" },
+]
+
+[[package]]
+name = "mdit-py-plugins"
+version = "0.6.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markdown-it-py" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/59/fc/f8d0863f8862f25602c0404d75568e89fb6b4109804645e5cdfb1be5cf56/mdit_py_plugins-0.6.1.tar.gz", hash = "sha256:a2bca0f039f39dbd35fb74ae1b5f998608c437463371f0ff7f49a19a17a114d0", size = 56114, upload-time = "2026-05-13T09:03:38.91Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a5/69/6da5581c6a7fede7dc261bf4e67d6adca4196f176b43288b55b3db395b6e/mdit_py_plugins-0.6.1-py3-none-any.whl", hash = "sha256:214c82fb2ac524472ab6a5bcab1de80f73b50443e187f401bfd77efbc7c6481d", size = 66663, upload-time = "2026-05-13T09:03:37.76Z" },
 ]
 
 [[package]]
@@ -3167,6 +3192,22 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
+name = "smalldocs"
+version = "0.5.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fastcore" },
+    { name = "markdown-it-py" },
+    { name = "mdit-py-plugins" },
+    { name = "pygments" },
+    { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5e/5e/06db4ac785457536c213408ea0d3833ffd6db595542fb3713214ed472019/smalldocs-0.5.4.tar.gz", hash = "sha256:4588b88572036232b49663abeee78e11ceae9aeee69264cc1c44baf7be54c51d", size = 2854603, upload-time = "2026-10-22T19:00:14.539Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/57/e0/8daab46faf48cdd83d13a49790986068cbaec3f5402d318d2976c86056d2/smalldocs-0.5.4-py3-none-any.whl", hash = "sha256:9d857ecbf5184551f161cf046aded10387b19cacbe3034fd9afbea70be61b1ae", size = 1340917, upload-time = "2026-10-22T19:00:11.94Z" },
 ]
 
 [[package]]

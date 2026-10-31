@@ -2,7 +2,7 @@
 
 An object store keeps flat keys such as ``a/b/c.csv`` in a bucket, and "/"
 makes the folders. ObjectStore turns that into stat, list and fetch, with the
-cache, folder fetches and offline mode. A driver gives four primitives:
+cache, folder fetches and offline mode. A driver gives six primitives:
 
 - ``locate(uri)``: the bucket and the key that a URI names.
 - ``_head(uri, bucket, key)``: the size and version of one object, or NotFound.

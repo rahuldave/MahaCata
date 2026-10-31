@@ -1,4 +1,4 @@
-"""provcat: resolve catalog URIs to local paths."""
+"""provcat: resolve, read and write catalog URIs, with a local cache."""
 from .cache import LocalCache
 from .catalog import Catalog, Snapshot
 from .config import ConfigSource, EmptyConfig, EtcdConfig, YamlConfig, open_config

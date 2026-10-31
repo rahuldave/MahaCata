@@ -1,9 +1,9 @@
-"""Stores read physical URIs. One driver class serves one kind of storage.
+"""Stores read and write physical URIs. One driver class serves one kind of storage.
 
 This follows the Perl URI module: the URI scheme picks the class. A store is a
-named instance of a driver with options, so ``s3://`` and ``lakefs://`` can both
-use the S3 driver with different endpoints. Register a new driver with
-``register_driver``.
+named instance of a driver with options, so two stores, such as ``s3://`` and a
+configured ``s3-acme://``, can use the same driver with different endpoints.
+Register a new driver with ``register_driver``.
 
 A driver gives four things:
 
@@ -12,13 +12,15 @@ A driver gives four things:
 - ``pin(uri, cache)``: the URI with any moving name (a branch) replaced by a fixed one.
 - ``fetch(uri, cache)``: a local path that holds the object.
 
-A driver that can be written also gives:
+Every driver but ``github`` can be written, and also gives:
 
 - ``put(uri, src, cache)``: write the local file ``src`` at ``uri``, and return its Entry.
 - ``delete(uri, cache)``: delete the object at ``uri``.
 
-A driver with commits, lakeFS, also gives ``commit`` and ``branch``. The others
-refuse writes with a StoreError.
+The ``lakefs`` driver and the object stores (``s3``, ``gcs`` and ``azure``) also
+give ``commit`` and ``branch``. An object store needs versioning on its bucket
+for a commit. ``lakefs`` also gives ``merge``. ``github`` refuses writes with a
+StoreError.
 
 Every method takes the cache, because pinning a moving name records what it
 pointed at, and offline mode reads only the cache.

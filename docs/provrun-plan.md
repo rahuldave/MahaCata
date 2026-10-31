@@ -159,7 +159,7 @@ Model calls and tool calls inside PydanticAI must reach the recorder without hel
 2. Write `ProvcatResolver`. It calls `pin` and then makes a snapshot of the pinned version.
 3. Add snapshots to provcat as `Catalog.snapshot(uri)`, which returns a `Snapshot` with the pinned URI, the path and the SHA-256. A snapshot lives at `.provcat/snapshots/<kind>/<sha256>/<name>` in the cache, where the kind is file or folder. The SHA-256 is of the content. For a folder, it is the SHA-256 of a list of its files and their hashes. So two versions with the same kind, the same name and the same content share one snapshot. A snapshot is read-only. provcat reuses it only if its hash still matches, and replaces it otherwise. It is made with a copy-on-write clone where the disk has one, and with a copy elsewhere.
 
-The provcat cache today keeps one path for each store and key, whatever the version. A later fetch of a moved branch rewrites that path in place. A mount of that path is not safe, so mounts use snapshots only.
+When this plan was written, the provcat cache kept one path for each store and key, whatever the version. It now keeps fixed versions in their own folders, but the path without a version still moves. A later fetch of a moved branch rewrites that path in place. A mount of that path is not safe, so mounts use snapshots only.
 
 **Tests:**
 - The stub denies a URI that is not in the allow list.

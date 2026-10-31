@@ -1,6 +1,10 @@
-# provcat
+# MahaCata
 
-provcat turns a catalog URI into a local path. A catalog URI names a dataset, a model, a prompt or some code in words that stay the same when the storage changes. provcat resolves the URI to a physical location, downloads the object into a local cache, and returns the path.
+MahaCata holds two Python packages, provcat and provrun.
+
+provcat resolves catalog URIs. A catalog URI names a dataset, a model, a prompt or some code in words that stay the same when the storage changes. provcat turns it into the URI of a store, such as S3, lakeFS or GitHub, or into a pinned version. It reads the object, or fetches it into a local cache and returns the path. A local file needs no cache.
+
+provcat writes to every store but GitHub. It commits in lakeFS and in versioned buckets, branches in lakeFS and in any bucket, and merges in lakeFS. It makes read-only snapshots of pinned versions.
 
 The first commit of this repository is the provcat code as it was found in `~/Catalog/provcat`. Read [docs/tour.md](docs/tour.md) for a guided tour with commands to run. Read [docs/setup.md](docs/setup.md) to install lakeFS, etcd and the tools that the tests need. Read [docs/design.md](docs/design.md) for what that code did, what changed and how the parts fit together. Read [docs/reference-server.md](docs/reference-server.md) to run and operate the shared lakeFS that keeps orgs apart. Read [docs/transactions.md](docs/transactions.md) for what a write and a commit guarantee, in lakeFS and in a bucket.
 
@@ -14,6 +18,8 @@ This repository is a uv workspace with two Python packages. A uv workspace is on
 | provrun | `packages/provrun` | Runs agents and model calls on data that provcat resolves, and records the evidence of each run. Its command is `provr`. Read [docs/provrun.md](docs/provrun.md), and take the tour in [docs/provrun-tour.md](docs/provrun-tour.md). |
 
 provrun depends on provcat, and provcat does not depend on provrun. [docs/provrun-plan.md](docs/provrun-plan.md) is the plan that provrun follows.
+
+The folder `docs` is also a website, with a reference page for each module. [smalldocs](https://github.com/rahuldave/smalldocs) builds it. Run `uv run --group docs smalldocs preview docs`, and open http://127.0.0.1:4200.
 
 ## Install and run
 
@@ -63,12 +69,12 @@ A store is a named instance of a driver. Every driver reads. All but `github` al
 
 | Driver | URI | What it does |
 |---|---|---|
-| `file` | `file:///abs/path` | Returns the local path. It does not copy into the cache. Option `root` confines the store to one folder. |
-| `s3` | `s3://bucket/key` | Reads AWS S3 or any S3-compatible server, for example MinIO or the lakeFS S3 gateway. Options are `endpoint_url`, `region`, `profile` and `addressing_style`. |
-| `lakefs` | `lakefs://repo/ref/path?at=ts:TIME` | Reads lakeFS through its S3 gateway, and asks its REST API for commits. `pin` turns a branch or a time into a commit. `ls` of an empty branch gives `[]`, and `ls lakefs://repo` lists the branches. Options are those of `s3`, plus `api_url`. |
+| `file` | `file:///abs/path` | Reads and writes local files, with no cache. `fetch` returns the path itself. Option `root` confines the store to one folder. |
+| `s3` | `s3://bucket/key` | Reads and writes AWS S3 or any S3-compatible server, for example MinIO. It branches in any bucket. In a bucket with versioning on, it also pins and commits. Options are `endpoint_url`, `region`, `profile` and `addressing_style`. |
+| `lakefs` | `lakefs://repo/ref/path?at=ts:TIME` | Reads and writes lakeFS through its S3 gateway. It pins, commits, branches and merges through its REST API. `pin` turns a branch or a time into a commit. `ls` of an empty branch gives `[]`, and `ls lakefs://repo` lists the branches. Options are those of `s3`, plus `api_url`. |
 | `github` | `github://owner/repo/path?at=branch:main` | Reads a file or a folder of a GitHub repository at a commit. `pin` turns a branch, a tag or a time into a commit. Options are `api_url`, `token_env`, `use_gh_cli` and `timeout`. |
-| `gcs` | `gs://bucket/key` | Reads Google Cloud Storage. Options are `project`, `endpoint_url` and `anonymous`. Needs the `gcs` extra. |
-| `azure` | `az://account/container/key` | Reads Azure Blob Storage and ADLS Gen2. Options are `account_url` and `connection_string_env`. Needs the `azure` extra. |
+| `gcs` | `gs://bucket/key` | Reads and writes Google Cloud Storage. It branches in any bucket. In a bucket with versioning on, it also pins and commits. Options are `project`, `endpoint_url` and `anonymous`. Needs the `gcs` extra. |
+| `azure` | `az://account/container/key` | Reads and writes Azure Blob Storage and ADLS Gen2. It branches in any container. In a Blob Storage account with versioning on, it also pins and commits. ADLS Gen2 has no versions. Options are `account_url` and `connection_string_env`. Needs the `azure` extra. |
 
 Each cloud driver uses that cloud's Python SDK and takes credentials from the usual places:
 
@@ -99,15 +105,17 @@ A configuration can hold a part for each tenant, in its `tenants` section, and a
 
 ## The cache
 
-The cache folder is `~/.cache/provcat`. The environment variable `PROVCAT_CACHE`, the `cache.root` setting or the `--cache` option can change it. The files have readable paths, so a container can mount a part of the cache.
+The cache folder is `~/.cache/provcat`, or `$XDG_CACHE_HOME/provcat` if that variable is set. The environment variable `PROVCAT_CACHE`, the `cache.root` setting or the `--cache` option can change it. The example configuration sets `cache.root` to `PROVCAT_CACHE` or `~/.cache/provcat`, so it ignores `XDG_CACHE_HOME`. The files have readable paths.
 
 ```
 <cache>/github/<owner>/<repo>/<commit>/<path>
-<cache>/<s3 store name>/<bucket>/<key>
+<cache>/<store name>/<bucket>/<key>                   an object store; for lakeFS the key holds the commit
+<cache>/<store name>@version-<ID>/<bucket>/<key>      a fixed version of a file
+<cache>/<store name>@commit-<ID>/<bucket>/<key>       a file or folder at a provcat commit
 <cache>/.provcat/        versions, finished folders and pinned refs
 ```
 
-provcat stores a GitHub file under its commit, so the file never goes stale. provcat checks an S3 file against its ETag before each use, and downloads it again when the ETag changed. With `--offline`, provcat reads only the cache. For a branch, it uses the last commit that it pinned.
+provcat stores a GitHub file under its commit, so the file never goes stale. provcat checks a file of an object store against its version before each use, and downloads it again when the version changed. The version is the ETag on S3 and Azure, and the generation on GCS. With `--offline`, provcat reads only the cache. For a branch, it uses the last commit that it pinned.
 
 A fetch can rewrite a cached file in place when a branch moves. So do not mount a cached path into a container. Mount a snapshot instead. `Catalog.snapshot(uri)` pins the URI, fetches that version, and copies it into `<cache>/.provcat/snapshots/<kind>/<sha256>/<name>`. The kind is `file` or `folder`, the folder name is the SHA-256 of the content, and the copy is read-only. Before provcat uses a snapshot again, it checks the digest, and it replaces a snapshot that someone changed.
 
@@ -131,7 +139,7 @@ A fetch can rewrite a cached file in place when a branch moves. So do not mount 
 
 ## Tests
 
-The tests are in three folders, and each test gets the marker of its folder:
+The provcat tests are in three folders, and each test gets the marker of its folder. The provrun tests are in `packages/provrun/tests`. They get no marker, so `-m unit` and `-m integration` select provcat tests only.
 
 | Folder | Marker | What the tests use |
 |---|---|---|

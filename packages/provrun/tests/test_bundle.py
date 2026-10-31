@@ -99,3 +99,15 @@ def test_verify_refuses_an_unpinned_bundle(aws, tmp_path, runs, docs):
     out = go(catalog, runs, docs, bundle_scheme="run")
     unpinned = out.bundle.pinned.split("?")[0]
     assert main(["--runs", str(runs), "verify", out.run_id, "--config", config, "--bundle", unpinned]) == 1
+
+
+def test_an_input_in_a_bucket_without_versioning_fails_the_run(aws, tmp_path, runs):
+    # provrun.md says an input must be pinnable. A plain bucket cannot pin a file.
+    aws.create_bucket(Bucket="plain")
+    aws.put_object(Bucket="plain", Key="report.txt", Body=b"42")
+    catalog = Catalog({}, cache_root=tmp_path / "cache")
+    agent = AgentSpec(name="q", backend="litellm", model="m", prompt="p", inputs=[InputSpec("s3://plain/report.txt")])
+    out = asyncio.run(run_agent(agent, catalog=catalog, runs_root=runs, org="acme", domain="benefits",
+                                env="dev", actor="t", backend=LiteLLMBackend(answer)))
+    assert out.status == "failed"
+    assert "version" in str(out.error).lower()

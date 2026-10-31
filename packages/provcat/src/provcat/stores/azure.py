@@ -13,7 +13,8 @@ Options, all optional:
 
 Without a connection string, credentials come from DefaultAzureCredential: the
 environment, a managed identity, or ``az login``. The identity needs the role
-Storage Blob Data Reader. Do not put keys in the provcat configuration.
+Storage Blob Data Reader to read, and Storage Blob Data Contributor to write,
+commit or branch. Do not put keys in the provcat configuration.
 
 The version of a file is its ETag. A download returns the ETag of the bytes it
 sent, so the cached bytes always match the version recorded. On an ADLS Gen2

@@ -35,7 +35,7 @@ lakeFS keeps the objects on local disk, in `<dir>/data`, with `blockstore.type: 
 
 lakeFS can keep the objects in S3, ADLS Gen2 or GCS instead. That takes a `blockstore` section with the bucket in `lakefs.yaml`, and the org policies' namespace rule then names that bucket, not `local://`. provcat would not change, because it talks only to lakeFS. The reference server does not do this yet.
 
-Without lakeFS, provcat reads and writes S3, ADLS Gen2 and GCS buckets directly. A plain bucket has no branches, commits or pins, and the cloud's own access control keeps orgs apart.
+Without lakeFS, provcat reads and writes S3, GCS and Azure buckets directly. It branches in any bucket. In a bucket with versioning on, it also pins and commits, as "Commits in a bucket" in [the design](design.md#commits-in-a-bucket) explains. The cloud's own access control keeps orgs apart.
 
 ### Why lakeFS 1.86.0, patched
 
@@ -55,7 +55,7 @@ Stock 1.86.0 did not keep orgs apart. The fork fixes that. `PROVCAT.md` at the r
 
 ## Start and stop it
 
-Build the fork first, as `docs/setup.md` explains under "Build lakeFS 1.86.0 from source". Then start the server:
+Build the fork first, as [the setup page](setup.md) explains under "Build lakeFS 1.86.0 from source". Then start the server:
 
 ```bash
 uv run python packages/provcat/scripts/lakefs_acl_local.py
@@ -175,7 +175,7 @@ export LAKEFS_S3_ENDPOINT=http://127.0.0.1:8002
 
 The example configuration, `packages/provcat/config/provcat.example.yaml`, then works as it is. Its store `lakefs-acme` uses the profile `lakefs-acme`, and `lakefs-globex` uses `lakefs-globex`. The logical schemes pick the store from the org in the URI, so `data+table://acme/...` reads and writes with acme's keys only. The store `lakefs` uses the admin's keys.
 
-Give each org a configuration with only its own store, and only its own profile in its credentials file. The mapping in one shared configuration routes requests; the keys are what keep orgs apart. `docs/design.md` explains this under "Tenants".
+Give each org a configuration with only its own store, and only its own profile in its credentials file. The mapping in one shared configuration routes requests; the keys are what keep orgs apart. [The design](design.md#tenants) explains this under "Tenants".
 
 `AWS_SHARED_CREDENTIALS_FILE` hides `~/.aws/credentials` in that shell. So the plain S3 stores lose their keys there. Use another shell for them, or copy the profiles into `~/.aws/credentials`.
 
@@ -287,7 +287,7 @@ GOTOOLCHAIN=go1.26.4 go test ./pkg/api ./pkg/graveler/... ./pkg/catalog/... ./pk
 
 | What you see | Why | What to do |
 |---|---|---|
-| `no program at .../lakefs` | The fork is not built. | Build it, as `docs/setup.md` explains. |
+| `no program at .../lakefs` | The fork is not built. | Build it, as [the setup page](setup.md) explains. |
 | `something already listens on 127.0.0.1:8002` | Another lakeFS, or an earlier run, holds the port. | Stop it. `lsof -i :8002` shows what holds it. |
 | `... was made with other ports` | The ports differ from the first run. | Use the first run's ports, or edit `listen_address` and `endpoint` in the config files. |
 | `... takes calls without the token` | The access-list server is a stock build. | Build `acl-server` from the fork. |
@@ -301,7 +301,7 @@ The lakeFS banner says to complete setup at `127.0.0.1:8000`. That line is stock
 ## Where to read more
 
 - **The fork's changes:** `PROVCAT.md` at the root of [rahuldave/lakeFS](https://github.com/rahuldave/lakeFS/blob/provcat/PROVCAT.md).
-- **Building lakeFS:** the section "Build lakeFS 1.86.0 from source" in `docs/setup.md`.
-- **Tenancy:** the section "Tenants" in `docs/design.md`, with the holes in stock lakeFS.
-- **Writes through provcat:** the section "Writes" in `docs/design.md`.
+- **Building lakeFS:** the section "Build lakeFS 1.86.0 from source" in [the setup page](setup.md).
+- **Tenancy:** the section "Tenants" in [the design](design.md#tenants), with the holes in stock lakeFS.
+- **Writes through provcat:** the section "Writes" in [the design](design.md#writes).
 - **The script itself:** `packages/provcat/scripts/lakefs_acl_local.py`.

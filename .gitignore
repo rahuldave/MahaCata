@@ -13,3 +13,11 @@ wheels/
 .DS_Store
 .ropeproject
 .pytest_cache
+
+# The documentation site, built by smalldocs
+docs/_site/
+docs/.smalldocs*
+# The reference pages and the index of names, which each build writes again
+docs/api/*.qmd
+docs/api/.smalldocs-api
+docs/_symbols.json

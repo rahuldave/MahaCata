@@ -1,6 +1,6 @@
 # Setting up provcat and its services
 
-This page lists the tools that provcat and its tests need, and how to set up each service. Read the [README](../README.md) first for the commands and the kinds of test.
+This page lists the tools that provcat and its tests need, and how to set up each service. Read the [README](https://github.com/rahuldave/MahaCata#readme) first for the commands and the kinds of test.
 
 ## What each part needs
 
@@ -15,7 +15,7 @@ This page lists the tools that provcat and its tests need, and how to set up eac
 
 ## Where command-line tools are used
 
-provcat reads every store through a Python SDK. It uses boto3 for S3 and lakeFS, `google-cloud-storage` for GCS, and `azure-storage-blob` for Azure. The system tests also make and delete their buckets, projects and accounts with Python SDKs. They make lakeFS repositories through the lakeFS REST API. Command-line tools have these jobs only:
+provcat reaches the cloud stores through Python SDKs. It uses boto3 for S3 and for the data in lakeFS, `google-cloud-storage` for GCS, and `azure-storage-blob` for Azure. It calls GitHub and the lakeFS REST API over HTTP, with the Python standard library. The system tests also make and delete their buckets, projects and accounts with Python SDKs. They make lakeFS repositories through the lakeFS REST API. Command-line tools have these jobs only:
 
 | Tool | Job |
 |---|---|
@@ -29,7 +29,7 @@ You do not need the `aws` command. The AWS SDK reads `~/.aws/credentials` and `~
 
 ## Install and run lakeFS
 
-lakeFS is a server that keeps git-like branches and commits over object storage. provcat reads it through its S3 gateway.
+lakeFS is a server that keeps git-like branches and commits over object storage. provcat reads and writes its data through its S3 gateway. It pins, commits, branches and merges through its REST API.
 
 1. Build lakeFS 1.86.0 from source, as the next section shows.
 2. Put `lakefs` on your `PATH`, or give its path to the script with `--lakefs`.

@@ -12,7 +12,7 @@ The tour needs no model and no key. The agent answers with the LiteLLM setting `
 | pinned URI | A URI with a fixed version, for example `?at=version:235061e9-...`. |
 | snapshot | A read-only copy of one pinned version, in a folder named by the SHA-256 of its content. |
 | run folder | The folder of one run. It holds `input/`, `output/`, `scratch/` and `evidence/`. |
-| bundle | The evidence and the outputs of a run, committed to a store. |
+| bundle | The evidence and the outputs of a run. If the run sets `bundle_scheme`, provrun commits the bundle to a store. Otherwise it stays in the run folder. |
 
 ## Before you start
 
@@ -97,10 +97,10 @@ You need Python 3.13 and [uv](https://docs.astral.sh/uv/). Run every command fro
 ```
 data://acme/demo/dev/reports/report.txt            the logical URI in the run file
   | StubBroker: may this run read it?              access_requested, access_granted
-  | provcat: resolve, then pin                     context_resolved
+  | provcat: resolve to the store                  context_resolved
   v
-local-s3://data/main/.../report.txt?at=version:V   the pinned URI
-  | provcat: fetch version V into the cache
+local-s3://data/main/.../report.txt                the physical URI
+  | provcat: pin to version V, and fetch V into the cache
   | provcat: copy it into a read-only snapshot     snapshot_materialized
   v
 cache/.provcat/snapshots/file/<sha256>/report.txt

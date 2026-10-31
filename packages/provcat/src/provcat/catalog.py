@@ -132,8 +132,11 @@ class Catalog:
 
     def snapshot(self, uri: str | Uri) -> Snapshot:
         """Pin uri, fetch that version, and copy it into a read-only folder of
-        the cache that no later fetch changes. A store without versions, such
-        as file, pins a URI to itself; the digest still names the bytes."""
+        the cache that no later fetch changes. The URI must be pinnable: a file
+        or folder in lakeFS or GitHub, a file in a versioned bucket, a folder
+        with a provcat commit, or a local file or folder. The file store pins a URI to
+        itself; the digest still names the bytes. An object store without
+        versioning cannot pin, so it raises a StoreError."""
         u = parse(uri)
         pinned = self.pin(u)
         src = self.fetch(pinned)

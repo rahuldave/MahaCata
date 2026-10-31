@@ -17,7 +17,8 @@ The stub's rules:
   environment must be those of the run.
 - A physical URI, such as ``file:///...``, names no environment, so the stub
   grants one only in the dev environment. A scheme is physical if it names a
-  store of the catalog, including a configured one such as ``local-s3``.
+  store of the catalog, including one that the configuration adds, such as
+  ``lakefs-acme`` in the example configuration.
 """
 from __future__ import annotations
 

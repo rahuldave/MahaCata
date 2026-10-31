@@ -1,7 +1,7 @@
 [project]
 name = "provcat"
 version = "0.2.0"
-description = "Resolve catalog URIs to files on local disk, S3-compatible storage and GitHub, with a local cache"
+description = "Resolve, read and write catalog URIs in local files, S3, GCS, Azure, lakeFS and GitHub, with a local cache"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

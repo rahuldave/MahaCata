@@ -1,0 +1,52 @@
+project:
+  type: website
+  output-dir: _site
+
+website:
+  title: MahaCata
+  description: provcat, which resolves, reads and writes catalog URIs, and provrun, which runs agents on them and records the evidence
+  repo-url: https://github.com/rahuldave/MahaCata
+  repo-subdir: docs
+  page-navigation: true
+  llms-txt: true
+  # The plan names private projects, so it stays in the repository and off the public site.
+  drafts: [provrun-plan.md]
+  navbar:
+    left:
+      - href: index.md
+        text: Home
+      - href: tour.md
+        text: provcat
+      - href: provrun.md
+        text: provrun
+      - href: api/index.md
+        text: Reference
+    tools:
+      - icon: github
+        href: https://github.com/rahuldave/MahaCata
+  sidebar:
+    style: floating
+    contents:
+      - index.md
+      - section: provcat
+        contents:
+          - tour.md
+          - design.md
+          - setup.md
+          - transactions.md
+          - reference-server.md
+      - section: provrun
+        contents:
+          - provrun.md
+          - provrun-tour.md
+      - section: Reference
+        contents: api/*
+
+theme: folio
+toc: true
+code-copy: true
+linkify: true
+api:
+  packages: [provcat, provrun]
+  root: ..
+  source: https://github.com/rahuldave/MahaCata/blob/main

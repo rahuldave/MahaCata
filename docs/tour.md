@@ -1,6 +1,6 @@
 # A guided tour of provcat
 
-This tour follows catalog URIs through provcat, one step at a time. Each step gives commands to run and the output they print. After each command, the tour says what happened inside. The [README](../README.md) is the reference for the commands, and [design.md](design.md) is the reference for the parts.
+This tour follows catalog URIs through provcat, one step at a time. Each step gives commands to run and the output they print. After each command, the tour says what happened inside. The tour reads only. [The design](design.md#writes) explains how provcat writes, commits, branches and merges. The [README](https://github.com/rahuldave/MahaCata#readme) is the reference for the commands, and [design.md](design.md) is the reference for the parts.
 
 ## Before you start
 
@@ -210,11 +210,15 @@ stores:
 
 A logical URI of an org with no store fails. For example, `data+table://initech/...` fails with "there is no store named 'lakefs-initech'".
 
-A **driver** is a class that reads one kind of storage. A **store** is a driver with options and a name. The name becomes a URI scheme. The `lakefs` driver is the S3 driver plus the lakeFS REST API, which turns a branch or a time into a commit. So `?at=ts:2026-10-01` on a lakeFS URI reads the branch as it was on that day. The `github` driver answers `ts:` from commit dates.
+
+
+A **driver** is a class that reads and writes one kind of storage. The `github` driver only reads. A **store** is a driver with options and a name. The name becomes a URI scheme.
+
+The `lakefs` driver is the S3 driver plus the lakeFS REST API, which turns a branch or a time into a commit. So `?at=ts:2026-10-01` on a lakeFS URI reads the branch as it was on that day. The `github` driver answers `ts:` from commit dates.
 
 ## Step 4: Read from an S3-compatible server
 
-Step 3 stopped at the physical URI. To read the data, provcat needs a server that speaks the S3 protocol. The tour uses moto, a local S3 server that the tests also use. The same commands work against lakeFS or MinIO with a different `endpoint_url`.
+Step 3 stopped at the physical URI. To read the data, provcat needs a server that speaks the S3 protocol. The tour uses moto, a local S3 server that the tests also use. The same commands work against MinIO with a different `endpoint_url`. For lakeFS, use a store with the `lakefs` driver, so that pins, `ts:` and commits work.
 
 1. Start moto in a second terminal.
 
@@ -280,11 +284,11 @@ $ uv run provc --config /tmp/tour.yaml fetch local-s3://demo/main/data
 5. It deletes cached files whose objects are gone.
 6. It marks the folder as done.
 
-S3 has no commits, so an S3 path can change under the same name. Online, provcat checks the ETag before each use, and downloads the file again when the ETag changed. Offline, it uses the cached file without a check. Stop moto with Ctrl+C when you finish.
+A plain S3 path can change under the same name. In a bucket with versioning on, `provc pin` and `provc commit` give fixed versions, as "Commits in a bucket" in [the design](design.md#commits-in-a-bucket) explains. Online, provcat checks the ETag before each use, and downloads the file again when the ETag changed. Offline, it uses the cached file without a check. Stop moto with Ctrl+C when you finish.
 
 ## Step 5: Work offline
 
-The cache has readable paths, so a program in a container can read the files directly. To use provcat inside the container, mount the whole cache folder, `.provcat` included. Then run provcat with `--offline`. It reads only the cache.
+To use provcat inside a container, mount the whole cache folder, `.provcat` included. Then run provcat with `--offline`. It reads only the cache. Do not give a program a cached path to read, because a fetch can rewrite it in place. Give it a snapshot from `Catalog.snapshot` instead, as provrun does.
 
 ```
 $ uv run provc --offline --config $C fetch 'code://octocat/Hello-World/master/README'
@@ -345,15 +349,17 @@ The push copies each `${oc.env:...}` value as written. Each reader fills the val
 | Resolve a logical URI | `packages/provcat/src/provcat/resolver.py` |
 | Join the parts and pick the store | `packages/provcat/src/provcat/catalog.py` |
 | Read GitHub | `packages/provcat/src/provcat/stores/github.py` |
-| Read S3, lakeFS and MinIO | `packages/provcat/src/provcat/stores/s3.py` |
-| Read local files | `packages/provcat/src/provcat/stores/local.py` |
+| Read and write S3 and MinIO | `packages/provcat/src/provcat/stores/s3.py`, with the shared logic of object stores in `stores/objects.py` |
+| Read and write GCS and Azure | `packages/provcat/src/provcat/stores/gcs.py` and `stores/azure.py` |
+| Read and write lakeFS, and commit, branch and merge | `packages/provcat/src/provcat/stores/lakefs.py` |
+| Read and write local files | `packages/provcat/src/provcat/stores/local.py` |
 | Keep files, records and locks | `packages/provcat/src/provcat/cache.py` |
 | The `provc` command | `packages/provcat/src/provcat/cli.py` |
 
-The tests in `tests/` are a second set of examples. They run without a network, except for two live tests that run only when you set an environment variable. The README lists them.
+The tests in `packages/provcat/tests` and `packages/provrun/tests` are a second set of examples. The system tests use real services, and each runs only when you set its environment variable. The README lists them.
 
 ## Where to go next
 
-- **Use provcat from Python.** `Catalog` has the methods `resolve`, `pin`, `stat`, `list`, `fetch` and `read`. `list` is `provc ls`, and `read` returns the bytes that `provc cat` prints. For example, `Catalog.open("packages/provcat/config/provcat.example.yaml").fetch(uri)` returns a path.
+- **Use provcat from Python.** `Catalog` has the methods `resolve`, `pin`, `stat`, `list`, `fetch`, `read` and `snapshot` for reading. It has `put`, `delete`, `commit`, `branch` and `merge` for writing. `list` is `provc ls`, and `read` returns the bytes that `provc cat` prints. For example, `Catalog.open("packages/provcat/config/provcat.example.yaml").fetch(uri)` returns a path.
 - **Add a driver.** The section "Stores" in [design.md](design.md) lists the methods that a driver needs.
 - **Learn the limits.** The section "Known limits" in [design.md](design.md) lists what does not work yet, and what to do about each limit.

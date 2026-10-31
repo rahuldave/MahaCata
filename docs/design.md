@@ -1,6 +1,6 @@
 # Design of provcat
 
-This page records what the original provcat did, what this version keeps, and how the interfaces fit together. Read the [README](../README.md) first for the commands.
+This page records what the original provcat did, what this version keeps, and how the interfaces fit together. Read the [README](https://github.com/rahuldave/MahaCata#readme) first for the commands.
 
 ## Terms
 
@@ -11,7 +11,7 @@ This page records what the original provcat did, what this version keeps, and ho
 | Selector | The `?at=kind:value` part of a URI. It picks a version. |
 | Resolver | The part that turns a logical URI into a physical URI. |
 | Store | A named instance of a driver, with options. |
-| Driver | A class that reads one kind of storage, for example S3. |
+| Driver | A class that reads and writes one kind of storage, for example S3. The `github` driver only reads. |
 | Pin | Replace a moving name, such as a branch, with a fixed one, such as a commit. |
 | ETag | The fingerprint that S3 gives each version of an object. |
 
@@ -37,10 +37,9 @@ The rest was a draft:
 This version keeps the URI shapes and the template idea, and drops the rest:
 
 - **Kept:** the logical schemes, the YAML and etcd configuration, and stage pointers. Stage pointers now live in the configuration.
-- **Added:** store drivers for local files, S3-compatible storage and GitHub, and a local cache.
-- **Removed:** the lakeFS write commands, Lance tables, MLflow runs and the Jinja cards. They are in the first commit for later use.
-
-lakeFS stays usable for reading. Its S3 gateway takes `s3://repo/ref/path`, so a store with the S3 driver and the lakeFS endpoint reads any branch or commit.
+- **Added:** six store drivers: local files, S3, Google Cloud Storage, Azure Blob Storage, lakeFS and GitHub. Also a local cache, writes to every store but GitHub, commits and branches in lakeFS and in versioned buckets, merges in lakeFS, and read-only snapshots.
+- **Replaced:** the original lakeFS write commands. The `lakefs` driver now writes, commits, branches and merges. See "The lakeFS driver" and "Writes" below.
+- **Removed:** Lance tables, MLflow runs and the Jinja cards. They are in the first commit for later use.
 
 ## The interfaces
 
@@ -50,7 +49,7 @@ provcat follows the Perl `URI` module, in which the scheme of a URI picks the cl
 |---|---|---|
 | `ConfigSource` | `YamlConfig`, `EtcdConfig`, `EmptyConfig` | `packages/provcat/src/provcat/config.py` |
 | `Resolver` | `TemplateResolver` | `packages/provcat/src/provcat/resolver.py` |
-| `Store` | `LocalStore`, `GithubStore`, and the object stores `S3Store`, `GcsStore`, `AzureStore` | `packages/provcat/src/provcat/stores/` |
+| `Store` | `LocalStore`, `GithubStore`, `LakefsStore`, and the object stores `S3Store`, `GcsStore`, `AzureStore` | `packages/provcat/src/provcat/stores/` |
 | Cache | `LocalCache` | `packages/provcat/src/provcat/cache.py` |
 
 `Catalog` in `packages/provcat/src/provcat/catalog.py` joins them. It loads a configuration, makes one store for each entry in `stores`, and makes the resolver from `schemes` and `stages`. A store name and a logical scheme cannot be the same.
@@ -82,7 +81,7 @@ The resolver percent-encodes each value in the template, so a value can never ad
 
 A driver class has four methods for reading. Each method takes the cache.
 
-- **`pin(uri, cache)`:** returns the URI with a fixed version. GitHub replaces a branch or tag with a commit and records it in the cache. Other drivers return the URI as it is.
+- **`pin(uri, cache)`:** returns the URI with a fixed version. GitHub and lakeFS replace a branch, a tag or a time with a commit. They record the pin in the cache, so that `--offline` can use it. An object store pins a file to its version ID, and a folder to its newest provcat commit. Both need versioning on the bucket. The `file` driver returns the URI as it is.
 - **`stat(uri, cache)`:** returns one `Entry`, a file or a folder, with a size and a version.
 - **`list(uri, cache)`:** returns the entries directly inside a folder.
 - **`fetch(uri, cache)`:** returns a local path that holds the file or folder.
@@ -92,11 +91,11 @@ A driver that can be written also has two methods for writing:
 - **`put(uri, src, cache)`:** writes the local file `src` at the URI, and returns its `Entry`.
 - **`delete(uri, cache)`:** deletes one object.
 
-The `file`, `s3`, `gcs`, `azure` and `lakefs` drivers can be written. The `github` driver cannot, and the base class refuses with a `StoreError`. The lakeFS driver also has `commit` and `branch`, as "Writes" below explains.
+The `file`, `s3`, `gcs`, `azure` and `lakefs` drivers can be written. The `github` driver cannot, and the base class refuses with a `StoreError`. The `lakefs` driver has `commit`, `branch` and `merge`. The `s3`, `gcs` and `azure` drivers have `commit` and `branch`, and a commit needs versioning on the bucket. "Writes" below explains each.
 
 To add a driver, write a subclass of `Store`, set `driver`, give its options and their types in `option_types()`, and decorate the class with `register_driver`. A store entry with `driver: <name>` then uses it.
 
-S3, Google Cloud Storage and Azure Blob Storage share one base class, `ObjectStore` in `packages/provcat/src/provcat/stores/objects.py`. It holds stat, list, folder fetch, the cache and offline mode. A driver for one more object store gives only four primitives:
+S3, Google Cloud Storage and Azure Blob Storage share one base class, `ObjectStore` in `packages/provcat/src/provcat/stores/objects.py`. It holds stat, list, folder fetch, the cache and offline mode. A driver for one more object store gives only six primitives:
 
 - **`locate(uri)`:** the bucket and the key that a URI names.
 - **`_head`:** the size and version of one object.
@@ -120,7 +119,7 @@ Some disks, for example the default disks of macOS and Windows, store `Guide.md`
 
 The GitHub driver checks the kind of a ref through the git refs API, so `tag:main` reads the tag and not the branch. It follows an annotated tag to its commit. It fetches a folder as one tarball of the commit. It skips links, devices and names with `..` in the tarball, and unpacks with the Python `data` filter. Offline mode serves a file inside a folder that was fetched whole. The token goes only to the host of `api_url`, and `gh auth token` is asked for that host.
 
-The S3 driver fetches a folder object by object, and then deletes cached files whose objects no longer exist. It removes the folder marker first, and writes it again only after the whole folder is current. It refuses a folder that holds keys no URI can name, for example `a//b`. It records the ETag that came with the downloaded bytes. It does not send `If-Match`, because S3-compatible servers do not all support it.
+An object store fetches a folder object by object, and then deletes cached files whose objects no longer exist. It removes the folder marker first, and writes it again only after the whole folder is current. It refuses a folder that holds keys no URI can name, for example `a//b`. It records the version that came with the downloaded bytes. The version is the ETag on S3 and Azure, and the generation on GCS. The S3 driver does not send `If-Match`, because S3-compatible servers do not all support it.
 
 ## Tenants
 
@@ -410,4 +409,4 @@ What a bucket commit does not give:
 ## Next steps
 
 - **Partial commits:** a lakeFS commit takes everything staged on the branch. A commit of one folder would need a temporary branch and a merge.
-- **Containers:** mount the cache read-only into containers, and run `provc --offline` inside them.
+- **Containers:** to run `provc --offline` in a container, mount the whole cache. A program that only reads the data uses a snapshot instead, because a fetch can rewrite a cached path. provrun stages a copy of a snapshot for each run.
