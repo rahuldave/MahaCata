@@ -379,4 +379,5 @@ chmod -R u+w /tmp/provrun-tour && rm -rf /tmp/provrun-tour
 | Run the model | `packages/provrun/src/provrun/backends/litellm.py` |
 | Write the events | `packages/provrun/src/provrun/evidence.py` |
 | Commit the bundle | `packages/provrun/src/provrun/context.py` |
+| The library entry and its errors | `packages/provrun/src/provrun/runner.py`, `spec.py` and `errors.py` |
 | The commands | `packages/provrun/src/provrun/cli.py` |

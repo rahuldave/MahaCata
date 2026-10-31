@@ -31,13 +31,15 @@ from typing import TYPE_CHECKING
 
 from provcat import parse
 
+from .errors import ProvrunError
+
 if TYPE_CHECKING:
     from .context import RunContext
 
 MODES = ("mounted_snapshot", "mounted_readwrite", "retrieval", "api")
 
 
-class AccessDenied(Exception):
+class AccessDenied(ProvrunError):
     def __init__(self, grant: Grant):
         super().__init__(f"access to {grant.uri} denied: {grant.reason}")
         self.grant = grant

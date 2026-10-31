@@ -11,23 +11,17 @@ section; docs/provrun.md shows one.
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import sys
 from pathlib import Path
 
-from .context import default_runs_root
+from .context import default_runs_root, find_run
+from .errors import ProvrunError
 from .evidence import EvidenceError, read_events, sha256_bytes, verify, verify_against
 
 
 def _run_folder(run: str, root: Path) -> Path:
-    p = Path(run)
-    if p.is_dir() and (p / "evidence").is_dir():
-        return p
-    p = root / run
-    if not (p / "evidence").is_dir():
-        raise SystemExit(f"provr: no run {run!r} under {root}")
-    return p
+    return find_run(run, root)
 
 
 def _verify_outputs(folder: Path) -> list[str]:
@@ -83,23 +77,14 @@ def _verify_bundle(folder: Path, args) -> list[str]:
 def cmd_run(args) -> int:
     from provcat import Catalog
 
-    from .runner import run_agent
-    from .spec import load_run_file
+    from .runner import run_file_sync
+    from .spec import RunFile
 
-    run_cfg, agent = load_run_file(Path(args.runfile))
-    missing = [k for k in ("org", "domain", "env", "actor") if not run_cfg.get(k)]
-    if missing:
-        raise SystemExit(f"provr: the run section needs {missing}")
+    rf = RunFile.load(args.runfile)
     catalog = Catalog.open(args.config, tenant=args.tenant)
-    outcome = asyncio.run(run_agent(
-        agent, catalog=catalog, org=run_cfg["org"], domain=run_cfg["domain"], env=run_cfg["env"],
-        actor=run_cfg["actor"], allow=run_cfg.get("allow"), runs_root=args.runs, mode=args.mode,
-        bundle_scheme=args.bundle_scheme or run_cfg.get("bundle_scheme")))
-    print(json.dumps({"run_id": outcome.run_id, "status": outcome.status, "folder": str(outcome.folder),
-                      "bundle": outcome.bundle.uri, "pinned": outcome.bundle.pinned,
-                      "note": outcome.bundle.note,
-                      "error": f"{outcome.error.__class__.__name__}: {outcome.error}" if outcome.error else None},
-                     indent=2))
+    outcome = run_file_sync(rf, catalog=catalog, runs_root=args.runs, mode=args.mode,
+                            bundle_scheme=args.bundle_scheme)
+    print(json.dumps(outcome.to_dict(), indent=2))
     return 0 if outcome.status == "completed" else 1
 
 
@@ -155,6 +140,9 @@ def main(argv: list[str] | None = None) -> int:
     except EvidenceError as e:
         print(f"provr: {e}", file=sys.stderr)
         return 2
+    except ProvrunError as e:
+        print(f"provr: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

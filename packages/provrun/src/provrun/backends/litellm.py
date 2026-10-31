@@ -109,10 +109,13 @@ class LiteLLMBackend(InProcessBackend):
         if self._completion is not None:
             return self._completion
         try:
-            from litellm import acompletion
+            import litellm
         except ImportError as e:
             raise ImportError("the litellm backend needs litellm: install provrun[litellm]") from e
-        return acompletion
+        # LiteLLM prints notes such as its provider list on stdout, which is the
+        # caller's: provr prints its JSON there.
+        litellm.suppress_debug_info = True
+        return litellm.acompletion
 
     async def execute(self, ctx: RunContext, agent: AgentSpec, run: RunSpec) -> RunResult:
         if agent.tools:

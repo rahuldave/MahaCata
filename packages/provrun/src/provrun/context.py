@@ -25,6 +25,7 @@ import contextlib
 import contextvars
 import json
 import os
+import re
 import secrets
 import warnings
 from collections.abc import Iterator
@@ -33,7 +34,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .evidence import EvidenceError, EvidenceRecorder
+from .errors import RunNotFound, RunSettingError
+from .evidence import MODES, EvidenceError, EvidenceRecorder
 
 if TYPE_CHECKING:
     from provcat import Catalog
@@ -42,6 +44,25 @@ if TYPE_CHECKING:
     from .resolve import Resolver
 
 _CURRENT: contextvars.ContextVar[RunContext | None] = contextvars.ContextVar("provrun_run", default=None)
+
+
+_SCHEME = re.compile(r"[a-z][a-z0-9+.-]*")
+
+
+def check_segment(name: str, value) -> None:
+    """Refuse an org, domain or env that is not one segment of the run URI.
+    ``domain: demo/prod`` would put the bundle under the prod environment."""
+    if not isinstance(value, str) or not value or value in (".", "..") or re.search(r"[/?#\\\s]", value):
+        raise RunSettingError(f"{name} must be one part of a URI, with no '/', '?', '#' or space; got {value!r}")
+
+
+def check_scheme(value, catalog: Catalog | None = None) -> None:
+    """Refuse a bundle scheme that is not a plain scheme name, or that names a
+    store of the catalog: the bundle goes through a logical scheme."""
+    if not isinstance(value, str) or not _SCHEME.fullmatch(value):
+        raise RunSettingError(f"bundle_scheme must be a scheme name such as 'run'; got {value!r}")
+    if catalog is not None and value in catalog.stores:
+        raise RunSettingError(f"bundle_scheme {value!r} is a store of the catalog; use a logical scheme")
 
 
 def new_run_id() -> str:
@@ -54,6 +75,25 @@ def default_runs_root() -> Path:
         return Path(env)
     xdg = os.environ.get("XDG_DATA_HOME")
     return (Path(xdg) if xdg else Path.home() / ".local" / "share") / "provrun" / "runs"
+
+
+def find_run(run: str | Path, root: str | Path | None = None, *, ids_only: bool = False) -> Path:
+    """The folder of a run, as an absolute path. run is a run ID under root
+    (the default runs root when None), or else a path to a run folder. With
+    ids_only, run must be a run ID, so a name from a user cannot reach
+    another folder. Raises RunNotFound."""
+    text = str(run)
+    root = Path(root) if root is not None else default_runs_root()
+    if text and text not in (".", "..") and not re.search(r"[/\\]", text):
+        p = root / text
+        if (p / "evidence").is_dir():
+            return p.resolve()
+    elif ids_only:
+        raise RunNotFound(f"{text!r} is not a run ID")
+    p = Path(run)
+    if not ids_only and text and p.is_dir() and (p / "evidence").is_dir():
+        return p.resolve()
+    raise RunNotFound(f"no run {text!r} under {root}")
 
 
 def current_run() -> RunContext:
@@ -96,9 +136,16 @@ class RunContext:
              data: dict | None = None) -> RunContext:
         """Make the run ID and the run folder, and write run_created. The
         evidence mode is lenient in dev and strict in every other environment,
-        unless mode says otherwise."""
+        unless mode says otherwise. A bad setting raises RunSettingError
+        before the folder is made."""
+        for name, value in (("org", org), ("domain", domain), ("env", env)):
+            check_segment(name, value)
+        if mode is not None and mode not in MODES:
+            raise RunSettingError(f"mode must be one of {MODES}; got {mode!r}")
+        if bundle_scheme is not None:
+            check_scheme(bundle_scheme, catalog)
         run_id = run_id or new_run_id()
-        folder = (runs_root or default_runs_root()) / run_id
+        folder = Path(runs_root if runs_root is not None else default_runs_root()) / run_id
         folder.mkdir(parents=True, exist_ok=False)
         for sub in ("output", "input", "scratch"):
             (folder / sub).mkdir()
