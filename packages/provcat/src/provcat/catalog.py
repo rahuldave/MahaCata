@@ -42,6 +42,7 @@ from . import hooks
 from .cache import LocalCache, snapshot
 from .config import ConfigSource, View, check, open_config, view
 from .errors import ConfigError, ResolveError, StoreError, UriError
+from .files import CatalogReader, CatalogWriter
 from .hooks import Request
 from .resolver import Resolution, Resolver, TemplateResolver
 from .stores import DEFAULT_STORES, Entry, Store, make_store
@@ -212,6 +213,69 @@ class Catalog:
         if p.is_dir():
             raise IsADirectoryError(f"{uri} is a folder")
         return p.read_bytes()
+
+    def open_file(self, uri: str | Uri, mode: str = "rb", autocommit: bool = True) -> CatalogReader | CatalogWriter:
+        """Open a file to read ("rb") or to write ("wb").
+
+        A read looks up and pins uri once, at open, and then reads only that
+        version. It runs the pin and open spots, read_block for each read, and
+        close with the byte ranges read. A write goes to a temporary file, and
+        close runs the close spot around a put; with autocommit off, commit()
+        does. Nothing is committed to the history of the store. If a hook at
+        open refuses after the handle was made, the handle is dropped unseen."""
+        u = parse(uri)
+        made: list = []
+        if mode == "rb":
+            logical, physical = self._store(u)
+            pinned = self._pin(logical, physical)
+
+            def reader(r: Request) -> CatalogReader:
+                path = self._fetch(logical, r.physical, pinned=True)
+                if path.is_dir():
+                    raise IsADirectoryError(f"{u} is a folder")
+
+                def block(start: int, length: int, read):
+                    return self._run("read_block", logical, r.physical, read, offset=start, length=length)
+
+                def done(h: CatalogReader) -> None:
+                    self._run("close", logical, r.physical, lambda r2: None, mode="rb", ranges=h.ranges)
+
+                made.append(CatalogReader(u, r.physical, path, block, done))
+                return made[-1]
+
+            return self._opened(made, "open", logical, pinned, reader, mode="rb")
+        if mode == "wb":
+            logical, physical = self._writable(u)
+
+            def writer(r: Request) -> CatalogWriter:
+                def done(h: CatalogWriter, path: Path) -> None:
+                    def put(r2: Request):
+                        h.entries = [self._put(logical, r2.physical, path)]
+                        return h.entries
+
+                    self._run("close", logical, r.physical, put, mode="wb")
+
+                made.append(CatalogWriter(u, done, autocommit))
+                return made[-1]
+
+            return self._opened(made, "open", logical, physical, writer, mode="wb")
+        raise ValueError(f"mode {mode!r}: provcat opens a file with rb or wb")
+
+    def _opened(self, made: list, *run, **args):
+        try:
+            return self._run(*run, **args)
+        except BaseException:
+            for h in made:
+                h.abandon()
+            raise
+
+    def fs(self, register: bool = True):
+        """An fsspec file system over this catalog; it needs provcat[fs].
+        With register, the logical schemes become fsspec protocols, so
+        fsspec.open and pandas take logical URIs (see provcat.fs)."""
+        from .fs import CatalogFileSystem
+
+        return CatalogFileSystem.over(self, register=register)
 
     # Writes
 

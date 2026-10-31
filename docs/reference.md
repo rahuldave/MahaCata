@@ -15,7 +15,7 @@ uv sync
 uv run provc --help
 ```
 
-The base package reads local files, GitHub, S3 and lakeFS. Google Cloud Storage, Azure and Hugging Face each need an extra, which installs the Python SDK of that service:
+The base package reads local files, GitHub, S3 and lakeFS. Google Cloud Storage, Azure and Hugging Face each need an extra, which installs the Python SDK of that service. The file system for fsspec needs the extra `fs`.
 
 In another project, install provcat from GitHub, with the extras that you need in the brackets:
 
@@ -23,7 +23,7 @@ In another project, install provcat from GitHub, with the extras that you need i
 pip install 'provcat[hf] @ git+https://github.com/rahuldave/MahaCata#subdirectory=packages/provcat'
 ```
 
-In a clone, `uv sync` installs all three.
+In a clone, `uv sync` installs all four.
 
 ## Commands
 
@@ -161,7 +161,7 @@ apps:
     fetch: [provcat.logical_only]
 ```
 
-The spots are `session`, `resolve`, `pin`, `stat`, `list`, `fetch`, `snapshot`, `put`, `delete`, `commit`, `branch` and `merge`.
+The spots are `session`, `resolve`, `pin`, `stat`, `list`, `fetch`, `snapshot`, `open`, `read_block`, `close`, `put`, `delete`, `commit`, `branch` and `merge`.
 
 | Rule | What it means |
 |---|---|
@@ -185,6 +185,36 @@ provcat comes with two hooks:
 A hook takes three arguments, `hook(ctx, req, next)`. `ctx` holds the app, the principal and the tenant. `req` holds the spot, the logical URI, the physical URI and the other arguments. `next(req)` runs the rest of the chain and returns the answer. A gate raises `provcat.AccessDenied`.
 
 Hooks hold back code that uses the catalog. Code that calls a store directly, or writes its own configuration, gets past them. "Hooks" in [the design](design.md#hooks) explains the rest.
+
+## Files and fsspec
+
+`Catalog.open_file(uri, mode)` opens one file, to read with `"rb"` or to write with `"wb"`. `catalog.fs()` gives a file system for fsspec over the catalog, and it needs the extra `fs`. Both go through the hooks of the app.
+
+```python
+import fsspec
+from provcat import Catalog
+
+cat = Catalog.open()
+fs = cat.fs()                                    # also registers the logical schemes
+fs.ls("code://octocat/Hello-World/master")
+with fsspec.open("code://octocat/Hello-World/master/README", "rb") as f:
+    data = f.read()
+```
+
+| Rule | What it means |
+|---|---|
+| A read pins at open. | `open_file` looks up the URI and pins it once. The handle then reads only that version, and `f.pinned` names it. |
+| A read fetches the whole file. | provcat fetches the pinned version into the cache at open. Each read runs the `read_block` spot, and `f.ranges` lists the byte ranges read. A wrapper that reads ahead, such as text mode, makes the ranges larger than the bytes its caller used. A cache of blocks, which would fetch only the parts read, is not built yet. |
+| A bucket without versioning cannot be opened. | Such a file has no version to pin, so `open_file` refuses it. `Catalog.read` and `Catalog.fetch` still read it. |
+| A write lands at close. | `"wb"` writes to a temporary file. `close` puts the file in the store and commits nothing. A `with` block on `open_file` that ends in an error puts nothing, and nor does a handle dropped without a close. |
+| fsspec wrappers put at close. | Text mode and compression close the file even when a `with` block fails, so the partial file is put. Inside `with fs.transaction:`, each write is put only when the block ends without an error. |
+| A local file is not fixed. | `file://` pins a URI to itself, so a change to the file during a read shows. A read never goes past the size at open. |
+| A folder cannot be opened. | `open_file` on a folder raises `IsADirectoryError`. Use `fs.ls` or `fs.find`. |
+| Paths are whole URIs. | `fs.ls("code://...")` gives the names under the URI, as URIs of the same scheme. A `/` in a selector is written `%2F`. A path with `?at=` is never a glob pattern. |
+| `fs()` registers the logical schemes. | After `cat.fs()`, `fsspec.open` and libraries built on fsspec take the logical URIs of `cat`. `cat.fs(register=False)` registers nothing. |
+| A known protocol is refused. | `cat.fs()` refuses a logical scheme that fsspec already knows, such as `memory` or `data`. Store names are never registered, so `s3://` in fsspec stays fsspec's own. |
+| The last catalog wins. | If two catalogs in one process register a scheme, the second one serves it. The registry keeps that catalog for the life of the process. A registered file system cannot be pickled; use `register=False` to send one to another process. |
+| fsspec caches are not gated. | A chained cache such as `simplecache::dd://...` keeps copies that the hooks never see. Do not use one over a catalog. |
 
 ## The cache
 

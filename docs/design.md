@@ -51,6 +51,7 @@ provcat follows the Perl `URI` module, in which the scheme of a URI picks the cl
 | `Resolver` | `TemplateResolver` | `packages/provcat/src/provcat/resolver.py` |
 | `Store` | `LocalStore`, `GithubStore`, `HfStore`, `LakefsStore`, and the object stores `S3Store`, `GcsStore`, `AzureStore` | `packages/provcat/src/provcat/stores/` |
 | Cache | `LocalCache` | `packages/provcat/src/provcat/cache.py` |
+| File system | `CatalogFileSystem`, an fsspec file system over a `Catalog` | `packages/provcat/src/provcat/fs.py` and `files.py` |
 | Hook | `provcat.log`, `provcat.logical_only`, and any function in the entry point group `provcat.hooks` | `packages/provcat/src/provcat/hooks.py` |
 
 `Catalog` in `packages/provcat/src/provcat/catalog.py` joins them. It loads a configuration, makes one store for each entry in `stores`, and makes the resolver from `schemes` and `stages`. A store name and a logical scheme cannot be the same.
@@ -134,7 +135,7 @@ Each method of `Catalog` runs through a lifecycle spot, and the hooks of the app
 - **The fetch answer.** The hooks at `fetch` get the local path. They get no SHA-256, because a digest of a folder reads every file. A hook can compute it.
 - **No cache layers yet.** Every hook runs before the base cache. A hook that returns an answer without calling `next` skips the cache and the store. A layer between the base cache and the store needs the drivers to call it, and that is not built.
 - **The principal.** It is the user of the process until profiles come.
-- **Spots to come.** `open`, `close` and `read_block` come with the file API.
+- **Files.** `open`, `read_block` and `close` run in `Catalog.open_file`. A read fetches the whole pinned file at open, so `read_block` runs on the copy in the cache. The cache of blocks is not built.
 
 - **The snapshot spot.** It gets the physical URI before the pin, because the pin runs inside it.
 - **The end of a session.** The `session` spot runs at the end only when code calls `Catalog.close()` or uses the catalog in a `with` block. A library that never closes its catalog, as provrun does now, runs it only at the start.

@@ -1,6 +1,6 @@
 # Notes on how code reads and writes data through provcat and provrun
 
-These notes describe the intended way to use provcat and provrun from code. They began as a design for review. The lookup with its entries and the hooks are built now, as the plan of pull requests at the end says. They cover the lookup, the lifecycle spots and their hooks, a file API in the style of fsspec and the evidence of a read. They end with a plan of pull requests and the open questions.
+These notes describe the intended way to use provcat and provrun from code. They began as a design for review. The lookup with its entries, the hooks and the file system are built now, as the plan of pull requests at the end says. They cover the lookup, the lifecycle spots and their hooks, a file API in the style of fsspec and the evidence of a read. They end with a plan of pull requests and the open questions.
 
 ## Terms
 
@@ -68,7 +68,7 @@ Each operation of the catalog passes through fixed spots:
 | `stat` and `list` | a question about a file or a folder | the URI, and then the entries |
 | `fetch` | the bytes of a pinned version come to local disk | the pinned URI, and then the local path and its SHA-256 |
 | `snapshot` | a fetched version becomes a read-only copy | the pinned URI, and then the path and the SHA-256 |
-| `open` and `close` | a handle opens on a pinned version, and closes | the pinned URI, the mode, and at close the byte ranges read |
+| `open` and `close` | a handle opens on a pinned version, and closes | the pinned URI, the mode, and at close the byte ranges read; a write gets the URI of its branch |
 | `read_block` | one byte range of a large file | the pinned URI and the range |
 | `put` and `delete` | a write or a delete in a store | the physical URI, and then the entry |
 | `commit`, `branch` and `merge` | a change to the history of a store | the URI, the message and the new pin |
@@ -207,7 +207,7 @@ The provcat GitHub driver did not handle Git LFS before step 1 below. `provc fet
 2. **The `hf` driver. Done in commit 780052f.** It reads Hugging Face models, datasets and Spaces through the Hub API. It pins to a commit, and it takes `branch:`, `tag:`, `commit:` and `ts:`. It is read-only at first.
 3. **Catalog entries. Done.** The lookup takes entries by the rules above, in the YAML file and in etcd.
 4. **The lifecycle spots and the hooks. Done.** The catalog runs each operation through its spots. The proxy configuration and the entry points come in, with two hooks, `provcat.log` and `provcat.logical_only`. Nothing changes for users who have no hooks file. The catalog pins before a fetch only where the driver already did, and cache layers are not built yet.
-5. **The fsspec file system.** `catalog.fs()` gives the adapter, with a pin at open and the cache of blocks. The logical schemes register as fsspec protocols.
+5. **The fsspec file system. Done.** `catalog.fs()` gives the adapter, with a pin at open. The logical schemes register as fsspec protocols. A read fetches the whole pinned file at open, and the cache of blocks is not built yet. A bucket without versioning cannot be opened, because it has no version to pin.
 6. **provrun on the hooks.** The broker becomes a gate hook, and the evidence becomes a recorder hook. The agent moves to its own process or container, and undeclared opens go from it to the provrun process. This step changes provrun, so it needs agreement on provrun's design first. provrun now reads pinned physical URIs to check a bundle, so a gate that refuses physical URIs would stop it.
 
 Steps 1 to 3 do not depend on each other. Step 5 needs step 4, and step 6 needs steps 4 and 5.

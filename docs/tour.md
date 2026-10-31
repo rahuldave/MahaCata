@@ -472,6 +472,26 @@ provc: github://octocat/Hello-World/README: app tour reads and writes only logic
 
 An app that the file does not name cannot start. `PROVCAT_APP=other` gives `no app 'other' under apps:`. Run `unset PROVCAT_HOOKS PROVCAT_APP` to end the step. "Hooks" in [the reference](reference.md#hooks) gives the rules.
 
+## Step 10: Open a logical URI with fsspec
+
+Libraries such as pandas open files through fsspec. `catalog.fs()` gives a file system for fsspec, and it registers the logical schemes. Then `fsspec.open` takes a logical URI:
+
+```
+$ uv run python - <<'EOF'
+import fsspec
+from provcat import Catalog
+cat = Catalog.open("packages/provcat/config/provcat.example.yaml")
+fs = cat.fs()
+print(fs.ls("code://octocat/Hello-World/master", detail=False))
+with fsspec.open("code://octocat/Hello-World/master/README", "rb") as f:
+    print(f.read(), f.pinned, f.ranges)
+EOF
+['code://octocat/Hello-World/master/README']
+b'Hello World!\n' github://octocat/Hello-World/README?at=commit:7fd1a60b01f91b314f59955a4e4d4e80d8edf11d [(0, 13)]
+```
+
+**What happened:** `fs.ls` listed the folder and named each file by its logical URI. `fsspec.open` found the `code` scheme, which `cat.fs()` registered. The open looked up the name and pinned it to a commit, and every read used that commit. `f.ranges` lists the bytes read. A recorder hook gets the same facts at the `read_block` and `close` spots. "Files and fsspec" in [the reference](reference.md#files-and-fsspec) gives the rules.
+
 ## Where each step lives in the code
 
 | Step | Files |
@@ -488,12 +508,13 @@ An app that the file does not name cannot start. `PROVCAT_APP=other` gives `no a
 | Read and write local files | `packages/provcat/src/provcat/stores/local.py` |
 | Keep files, records and locks | `packages/provcat/src/provcat/cache.py` |
 | Run hooks at the lifecycle spots | `packages/provcat/src/provcat/hooks.py` |
+| Open files, and the file system for fsspec | `packages/provcat/src/provcat/files.py` and `packages/provcat/src/provcat/fs.py` |
 | The `provc` command | `packages/provcat/src/provcat/cli.py` |
 
 The tests in `packages/provcat/tests` and `packages/provrun/tests` are a second set of examples. The system tests use real services, and each runs only when you set its environment variable. "Run the tests" in [setup](setup.md) lists them.
 
 ## Where to go next
 
-- **Use provcat from Python.** `Catalog` has the methods `resolve`, `pin`, `stat`, `list`, `fetch`, `read` and `snapshot` for reading. It has `put`, `delete`, `commit`, `branch` and `merge` for writing. `list` is `provc ls`, and `read` returns the bytes that `provc cat` prints. For example, `Catalog.open("packages/provcat/config/provcat.example.yaml").fetch(uri)` returns a path.
+- **Use provcat from Python.** `Catalog` has the methods `resolve`, `pin`, `stat`, `list`, `fetch`, `read` and `snapshot` for reading. It has `put`, `delete`, `commit`, `branch` and `merge` for writing. `open_file` and `fs` open files, as Step 10 shows. `list` is `provc ls`, and `read` returns the bytes that `provc cat` prints. For example, `Catalog.open("packages/provcat/config/provcat.example.yaml").fetch(uri)` returns a path.
 - **Add a driver.** The section "Stores" in [design.md](design.md) lists the methods that a driver needs.
 - **Learn the limits.** The section "Known limits" in [design.md](design.md) lists what does not work yet, and what to do about each limit.
