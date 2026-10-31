@@ -257,6 +257,7 @@ def _hash(p: Path, h) -> str:
 @register_driver
 class HfStore(Store):
     driver = "hf"
+    fetch_pins = True  # fetch pins a branch first, so the catalog pins it before the hooks at fetch
     ts_names_branch = True  # ts:BRANCH@TIME; see Catalog.resolve
 
     def option_types(self):

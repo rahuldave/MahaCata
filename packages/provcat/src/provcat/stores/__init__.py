@@ -49,6 +49,9 @@ class Entry:
 
 class Store(ABC):
     driver: str = ""
+    # True when fetch reads a branch at the version that pin gives. The
+    # catalog then pins first, so the hooks at pin see each version read.
+    fetch_pins: bool = False
 
     def __init__(self, name: str, options: dict | None = None, *, offline: bool = False):
         self.name = name

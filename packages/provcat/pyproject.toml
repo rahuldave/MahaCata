@@ -13,6 +13,10 @@ dependencies = [
 [project.scripts]
 provc = "provcat.cli:main"
 
+[project.entry-points."provcat.hooks"]
+"provcat.log" = "provcat.hooks:log"
+"provcat.logical_only" = "provcat.hooks:logical_only"
+
 [project.optional-dependencies]
 gcs = [
     "google-cloud-storage>=3.17.1",

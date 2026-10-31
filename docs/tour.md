@@ -437,6 +437,41 @@ hf://models/hf-internal-testing/tiny-random-gpt2/config.json?at=commit:937b4d23b
 
 Code that reads `code://octocat/Hello-World/master/weights/config.json` does not change when the entry moves the weights. "Entries" in [the reference](reference.md#entries) gives the rules, including the ones for tenants.
 
+## Step 9: Watch and limit an app with hooks
+
+A hook runs at each step of the catalog. A recorder writes down what an app reads. A gate refuses what the app may not read. Write a hooks file that gives an app named `tour` the two hooks that come with provcat:
+
+```
+$ cat > /tmp/provcat-tour-hooks.yaml <<'EOF'
+apps:
+  tour:
+    "*": [provcat.log, provcat.logical_only]
+EOF
+$ export PROVCAT_HOOKS=/tmp/provcat-tour-hooks.yaml PROVCAT_APP=tour
+```
+
+Read a logical name, and then the same file by its physical URI:
+
+```
+$ uv run provc --config $C cat 'code://octocat/Hello-World/master/README'
+{"app": "tour", "spot": "session", "logical": null, "physical": null, "event": "open"}
+{"app": "tour", "spot": "resolve", "logical": "code://octocat/Hello-World/master/README", "physical": null, "answer": "github://octocat/Hello-World/README?at=branch:master"}
+{"app": "tour", "spot": "pin", "logical": "code://octocat/Hello-World/master/README", "physical": "github://octocat/Hello-World/README?at=branch:master", "answer": "github://octocat/Hello-World/README?at=commit:7fd1a60b01f91b314f59955a4e4d4e80d8edf11d"}
+{"app": "tour", "spot": "fetch", "logical": "code://octocat/Hello-World/master/README", "physical": "github://octocat/Hello-World/README?at=commit:7fd1a60b01f91b314f59955a4e4d4e80d8edf11d", "answer": "/tmp/provcat-tour/github/octocat/Hello-World/7fd1a60b01f91b314f59955a4e4d4e80d8edf11d/README"}
+Hello World!
+{"app": "tour", "spot": "session", "logical": null, "physical": null, "event": "close"}
+
+$ uv run provc --config $C cat 'github://octocat/Hello-World/README'
+{"app": "tour", "spot": "session", "logical": null, "physical": null, "event": "open"}
+{"app": "tour", "spot": "pin", "logical": null, "physical": "github://octocat/Hello-World/README", "error": "AccessDenied: github://octocat/Hello-World/README: app tour reads and writes only logical URIs"}
+provc: github://octocat/Hello-World/README: app tour reads and writes only logical URIs
+{"app": "tour", "spot": "session", "logical": null, "physical": null, "event": "close"}
+```
+
+**What happened:** `provcat.log` wrote one line on stderr for each spot. The first read went through the lookup, the pin and the fetch, and each line names the logical URI. The second read had no logical URI, so `provcat.logical_only` refused it at the pin. The log is first in the chain, so it saw the refusal too.
+
+An app that the file does not name cannot start. `PROVCAT_APP=other` gives `no app 'other' under apps:`. Run `unset PROVCAT_HOOKS PROVCAT_APP` to end the step. "Hooks" in [the reference](reference.md#hooks) gives the rules.
+
 ## Where each step lives in the code
 
 | Step | Files |
@@ -452,6 +487,7 @@ Code that reads `code://octocat/Hello-World/master/weights/config.json` does not
 | Read and write lakeFS, and commit, branch and merge | `packages/provcat/src/provcat/stores/lakefs.py` |
 | Read and write local files | `packages/provcat/src/provcat/stores/local.py` |
 | Keep files, records and locks | `packages/provcat/src/provcat/cache.py` |
+| Run hooks at the lifecycle spots | `packages/provcat/src/provcat/hooks.py` |
 | The `provc` command | `packages/provcat/src/provcat/cli.py` |
 
 The tests in `packages/provcat/tests` and `packages/provrun/tests` are a second set of examples. The system tests use real services, and each runs only when you set its environment variable. "Run the tests" in [setup](setup.md) lists them.

@@ -26,6 +26,10 @@ read-only folder of the cache named by its content:
 A write goes to a branch: a URI with no ?at=, which writes to the scheme's
 default branch, or one with ?at=branch:NAME. Any other selector names a fixed
 version, which cannot change, so it is refused.
+
+Every method runs through a lifecycle spot, where the hooks of the app run
+(see provcat.hooks). The app comes from PROVCAT_APP, and its hooks from the
+proxy configuration. ``close`` runs the session spot again.
 """
 from __future__ import annotations
 
@@ -34,9 +38,11 @@ import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from . import hooks
 from .cache import LocalCache, snapshot
 from .config import ConfigSource, View, check, open_config, view
 from .errors import ConfigError, ResolveError, StoreError, UriError
+from .hooks import Request
 from .resolver import Resolution, Resolver, TemplateResolver
 from .stores import DEFAULT_STORES, Entry, Store, make_store
 from .uri import Selector, Uri, parse
@@ -55,8 +61,11 @@ class Snapshot:
 
 class Catalog:
     def __init__(self, config: dict | None = None, *, cache_root: str | Path | None = None,
-                 offline: bool = False, resolver: Resolver | None = None, tenant: str | None = None):
+                 offline: bool = False, resolver: Resolver | None = None, tenant: str | None = None,
+                 app: str | None = None):
         tenant = tenant or None
+        proxy = hooks.process_proxy(app)
+        self.app = hooks.process_app()
         cfg = check(config or {}, "config")
         if isinstance(cfg, View):
             if cfg.tenant != tenant:
@@ -83,7 +92,30 @@ class Catalog:
         unknown = set(cache_cfg) - {"root"}
         if unknown:
             raise ConfigError(f"cache: unknown keys {sorted(unknown)}")
-        self.cache = LocalCache(cache_root or cache_cfg.get("root"))
+        # The --cache argument, then the app's cache_root, then cache.root.
+        self.cache = LocalCache(cache_root or proxy.cache_root or cache_cfg.get("root"))
+        self.hooks = proxy.hooks
+        self.context = hooks.context(proxy.app, tenant)
+        self._run("session", None, None, lambda r: None, event="open")
+
+    def close(self) -> None:
+        """End the session: the hooks at the session spot see event close."""
+        self._run("session", None, None, lambda r: None, event="close")
+
+    def __enter__(self) -> Catalog:
+        return self
+
+    def __exit__(self, kind, err, tb) -> None:
+        if kind is None:
+            self.close()
+            return
+        try:
+            self.close()
+        except Exception:
+            pass  # the error from the body matters more
+
+    def _run(self, spot: str, logical: Uri | None, physical: Uri | None, work, **args):
+        return self.hooks.run(self.context, Request(spot, logical, physical, args), work)
 
     @classmethod
     def open(cls, spec: str | ConfigSource | None = None, *, tenant: str | None = None, **kw) -> Catalog:
@@ -96,7 +128,14 @@ class Catalog:
         return cls(source.load(tenant), tenant=tenant, **kw)
 
     def resolve(self, uri: str | Uri) -> Resolution:
+        """The physical URI of uri. A logical URI runs the resolve spot; a
+        physical one is its own answer."""
         u = parse(uri)
+        if u.scheme in self.stores:
+            return Resolution(u, u)
+        return self._run("resolve", u, None, lambda r: self._lookup(r.logical))
+
+    def _lookup(self, u: Uri) -> Resolution:
         if u.scheme in self.stores:
             return Resolution(u, u)
         if not self.resolver.handles(u.scheme):
@@ -113,26 +152,40 @@ class Catalog:
             res = replace(res, physical=physical, via=(*res.via, f"ts on branch {res.ts_branch} -> {physical}"))
         return res
 
-    def _store(self, uri: str | Uri) -> tuple[Store, Uri]:
-        physical = self.resolve(uri).physical
-        return self.stores[physical.scheme], physical
+    def _store(self, uri: str | Uri) -> tuple[Uri | None, Uri]:
+        """The logical URI, or None for a physical one, and the physical URI."""
+        u = parse(uri)
+        return (None if u.scheme in self.stores else u), self.resolve(u).physical
+
+    def _driver(self, u: Uri) -> Store:
+        if u.scheme not in self.stores:
+            raise ResolveError(f"{u}: there is no store named {u.scheme!r}")
+        return self.stores[u.scheme]
+
+    def _pin(self, logical: Uri | None, u: Uri) -> Uri:
+        return self._run("pin", logical, u, lambda r: self._driver(r.physical).pin(r.physical, self.cache))
+
+    def _fetch(self, logical: Uri | None, u: Uri, pinned: bool = False) -> Path:
+        if not pinned and getattr(self._driver(u), "fetch_pins", False):
+            # This store pins inside fetch, so pin here first and let the
+            # hooks at pin see the version.
+            u = self._pin(logical, u)
+        return self._run("fetch", logical, u, lambda r: self._driver(r.physical).fetch(r.physical, self.cache))
 
     def pin(self, uri: str | Uri) -> Uri:
-        store, u = self._store(uri)
-        return store.pin(u, self.cache)
+        return self._pin(*self._store(uri))
 
     def stat(self, uri: str | Uri) -> Entry:
-        store, u = self._store(uri)
-        return store.stat(u, self.cache)
+        logical, u = self._store(uri)
+        return self._run("stat", logical, u, lambda r: self._driver(r.physical).stat(r.physical, self.cache))
 
     def list(self, uri: str | Uri) -> list[Entry]:
-        store, u = self._store(uri)
-        return store.list(u, self.cache)
+        logical, u = self._store(uri)
+        return self._run("list", logical, u, lambda r: self._driver(r.physical).list(r.physical, self.cache))
 
     def fetch(self, uri: str | Uri) -> Path:
         """Return a local path that holds the file or folder."""
-        store, u = self._store(uri)
-        return store.fetch(u, self.cache)
+        return self._fetch(*self._store(uri))
 
     def snapshot(self, uri: str | Uri) -> Snapshot:
         """Pin uri, fetch that version, and copy it into a read-only folder of
@@ -140,13 +193,19 @@ class Catalog:
         or folder in lakeFS or GitHub, a file in a versioned bucket, a folder
         with a provcat commit, or a local file or folder. The file store pins a URI to
         itself; the digest still names the bytes. An object store without
-        versioning cannot pin, so it raises a StoreError."""
+        versioning cannot pin, so it raises a StoreError. The pin and the fetch
+        run their own spots inside the snapshot spot."""
         u = parse(uri)
-        pinned = self.pin(u)
-        src = self.fetch(pinned)
-        name = pinned.segments[-1] if pinned.segments else (pinned.authority or "root")
-        path, digest = snapshot(self.cache, src, name)
-        return Snapshot(u, pinned, path, digest, "folder" if path.is_dir() else "file")
+        logical, physical = self._store(u)
+
+        def work(r: Request) -> Snapshot:
+            pinned = self._pin(logical, r.physical)
+            src = self._fetch(logical, pinned, pinned=True)
+            name = pinned.segments[-1] if pinned.segments else (pinned.authority or "root")
+            path, digest = snapshot(self.cache, src, name)
+            return Snapshot(u, pinned, path, digest, "folder" if path.is_dir() else "file")
+
+        return self._run("snapshot", logical, physical, work)
 
     def read(self, uri: str | Uri) -> bytes:
         p = self.fetch(uri)
@@ -156,83 +215,90 @@ class Catalog:
 
     # Writes
 
-    def _writable(self, uri: str | Uri) -> tuple[Store, Uri]:
+    def _writable(self, uri: str | Uri) -> tuple[Uri | None, Uri]:
         u = parse(uri)
         if u.selector is not None and u.selector.kind != "branch":
             raise UriError(f"{u}: ?at={u.selector} names a fixed version; write to a branch")
-        store, physical = self._store(u)
+        logical, physical = self._store(u)
         if physical.selector is not None and physical.selector.kind != "branch":
             raise UriError(f"{u} resolves to {physical}, a fixed version; write to a branch")
         if u.selector is not None and u.scheme != physical.scheme:
             # A scheme whose target has no {ref} drops the branch, so the
             # write would land on the default one.
-            plain = self.resolve(Uri(u.scheme, u.authority, u.segments)).physical
+            plain = self._lookup(Uri(u.scheme, u.authority, u.segments)).physical
             if plain == physical:
                 raise UriError(f"{u}: scheme {u.scheme!r} does not use the branch in ?at=, "
                                f"so the write would go to {physical}")
-        return store, physical
+        return logical, physical
+
+    def _put(self, logical: Uri | None, u: Uri, f: Path) -> Entry:
+        return self._run("put", logical, u, lambda r: self._driver(r.physical).put(r.physical, f, self.cache))
 
     def put(self, uri: str | Uri, src: str | Path | bytes) -> list[Entry]:
         """Write a local file, a local folder or bytes at uri, and return the
-        Entries written. A folder is written file by file under uri."""
-        store, u = self._writable(uri)
+        Entries written. A folder is written file by file under uri, and each
+        file runs the put spot."""
+        logical, u = self._writable(uri)
         if isinstance(src, bytes):
             with tempfile.TemporaryDirectory() as d:
                 f = Path(d) / "data"
                 f.write_bytes(src)
-                return [store.put(u, f, self.cache)]
+                return [self._put(logical, u, f)]
         src = Path(src)
         if src.is_file():
-            return [store.put(u, src, self.cache)]
+            return [self._put(logical, u, src)]
         if not src.is_dir():
             raise FileNotFoundError(f"{src} does not exist")
         # Every target first, so a name that no URI can hold fails before
         # anything is written.
         plan = []
         for f in sorted(p for p in src.rglob("*") if p.is_file()):
-            target = u
+            target, name = u, logical
             for seg in f.relative_to(src).parts:
                 target = target.child(seg)
-            plan.append((target, f))
-        return [store.put(target, f, self.cache) for target, f in plan]
+                name = name.child(seg) if name else None
+            plan.append((name, target, f))
+        return [self._put(name, target, f) for name, target, f in plan]
 
     def delete(self, uri: str | Uri) -> None:
-        store, u = self._writable(uri)
-        store.delete(u, self.cache)
+        logical, u = self._writable(uri)
+        self._run("delete", logical, u, lambda r: self._driver(r.physical).delete(r.physical, self.cache))
+
+    def _history(self, spot: str, u: Uri, what: str) -> Store:
+        store = self._driver(u)
+        if getattr(store, spot, None) is None:
+            raise StoreError(f"{u}: store {store.name} ({store.driver}) has no {what}")
+        return store
 
     def commit(self, uri: str | Uri, message: str, metadata: dict[str, str] | None = None) -> Uri:
         """Commit the branch that uri is on, and return the physical URI pinned
         to the new commit. The metadata records where the commit came from: a
         logical URI adds provcat.uri."""
-        store, u = self._writable(uri)
-        commit = getattr(store, "commit", None)
-        if commit is None:
-            raise StoreError(f"{u}: store {store.name} ({store.driver}) has no commits")
+        logical, u = self._writable(uri)
+        self._history("commit", u, "commits")
         meta = dict(metadata or {})
-        logical = parse(uri)
-        if logical.scheme != u.scheme:
+        if logical is not None:
             meta.setdefault("provcat.uri", str(logical))
-        return commit(u, message, meta)
+        return self._run("commit", logical, u, lambda r: self._driver(r.physical).commit(
+            r.physical, r.args["message"], r.args["metadata"]), message=message, metadata=meta)
 
     def branch(self, uri: str | Uri, source: str) -> Uri:
         """Make the branch that uri names, from source: a branch, a tag or a commit."""
-        store, u = self._writable(uri)
-        make = getattr(store, "branch", None)
-        if make is None:
-            raise StoreError(f"{u}: store {store.name} ({store.driver}) has no branches")
-        return make(u, source)
+        logical, u = self._writable(uri)
+        self._history("branch", u, "branches")
+        return self._run("branch", logical, u, lambda r: self._driver(r.physical).branch(
+            r.physical, r.args["source"]), source=source)
 
     def merge(self, uri: str | Uri, source: str, message: str = "", metadata: dict[str, str] | None = None,
               strategy: str | None = None) -> Uri:
         """Merge source, a branch, a tag or a commit, into the branch that uri
         is on, and return the physical URI pinned to the merge commit. As with
         commit, a logical URI adds provcat.uri to the metadata."""
-        store, u = self._writable(uri)
-        merge = getattr(store, "merge", None)
-        if merge is None:
-            raise StoreError(f"{u}: store {store.name} ({store.driver}) has no merges")
+        logical, u = self._writable(uri)
+        self._history("merge", u, "merges")
         meta = dict(metadata or {})
-        logical = parse(uri)
-        if logical.scheme != u.scheme:
+        if logical is not None:
             meta.setdefault("provcat.uri", str(logical))
-        return merge(u, source, message, meta, strategy)
+        return self._run("merge", logical, u, lambda r: self._driver(r.physical).merge(
+            r.physical, r.args["source"], r.args["message"], r.args["metadata"], r.args["strategy"]),
+            source=source, message=message, metadata=meta, strategy=strategy)
