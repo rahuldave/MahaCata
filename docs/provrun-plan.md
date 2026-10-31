@@ -4,7 +4,7 @@ provrun is a Python library that runs agents and model calls on data that provca
 
 **Status:** phases 0 to 4 are built. Commit `5d8246b` made the workspace, and commit `2524d03` added snapshots and provrun. [provrun.md](provrun.md) is the guide for users. This plan records the design, so some steps below describe work that is now finished.
 
-The design comes from three sources. The first source is the Point32 planning documents in `~/Projects/Point32AI/PlanningDocs`, chiefly `implspec.md` sections 8, 10 to 12 and 14. The second source is the agent execution spec of ExtractoPrimo, `~/Credcore/ExtractoPrimo/internal_docs/agent-execution-spec.md`. The third source is the current Microsoft documentation of the Foundry Agent Service.
+The design comes from three sources. The first source is the private planning documents of the larger system that provrun serves. The sections of its implementation spec on access, evidence and execution matter most. The second source is the agent execution spec of an earlier, private runtime. The third source is the current Microsoft documentation of the Foundry Agent Service.
 
 ## Terms
 
@@ -26,7 +26,7 @@ The design comes from three sources. The first source is the Point32 planning do
 
 ## Decisions already made
 
-- **ExtractoPrimo does not change.** It will be retired. provrun copies its generic parts and changes them. Nothing in provrun imports ExtractoPrimo.
+- **The earlier runtime does not change.** It will be retired. provrun copies its generic parts and changes them. Nothing in provrun imports it.
 - **provrun depends on provcat, and provcat never depends on provrun.**
 - **The broker is a stub.** Profiles come later.
 - **The first backends run in this process.** They are a single LiteLLM call and a PydanticAI agent with a filesystem sandbox.
@@ -109,7 +109,7 @@ An evidence event has these fields:
 | `run_id` | The run that the event belongs to. |
 | `seq` | The position of the event in the run, from 0. |
 | `time` | The UTC time at which the recorder wrote the event. |
-| `type` | One of the event types in `implspec.md` section 14.1, plus `input_staged`. |
+| `type` | One of the event types in the section "Classes" above. |
 | `component` | The class that wrote the event, for example `StubBroker`. |
 | `actor` | The user or the service identity of the run. |
 | `refs` | The pinned logical URIs that the event is about. |
@@ -192,19 +192,19 @@ When this plan was written, the provcat cache kept one path for each store and k
 
 **Done when:** the two examples run from a clean checkout, and `provr verify` passes on both bundles.
 
-## What is copied from ExtractoPrimo
+## What is copied from the earlier runtime
 
-| ExtractoPrimo source | provrun destination | Change |
+| Earlier runtime source | provrun destination | Change |
 |---|---|---|
 | `interfaces.py`: `ContentRetriever`, `Executor`, `Outputter`, `OutputResult` | `Stager`, `Backend`, `Outputter`, `RunResult` | Remove `experiment_path`, `file_key` and `question_key`. Add `RunContext`. Make the methods asynchronous. |
 | `ContainerSpec` in the agent execution spec | `RunSpec` | Inputs are grants and snapshots, not host paths. |
-| `executors.py`: `_LiteLLMBase`, `StandardExecutor`, `MultimodalExecutor`, `build_content_blocks` | `LiteLLMBackend` | Use `acompletion`. Write evidence for each call. Keep the version limit `litellm<=1.82.6` from ExtractoPrimo, which avoids a compromised release. |
+| `executors.py`: `_LiteLLMBase`, `StandardExecutor`, `MultimodalExecutor`, `build_content_blocks` | `LiteLLMBackend` | Use `acompletion`. Write evidence for each call. Keep the version limit `litellm<=1.82.6` from the earlier runtime, which avoids a compromised release. |
 | `executors.py`: `PydanticAIExecutor` | `PydanticAIBackend` | Mounts come from `RunSpec`, not from `incoming/`. Remove the answers folder and the `{file_key}` substitution. |
-| `agent_tools.py`: `grep_file` and `EPDeps` | `provrun.tools.grep_file` and `RunDeps` | `RunDeps` holds the sandbox and the `RunContext`. |
+| `agent_tools.py`: `grep_file` and its deps class | `provrun.tools.grep_file` and `RunDeps` | `RunDeps` holds the sandbox and the `RunContext`. |
 | `registry.py` | `load_backend` in `provrun.backends`, and `ToolRegistry` in `provrun.tools` | Keep the entry points. Rename the groups to `provrun.backends`, `provrun.stagers` and `provrun.tools`. |
 | Workspace protocol in the agent execution spec, section 2.8 | `RunSpec` folder layout | Keep `input/`, `output/` and `scratch/`. |
 
-These parts of ExtractoPrimo are not copied:
+These parts of the earlier runtime are not copied:
 
 - the judge executors
 - the code that finds a file in `incoming/` from a file key
@@ -232,4 +232,4 @@ These parts of ExtractoPrimo are not copied:
 ## Questions that the build settled
 
 - **The place of snapshots.** Snapshots live in provcat, because they are a cache feature.
-- **The format of a tool folder.** Each module lists its tools in `TOOLS`. provrun does not load every public function, as ExtractoPrimo does.
+- **The format of a tool folder.** Each module lists its tools in `TOOLS`. provrun does not load every public function, as the earlier runtime does.
