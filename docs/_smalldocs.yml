@@ -35,6 +35,7 @@ website:
           - setup.md
           - transactions.md
           - reference-server.md
+          - access-notes.md
       - section: provrun
         contents:
           - provrun.md

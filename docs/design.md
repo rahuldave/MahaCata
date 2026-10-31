@@ -410,3 +410,4 @@ What a bucket commit does not give:
 
 - **Partial commits:** a lakeFS commit takes everything staged on the branch. A commit of one folder would need a temporary branch and a merge.
 - **Containers:** to run `provc --offline` in a container, mount the whole cache. A program that only reads the data uses a snapshot instead, because a fetch can rewrite a cached path. provrun stages a copy of a snapshot for each run.
+- **Hooks, catalog entries and a file API:** [access-notes.md](access-notes.md) gives the design and the plan of pull requests.
