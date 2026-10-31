@@ -192,19 +192,19 @@ fsspec has implementations for most of the stores that provcat reads:
 | Store | fsspec implementation | Use it in provcat |
 |---|---|---|
 | S3, GCS, Azure | s3fs, gcsfs, adlfs | No, not now. The provcat drivers hold the commit logic, the version checks and the folder rules that the tests cover. |
-| Hugging Face | `HfFileSystem` in `huggingface_hub` | Yes, inside the `hf` driver. It takes a revision and handles Xet. The driver adds the pin and `ts:`. |
+| Hugging Face | `HfFileSystem` in `huggingface_hub` | No. Its `get_file` checks the path on `main`, not on the pinned commit, and it keeps listings in memory. The `hf` driver calls the Hub API and the download functions of `huggingface_hub` itself. |
 | lakeFS | lakefs-spec | No. The provcat driver already reads, pins, commits and merges. |
 | DVC | `DVCFileSystem` in dvc | Maybe, for a later DVC driver. |
 | GitHub | `GithubFileSystem` in fsspec | No. But its way of reading Git LFS files is useful, see below. |
 
-A driver that uses an fsspec implementation stays behind the lifecycle spots. So the hooks apply to it as to every other driver. The `hf` driver turns off the caches of `HfFileSystem` and does not use the cache of `huggingface_hub` under `~/.cache/huggingface`. So the base cache is the only cache of its files.
+A driver that uses an fsspec implementation stays behind the lifecycle spots. So the hooks apply to it as to every other driver. The `hf` driver does not use the cache of `huggingface_hub` under `~/.cache/huggingface`. So the base cache is the only cache of its files.
 
 The provcat GitHub driver does not handle Git LFS now. A live test confirmed the problem. `provc fetch github://araines/serverless-php/php` writes the 133-byte pointer file, but `provc stat` gives the size of the content, 27,841,495 bytes. The fsspec GitHub file system reads the same contents API. If the content is a pointer, it downloads the `download_url` that GitHub gives for the file.
 
 ## Plan of pull requests
 
 1. **Git LFS in the GitHub driver.** The driver replaces each pointer file with its content, in a single file and in a folder. It gets the content through the Git LFS batch API, and it checks the size and the SHA-256 against the pointer. A copy of a pointer file in the cache from before the fix is fetched again. A snapshot of such a copy named the pointer, so the evidence of a run that used it named the pointer too.
-2. **The `hf` driver.** It reads Hugging Face models, datasets and Spaces through `HfFileSystem`. It pins to a commit, and it takes `branch:`, `tag:`, `commit:` and `ts:`. It is read-only at first.
+2. **The `hf` driver.** It reads Hugging Face models, datasets and Spaces through the Hub API. It pins to a commit, and it takes `branch:`, `tag:`, `commit:` and `ts:`. It is read-only at first.
 3. **Catalog entries.** The lookup takes entries by the rules above, in the YAML file and in etcd.
 4. **The lifecycle spots and the hooks.** The catalog runs each operation through its spots, and it pins before each read. The proxy configuration and the entry points come in. Nothing changes for users who have no hooks file.
 5. **The fsspec file system.** `catalog.fs()` gives the adapter, with a pin at open and the cache of blocks. The logical schemes register as fsspec protocols.
@@ -218,7 +218,4 @@ Steps 1 to 3 do not depend on each other. Step 5 needs step 4, and step 6 needs 
 - **No gates in etcd.** Hooks come from the proxy configuration now, and from the profile and the permissions later.
 - **The identity of a partial read.** The evidence of a read of blocks holds the version from the store and the byte ranges that the reader read. A hash of the whole file would make the reader download the whole file.
 - **The cache root.** `cache.root` stays in the configuration, as the default for users who have no hooks file. The proxy configuration can set another root.
-
-## Open questions
-
-- **The place of the repository type on Hugging Face.** The notes put it in the physical URI, as in `hf://datasets/...`, which is the form that `HfFileSystem` uses. The other choice is an option of the store.
+- **The kind of a Hugging Face repository.** It goes in the physical URI, as in `hf://datasets/...`, which is the form that `HfFileSystem` uses. A store option would need one store for each kind.

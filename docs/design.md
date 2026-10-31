@@ -11,7 +11,7 @@ This page records what the original provcat did, what this version keeps, and ho
 | Selector | The `?at=kind:value` part of a URI. It picks a version. |
 | Resolver | The part that turns a logical URI into a physical URI. |
 | Store | A named instance of a driver, with options. |
-| Driver | A class that reads and writes one kind of storage, for example S3. The `github` driver only reads. |
+| Driver | A class that reads and writes one kind of storage, for example S3. The `github` and `hf` drivers only read. |
 | Pin | Replace a moving name, such as a branch, with a fixed one, such as a commit. |
 | ETag | The fingerprint that S3 gives each version of an object. |
 
@@ -37,7 +37,7 @@ The rest was a draft:
 This version keeps the URI shapes and the template idea, and drops the rest:
 
 - **Kept:** the logical schemes, the YAML and etcd configuration, and stage pointers. Stage pointers now live in the configuration.
-- **Added:** six store drivers: local files, S3, Google Cloud Storage, Azure Blob Storage, lakeFS and GitHub. Also a local cache, writes to every store but GitHub, commits and branches in lakeFS and in versioned buckets, merges in lakeFS, and read-only snapshots.
+- **Added:** seven store drivers: local files, S3, Google Cloud Storage, Azure Blob Storage, lakeFS, GitHub and Hugging Face. Also a local cache, and writes to every store but GitHub and Hugging Face. Also commits and branches in lakeFS and in versioned buckets, merges in lakeFS, and read-only snapshots.
 - **Replaced:** the original lakeFS write commands. The `lakefs` driver now writes, commits, branches and merges. See "The lakeFS driver" and "Writes" below.
 - **Removed:** Lance tables, MLflow runs and the Jinja cards. They are in the first commit for later use.
 
@@ -49,7 +49,7 @@ provcat follows the Perl `URI` module, in which the scheme of a URI picks the cl
 |---|---|---|
 | `ConfigSource` | `YamlConfig`, `EtcdConfig`, `EmptyConfig` | `packages/provcat/src/provcat/config.py` |
 | `Resolver` | `TemplateResolver` | `packages/provcat/src/provcat/resolver.py` |
-| `Store` | `LocalStore`, `GithubStore`, `LakefsStore`, and the object stores `S3Store`, `GcsStore`, `AzureStore` | `packages/provcat/src/provcat/stores/` |
+| `Store` | `LocalStore`, `GithubStore`, `HfStore`, `LakefsStore`, and the object stores `S3Store`, `GcsStore`, `AzureStore` | `packages/provcat/src/provcat/stores/` |
 | Cache | `LocalCache` | `packages/provcat/src/provcat/cache.py` |
 
 `Catalog` in `packages/provcat/src/provcat/catalog.py` joins them. It loads a configuration, makes one store for each entry in `stores`, and makes the resolver from `schemes` and `stages`. A store name and a logical scheme cannot be the same.
@@ -81,7 +81,7 @@ The resolver percent-encodes each value in the template, so a value can never ad
 
 A driver class has four methods for reading. Each method takes the cache.
 
-- **`pin(uri, cache)`:** returns the URI with a fixed version. GitHub and lakeFS replace a branch, a tag or a time with a commit. They record the pin in the cache, so that `--offline` can use it. An object store pins a file to its version ID, and a folder to its newest provcat commit. Both need versioning on the bucket. The `file` driver returns the URI as it is.
+- **`pin(uri, cache)`:** returns the URI with a fixed version. GitHub, Hugging Face and lakeFS replace a branch, a tag or a time with a commit. They record the pin in the cache, so that `--offline` can use it. An object store pins a file to its version ID, and a folder to its newest provcat commit. Both need versioning on the bucket. The `file` driver returns the URI as it is.
 - **`stat(uri, cache)`:** returns one `Entry`, a file or a folder, with a size and a version.
 - **`list(uri, cache)`:** returns the entries directly inside a folder.
 - **`fetch(uri, cache)`:** returns a local path that holds the file or folder.
@@ -91,7 +91,7 @@ A driver that can be written also has two methods for writing:
 - **`put(uri, src, cache)`:** writes the local file `src` at the URI, and returns its `Entry`.
 - **`delete(uri, cache)`:** deletes one object.
 
-The `file`, `s3`, `gcs`, `azure` and `lakefs` drivers can be written. The `github` driver cannot, and the base class refuses with a `StoreError`. The `lakefs` driver has `commit`, `branch` and `merge`. The `s3`, `gcs` and `azure` drivers have `commit` and `branch`, and a commit needs versioning on the bucket. "Writes" below explains each.
+The `file`, `s3`, `gcs`, `azure` and `lakefs` drivers can be written. The `github` and `hf` drivers cannot, and the base class refuses with a `StoreError`. The `lakefs` driver has `commit`, `branch` and `merge`. The `s3`, `gcs` and `azure` drivers have `commit` and `branch`, and a commit needs versioning on the bucket. "Writes" below explains each.
 
 To add a driver, write a subclass of `Store`, set `driver`, give its options and their types in `option_types()`, and decorate the class with `register_driver`. A store entry with `driver: <name>` then uses it.
 
@@ -122,6 +122,18 @@ The GitHub driver checks the kind of a ref through the git refs API, so `tag:mai
 The GitHub driver also reads files that Git LFS keeps. Git LFS is the Git extension that keeps large files outside the repository, with a small pointer file in their place. The contents API and the tarball both give the pointer file. So after each download, the driver looks for pointer files and asks the Git LFS batch API for their content, 100 at a time. It checks the size and the SHA-256 of each object against its pointer, and it keeps nothing that does not match.
 
 The LFS server is on the web host, for example `github.com` for `api.github.com`, so the token goes there too. A download link must use HTTPS, and a redirect can go only to HTTP or HTTPS. The download links from the batch API carry their own headers, and the token never goes to them.
+
+The Hugging Face driver reads models, datasets and Spaces. Its URI starts with the kind of repository, `models`, `datasets` or `spaces`, as in the paths of `HfFileSystem`. An example is `hf://datasets/owner/repo/path`. The kind names the place, not the use, so a logical name of either scheme can point at any of them. The next two parts are the owner and the name of the repository. Without a selector, the driver uses `main`, the default branch of every Hugging Face repository.
+
+The driver asks the Hub for the branches and the tags, so `tag:main` reads the tag and not the branch. A `commit:` must be 7 to 40 hex digits, because the Hub also takes a branch or a tag in that place.
+
+The driver calls the Hub API itself, through `huggingface_hub`, with the timeout of the store. It tries a call again after a 429, a 5xx or a network error. Each call names the pinned commit.
+
+The driver downloads each file with the functions under `hf_hub_download` of `huggingface_hub`. They read a file that Xet keeps with the hf_xet package, or over plain HTTP if hf_xet is not installed. A download over plain HTTP waits `HF_HUB_DOWNLOAD_TIMEOUT` seconds, 10 by default, not the timeout of the store. Xet is the storage under Hugging Face, and it splits files into chunks. The driver fetches a folder file by file, from one listing of the folder at the commit.
+
+The driver checks each file it downloads. A file that Xet or Git LFS keeps must match the SHA-256 that the Hub lists, and any other file its git blob ID. The driver keeps nothing that does not match. It writes each file only into the provcat cache, not into the cache of `huggingface_hub` under `~/.cache/huggingface`, and it keeps no listings in memory. So the provcat cache holds the only copy. `huggingface_hub` and the Xet library still write small files of their own there, such as logs.
+
+The token goes to the endpoint of the store, so the endpoint must use HTTPS. Only the test servers on this machine may use plain HTTP. A page link of the Hub must point at the endpoint too. The token does not go to the download hosts that the Hub sends a download to. hf_xet sends it only to the Hub, for a Xet token. Without `token_env`, `huggingface_hub` finds the token in `HF_TOKEN` or in the file that `hf auth login` writes.
 
 An object store fetches a folder object by object, and then deletes cached files whose objects no longer exist. It removes the folder marker first, and writes it again only after the whole folder is current. It refuses a folder that holds keys no URI can name, for example `a//b`. It records the version that came with the downloaded bytes. The version is the ETag on S3 and Azure, and the generation on GCS. The S3 driver does not send `If-Match`, because S3-compatible servers do not all support it.
 
@@ -287,7 +299,15 @@ Git records when a commit was made, not when it was pushed. So the answer can di
 
 `--offline` keeps the answer that the last online pin found. A late push or a rewrite can change the online answer later, and the offline one stays as it was.
 
-A logical URI keeps its branch in its path, for example `code://org/repo/dev/path`. A GitHub target has no `{ref}`, so a plain `ts:TIME` would lose `dev`. So the resolver keeps the branch, and the catalog gives a GitHub store `?at=ts:dev@TIME`. Other stores get `ts:TIME`, as before. An `@` in the time of a logical URI is refused, so it cannot name a second branch.
+### Time on Hugging Face
+
+`hf://...?at=ts:TIME` and `?at=ts:BRANCH@TIME` work as on GitHub, with `main` in place of the default branch. The Hub lists the commits of a branch newest first, 100 a page. The driver takes the first one whose date is at or before TIME. It stops once it has read 10,000 commits.
+
+The Hub gives no parents of a commit. So the driver cannot keep to first parents, and a commit that someone made on another branch and merged with a merge commit counts too. The Hub itself merges a pull request as one new commit, so this matters only for history that someone pushed with git.
+
+### A branch in a logical URI
+
+A logical URI keeps its branch in its path, for example `code://org/repo/dev/path`. A GitHub or Hugging Face target has no `{ref}`, so a plain `ts:TIME` would lose `dev`. So the resolver keeps the branch, and the catalog gives a GitHub or Hugging Face store `?at=ts:dev@TIME`. Other stores get `ts:TIME`, as before. An `@` in the time of a logical URI is refused, so it cannot name a second branch.
 
 ## Writes
 
@@ -405,18 +425,22 @@ What a bucket commit does not give:
 | Lock files under `.provcat/locks` are never deleted. | Delete them when no provcat process runs. |
 | A folder and a folder inside it can be fetched at the same time, under different locks. | Avoid it. If a fetch fails with an error, run it again. |
 | A `${oc.env:...}` value in etcd reads the environment of each reader. | Let only trusted people write to the etcd prefix. |
-| `ts:` works on lakeFS and GitHub. Buckets refuse it. | Pin a bucket folder with a provcat commit. |
+| `ts:` works on lakeFS, GitHub and Hugging Face. Buckets refuse it. | Pin a bucket folder with a provcat commit. |
 | A GitHub `ts:` goes by committer dates, not push times. | Pin with `commit:` when the exact state matters. |
 | A bucket commit lists every version under its folder, twice, so it slows as history grows. | Commit small folders, or delete old versions that no commit names. |
-| A `ts:` search reads at most 100,000 commits on lakeFS, and 10,000 on GitHub. | Use `commit:` or a stage for older versions. |
+| A `ts:` search reads at most 100,000 commits on lakeFS, and 10,000 on GitHub and Hugging Face. | Use `commit:` or a stage for older versions. |
 | The GitHub driver reads Git LFS content only from the LFS server of GitHub. A repository whose `.lfsconfig` names another server fails. | Fetch the files from that server with its own store. |
 | A GitHub file that is a valid Git LFS pointer, but whose object the LFS server does not have, fails the fetch. | Fetch the files around it one by one. |
 | A Git LFS pointer that names Git LFS extensions fails the fetch. | Fetch the file with the `git lfs` command. |
 | `provc ls` on GitHub gives the size of the pointer of a Git LFS file, because the contents API lists it so. `provc stat` and a fetch give the size of the content. | Use `provc stat` for the size of one file. |
 | Files that an older provcat cached from GitHub may be pointer files, so the driver fetches them again. Offline mode does not serve them. | Fetch them once online. |
+| A Hugging Face `ts:` counts commits that a merge commit brought in from another branch, because the Hub gives no parents. | Pin with `commit:` when the exact state matters. |
+| The Hugging Face driver fetches a folder file by file, so a folder of many files is slow. | Fetch the files that you need. |
+| The Hugging Face driver does not read pull request refs, such as `refs/pr/1`, or the refs that the Hub makes, such as `refs/convert/parquet`. | Pin the commit of the ref with `commit:`. |
+| A Hugging Face repository can drop its old commits, for example with a squash of its history. Then a `ts:` before the new first commit fails online, but `--offline` still gives the pin it kept. A pinned commit that is gone fails. | Copy data that must stay readable into a store that you control. |
 
 ## Next steps
 
 - **Partial commits:** a lakeFS commit takes everything staged on the branch. A commit of one folder would need a temporary branch and a merge.
 - **Containers:** to run `provc --offline` in a container, mount the whole cache. A program that only reads the data uses a snapshot instead, because a fetch can rewrite a cached path. provrun stages a copy of a snapshot for each run.
-- **Hooks, catalog entries and a file API:** [access-notes.md](access-notes.md) gives the design and the plan of pull requests.
+- **Hooks:** [access-notes.md](access-notes.md) gives the design of hooks, catalog entries and a file API, and the plan of pull requests.

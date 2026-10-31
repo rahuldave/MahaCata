@@ -1651,6 +1651,7 @@ dev = [
     { name = "azure-identity" },
     { name = "azure-storage-blob" },
     { name = "google-cloud-storage" },
+    { name = "huggingface-hub" },
     { name = "moto", extra = ["server"] },
     { name = "pytest" },
 ]
@@ -1673,6 +1674,7 @@ dev = [
     { name = "azure-identity", specifier = ">=1.27.0" },
     { name = "azure-storage-blob", specifier = ">=12.31.0" },
     { name = "google-cloud-storage", specifier = ">=3.17.1" },
+    { name = "huggingface-hub", specifier = ">=2.4.0" },
     { name = "moto", extras = ["server"], specifier = ">=5.2.4" },
     { name = "pytest", specifier = ">=9.1.1" },
 ]
@@ -2450,6 +2452,9 @@ azure = [
 gcs = [
     { name = "google-cloud-storage" },
 ]
+hf = [
+    { name = "huggingface-hub" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -2457,10 +2462,11 @@ requires-dist = [
     { name = "azure-storage-blob", marker = "extra == 'azure'", specifier = ">=12.31.0" },
     { name = "boto3", specifier = ">=1.40.44" },
     { name = "google-cloud-storage", marker = "extra == 'gcs'", specifier = ">=3.17.1" },
+    { name = "huggingface-hub", marker = "extra == 'hf'", specifier = ">=2.4.0" },
     { name = "omegaconf", specifier = ">=2.3.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
 ]
-provides-extras = ["gcs", "azure"]
+provides-extras = ["gcs", "azure", "hf"]
 
 [[package]]
 name = "provrun"
