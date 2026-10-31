@@ -1,6 +1,6 @@
 # provrun
 
-provrun runs agents and model calls on data that provcat resolves, and records the evidence of each run. provrun is the caller of record. It makes the run ID, asks the broker for each input, makes read-only snapshots of the inputs through provcat and runs the agent. Then it writes the evidence and the outputs as one bundle. The file `docs/provrun-plan.md` in the repository has the design and the reasons for it. [provrun-tour.md](provrun-tour.md) is a guided tour that follows one file from a store into a run and its evidence.
+provrun runs agents and model calls on data that provcat resolves, and records the evidence of each run. provrun is the caller of record. It makes the run ID, asks the broker for each input, makes read-only snapshots of the inputs through provcat and runs the agent. Then it writes the evidence and the outputs as one bundle. [provrun-plan.md](provrun-plan.md) has the design and the reasons for it. [provrun-tour.md](provrun-tour.md) is a guided tour that follows one file from a store into a run and its evidence.
 
 ## Terms
 
@@ -171,4 +171,4 @@ If the store for bundles is `file`, which has no commits, provrun writes the bun
 | Snapshots are never deleted. | Delete old folders under `<cache>/.provcat/snapshots` when no run uses them. |
 | LiteLLM can print a warning that a logging coroutine was never awaited. | Ignore it. It comes from LiteLLM's logging, after the run ends. |
 | PydanticAI prints a banner about Logfire on each run in a terminal. | Set `PYDANTIC_AI_NO_BANNER=1`. |
-| Only the in-process backends exist. | Docker and Foundry backends are planned. See `docs/provrun-plan.md` in the repository. |
+| Only the in-process backends exist. | Docker and Foundry backends are planned. See [provrun-plan.md](provrun-plan.md). |

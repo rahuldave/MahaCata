@@ -130,7 +130,7 @@ Model calls and tool calls inside PydanticAI must reach the recorder without hel
 
 ### Phase 0: make the workspace
 
-1. Wait until no other session has uncommitted changes in provcat. Another session is changing the tenants code now.
+1. Wait until no other work on provcat is uncommitted, so that the move does not collide with it.
 2. Move `src/provcat`, `tests` and `pyproject.toml` into `packages/provcat` with `git mv`, so that the history follows the files.
 3. Write the workspace root `pyproject.toml`, and run `uv lock`.
 4. Run the provcat unit and integration tests. They must pass with no change to their code.

@@ -9,8 +9,6 @@ website:
   repo-subdir: docs
   page-navigation: true
   llms-txt: true
-  # The plan names private projects, so it stays in the repository and off the public site.
-  drafts: [provrun-plan.md]
   navbar:
     left:
       - href: index.md
@@ -40,6 +38,7 @@ website:
         contents:
           - provrun.md
           - provrun-tour.md
+          - provrun-plan.md
       - section: Reference
         contents: api/*
 

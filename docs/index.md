@@ -20,6 +20,7 @@ provrun depends on provcat, and provcat does not depend on provrun.
 | Learn how the parts of provcat fit together | [Design](design.md) |
 | Learn what a write and a commit guarantee | [Transactions](transactions.md) |
 | Run the shared lakeFS that keeps orgs apart | [The reference server](reference-server.md) |
+| Read why provrun is built as it is | [The provrun plan](provrun-plan.md) |
 | Look up a class or a function | [Reference](api/index.md) |
 | Look up the `provc` commands, URI forms, stores and configuration | The [README](https://github.com/rahuldave/MahaCata#readme) on GitHub |
 
