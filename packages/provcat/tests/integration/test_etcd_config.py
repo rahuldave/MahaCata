@@ -129,3 +129,17 @@ def test_save_refuses_what_load_would_refuse(etcd):
     with pytest.raises(ConfigError, match="must end with -acme"):
         src.save(bad)
     assert etcd.kv == {}
+
+
+def test_entries_round_trip_through_etcd(etcd, tmp_path):
+    cfg = {"schemes": {"t": {"parts": ["org", "a"], "rest": "p", "target": "s3://b/{a}/{p}", "tenant": "org"}},
+           "entries": {"t://acme/shared": {"target": "s3://shared/{path}"}},
+           "tenants": {"acme": {"stores": {"s3-acme": {"driver": "s3"}},
+                                "entries": {"t://acme/mine": {"target": "s3-acme://acme-mine/{path}"}}}}}
+    src = EtcdConfig(etcd.url + "/p")
+    src.save(cfg)
+    assert {"/p/entries", "/p/tenants/acme/entries"} <= set(etcd.kv)
+    assert src.raw() == cfg
+    acme = Catalog(src.load("acme"), cache_root=tmp_path, tenant="acme")
+    assert str(acme.resolve("t://acme/mine/x/y").physical) == "s3-acme://acme-mine/x/y"
+    assert str(acme.resolve("t://acme/shared/z").physical) == "s3://shared/z"

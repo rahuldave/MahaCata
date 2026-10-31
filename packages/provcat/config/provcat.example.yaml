@@ -137,3 +137,11 @@ schemes:
       org: '(?=.{1,39}\Z)[A-Za-z0-9](?:-?[A-Za-z0-9])*'
       repo: '[A-Za-z0-9._-]{1,100}'
       env: '(?!.*\.\.)(?!.*\.lock\Z)(?!.*\.\Z)(?!@\Z)[A-Za-z0-9_@+][A-Za-z0-9._+@-]{0,99}'
+
+# Entries send one name, or every name under a prefix, somewhere other than
+# the template of its scheme. The longest key wins. {path} is the rest of the
+# URI after the key. Here the weights of a code repository live on Hugging
+# Face, while the rest of it stays on GitHub. See "Entries" in docs/reference.md.
+entries:
+  "code://octocat/Hello-World/master/weights":
+    target: "hf://models/hf-internal-testing/tiny-random-gpt2/{path}"
