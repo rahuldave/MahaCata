@@ -11,10 +11,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# litellm releases after 1.82.6 were compromised; keep the upper limit.
-litellm = ["litellm<=1.82.6"]
+# An exact version, so that no new release arrives unread. 1.82.7, 1.82.8
+# and 1.107.0 were malicious. 1.83.0 is the first release from LiteLLM's
+# rebuilt pipeline. Later releases cap openai (1.83.1 and later) or
+# huggingface-hub (1.104.0 and later) below what pydantic-ai 2.32 and later
+# and the hf driver need, so they cannot share this workspace.
+litellm = ["litellm==1.83.0"]
 pydantic-ai = [
-    "pydantic-ai-slim>=1.70.0",
+    "pydantic-ai-slim>=2.64.0",
     "pydantic-ai-filesystem-sandbox>=0.9.0",
 ]
 

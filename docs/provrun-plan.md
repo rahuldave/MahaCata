@@ -198,7 +198,7 @@ When this plan was written, the provcat cache kept one path for each store and k
 |---|---|---|
 | `interfaces.py`: `ContentRetriever`, `Executor`, `Outputter`, `OutputResult` | `Stager`, `Backend`, `Outputter`, `RunResult` | Remove `experiment_path`, `file_key` and `question_key`. Add `RunContext`. Make the methods asynchronous. |
 | `ContainerSpec` in the agent execution spec | `RunSpec` | Inputs are grants and snapshots, not host paths. |
-| `executors.py`: `_LiteLLMBase`, `StandardExecutor`, `MultimodalExecutor`, `build_content_blocks` | `LiteLLMBackend` | Use `acompletion`. Write evidence for each call. Keep the version limit `litellm<=1.82.6` from the earlier runtime, which avoids a compromised release. |
+| `executors.py`: `_LiteLLMBase`, `StandardExecutor`, `MultimodalExecutor`, `build_content_blocks` | `LiteLLMBackend` | Use `acompletion`. Write evidence for each call. Pin `litellm==1.83.0` exactly. Releases 1.82.7, 1.82.8 and 1.107.0 were compromised. Releases after 1.83.0 need an older `openai` than PydanticAI 2.32 and later, or an older `huggingface-hub` than the hf driver. |
 | `executors.py`: `PydanticAIExecutor` | `PydanticAIBackend` | Mounts come from `RunSpec`, not from `incoming/`. Remove the answers folder and the `{file_key}` substitution. |
 | `agent_tools.py`: `grep_file` and its deps class | `provrun.tools.grep_file` and `RunDeps` | `RunDeps` holds the sandbox and the `RunContext`. |
 | `registry.py` | `load_backend` in `provrun.backends`, and `ToolRegistry` in `provrun.tools` | Keep the entry points. Rename the groups to `provrun.backends`, `provrun.stagers` and `provrun.tools`. |
