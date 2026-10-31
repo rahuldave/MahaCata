@@ -45,9 +45,9 @@ import yaml
 from .errors import ConfigError, ProvcatError
 from .uri import Uri
 
-#: The lifecycle spots, in the order the catalog meets them.
+#: The lifecycle spots. A spot can run inside another: fetch inside open or snapshot, put inside close.
 SPOTS = ("session", "resolve", "pin", "stat", "list", "fetch", "snapshot",
-         "put", "delete", "commit", "branch", "merge")
+         "open", "read_block", "close", "put", "delete", "commit", "branch", "merge")
 GROUP = "provcat.hooks"
 DEFAULT_FILE = Path("~/.config/provcat/hooks.yaml")
 
@@ -73,7 +73,9 @@ class Request:
     ``logical`` is the logical URI that started the operation, or None for a
     physical URI. ``physical`` is None at ``resolve`` and ``session``, because
     no lookup has run. ``args`` holds the rest: the message of a commit, the
-    source of a branch, or ``event`` ("open" or "close") at ``session``."""
+    source of a branch, ``event`` ("open" or "close") at ``session``, ``mode``
+    at ``open`` and ``close``, ``offset`` and ``length`` at ``read_block``, and
+    the merged ``ranges`` read at ``close``."""
 
     spot: str
     logical: Uri | None = None

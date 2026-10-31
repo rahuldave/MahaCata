@@ -547,3 +547,28 @@ def test_a_bucket_without_versions_refuses_pins_and_commits(backend, bucket, tmp
     # A branch from a branch needs no versions.
     c.branch(backend.uri(bucket, "dev"), "main")
     assert c.read(backend.uri(bucket, "dev/data/sub/b.txt")) == b"B1"
+
+
+# Files opened through the catalog
+
+def test_an_open_file_reads_the_version_of_its_open(backend, vbucket, tmp_path):
+    c = cat(backend, tmp_path)
+    uri = backend.uri(vbucket, "main/t/a.csv")
+    f = c.open_file(uri)
+    backend.put(vbucket, "main/t/a.csv", b"A2 longer")
+    assert f.read() == b"A1" and f.pinned.selector.kind == "version"
+    f.close()
+    with c.open_file(uri) as g:
+        assert g.read() == b"A2 longer"
+    with c.open_file(backend.uri(vbucket, "main/t/new.csv"), "wb") as w:
+        w.write(b"N")
+    assert backend.get(vbucket, "main/t/new.csv") == b"N"
+
+
+def test_a_bucket_without_versions_cannot_be_opened(backend, bucket, tmp_path):
+    if not backend.versions or backend.account_versions:
+        pytest.skip("this backend has no bucket without versions")
+    c = cat(backend, tmp_path)
+    with pytest.raises(StoreError, match="versioning"):
+        c.open_file(backend.uri(bucket, "main/top.txt"))
+    assert c.read(backend.uri(bucket, "main/top.txt")) == b"T"  # a read with no pin still works

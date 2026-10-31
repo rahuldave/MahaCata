@@ -31,6 +31,7 @@ markers = [
 dev = [
     "azure-identity>=1.27.0",
     "azure-storage-blob>=12.31.0",
+    "fsspec>=2026.9.0",
     "google-cloud-storage>=3.17.1",
     "huggingface_hub>=2.4.0",
     "moto[server]>=5.2.4",

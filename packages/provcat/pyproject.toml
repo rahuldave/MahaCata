@@ -28,6 +28,9 @@ azure = [
 hf = [
     "huggingface_hub>=2.4.0",
 ]
+fs = [
+    "fsspec>=2026.9.0",
+]
 
 [build-system]
 requires = ["hatchling"]
