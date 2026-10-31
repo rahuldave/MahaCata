@@ -1,6 +1,6 @@
 """Configuration sources.
 
-A configuration is a dict with up to five sections:
+A configuration is a dict with up to six sections:
 
 - ``stores``: named store instances, each ``{driver: ..., <options>}``.
 - ``schemes``: logical URI schemes and their templates (see resolver.py).
