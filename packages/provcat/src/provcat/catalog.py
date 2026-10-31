@@ -28,8 +28,10 @@ default branch, or one with ?at=branch:NAME. Any other selector names a fixed
 version, which cannot change, so it is refused.
 
 Every method runs through a lifecycle spot, where the hooks of the app run
-(see provcat.hooks). The app comes from PROVCAT_APP, and its hooks from the
-proxy configuration. ``close`` runs the session spot again.
+(see provcat.hooks). A caller can pass the hooks, as an orchestrator does:
+``Catalog(config, hooks=..., app=..., principal=...)``. Otherwise the app comes
+from PROVCAT_APP, and its hooks from the proxy configuration. ``close`` runs
+the session spot again.
 """
 from __future__ import annotations
 
@@ -38,12 +40,12 @@ import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from . import hooks
+from . import hooks as _hooks
 from .cache import LocalCache, snapshot
 from .config import ConfigSource, View, check, open_config, view
 from .errors import ConfigError, ResolveError, StoreError, UriError
 from .files import CatalogReader, CatalogWriter
-from .hooks import Request
+from .hooks import Hooks, Proxy, Request
 from .resolver import Resolution, Resolver, TemplateResolver
 from .stores import DEFAULT_STORES, Entry, Store, make_store
 from .uri import Selector, Uri, parse
@@ -63,10 +65,16 @@ class Snapshot:
 class Catalog:
     def __init__(self, config: dict | None = None, *, cache_root: str | Path | None = None,
                  offline: bool = False, resolver: Resolver | None = None, tenant: str | None = None,
-                 app: str | None = None):
+                 app: str | None = None, hooks: Hooks | Proxy | dict | None = None,
+                 principal: str | None = None):
         tenant = tenant or None
-        proxy = hooks.process_proxy(app)
-        self.app = hooks.process_app()
+        if hooks is not None or principal is not None:
+            # A caller such as an orchestrator brings hooks or a principal; the process's hooks run first.
+            proxy = _hooks.given(hooks, app)
+            self.app = proxy.app
+        else:
+            proxy = _hooks.process_proxy(app)
+            self.app = _hooks.process_app()
         cfg = check(config or {}, "config")
         if isinstance(cfg, View):
             if cfg.tenant != tenant:
@@ -96,7 +104,7 @@ class Catalog:
         # The --cache argument, then the app's cache_root, then cache.root.
         self.cache = LocalCache(cache_root or proxy.cache_root or cache_cfg.get("root"))
         self.hooks = proxy.hooks
-        self.context = hooks.context(proxy.app, tenant)
+        self.context = _hooks.context(proxy.app, tenant, principal)
         self._run("session", None, None, lambda r: None, event="open")
 
     def close(self) -> None:
@@ -269,13 +277,14 @@ class Catalog:
                 h.abandon()
             raise
 
-    def fs(self, register: bool = True):
+    def fs(self, register: bool = True, replace: bool = False):
         """An fsspec file system over this catalog; it needs provcat[fs].
         With register, the logical schemes become fsspec protocols, so
-        fsspec.open and pandas take logical URIs (see provcat.fs)."""
+        fsspec.open and pandas take logical URIs. replace takes a scheme over
+        from a catalog with another context or other hooks (see provcat.fs)."""
         from .fs import CatalogFileSystem
 
-        return CatalogFileSystem.over(self, register=register)
+        return CatalogFileSystem.over(self, register=register, replace=replace)
 
     # Writes
 

@@ -54,6 +54,11 @@ def _missing(e: NotFound) -> FileNotFoundError:
     return err
 
 
+def _who(catalog) -> str:
+    c = catalog.context
+    return f"app {c.app!r}, principal {c.principal!r} and tenant {c.tenant!r}"
+
+
 class CatalogFileSystem(AbstractFileSystem):
     """fsspec over a Catalog. Use ``catalog.fs()`` to make one."""
 
@@ -73,10 +78,14 @@ class CatalogFileSystem(AbstractFileSystem):
         self.catalog = catalog
 
     @classmethod
-    def over(cls, catalog, register: bool = True) -> CatalogFileSystem:
+    def over(cls, catalog, register: bool = True, replace: bool = False) -> CatalogFileSystem:
         """A file system over catalog. With register, each logical scheme of
-        the catalog becomes an fsspec protocol that opens this catalog. The
-        last catalog to register a scheme in a process serves it."""
+        the catalog becomes an fsspec protocol that opens this catalog. A
+        later catalog with the same app, principal, tenant and hooks takes
+        the scheme over. One with another context, or other hooks, is
+        refused, so fsspec never runs one caller's reads through another's
+        hooks; it uses register=False, or replace=True to take the scheme
+        over on purpose, for example when a notebook cell runs again."""
         if not register:
             return cls(catalog=catalog)
         schemes = tuple(sorted(getattr(catalog.resolver, "specs", {})))
@@ -86,6 +95,15 @@ class CatalogFileSystem(AbstractFileSystem):
             if not ours and (current is not None or s in known_implementations):
                 raise ConfigError(f"the logical scheme {s!r} is already an fsspec protocol; "
                                   f"rename the scheme to use it with fsspec")
+            before = getattr(current, "_bound", None) if ours else None
+            if before is None or replace:
+                continue
+            if before.context != catalog.context:
+                raise ConfigError(f"the scheme {s!r} is registered by a catalog of {_who(before)}, and this one "
+                                  f"is of {_who(catalog)}; use fs(register=False), or fs(replace=True)")
+            if not before.hooks.same_as(catalog.hooks):
+                raise ConfigError(f"the scheme {s!r} is registered by a catalog with other hooks; "
+                                  f"use fs(register=False), or fs(replace=True)")
         bound = type("BoundCatalogFileSystem", (cls,), {"_bound": catalog, "protocol": schemes or cls.protocol})
         for s in schemes:
             register_implementation(s, bound, clobber=True)

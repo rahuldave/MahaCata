@@ -134,7 +134,8 @@ Each method of `Catalog` runs through a lifecycle spot, and the hooks of the app
 - **Pins before a fetch.** The catalog pins before a fetch only for `github` and `hf`, whose drivers already pin inside `fetch`. A store says so with `fetch_pins = True`. lakeFS and the object stores still fetch a branch without a pin. A pin first would change the path in the cache, and a bucket without versioning cannot pin.
 - **The fetch answer.** The hooks at `fetch` get the local path. They get no SHA-256, because a digest of a folder reads every file. A hook can compute it.
 - **No cache layers yet.** Every hook runs before the base cache. A hook that returns an answer without calling `next` skips the cache and the store. A layer between the base cache and the store needs the drivers to call it, and that is not built.
-- **The principal.** It is the user of the process until profiles come.
+- **The principal.** It is the user of the process until profiles come. A caller can name it with `principal=`.
+- **Hooks from a caller.** A program that no launcher started can pass hooks to each `Catalog`, so several apps can share one process. The hooks of the process run last, next to the store. So they see the request that runs, and a caller adds hooks and never gets round one.
 - **Files.** `open`, `read_block` and `close` run in `Catalog.open_file`. A read fetches the whole pinned file at open, so `read_block` runs on the copy in the cache. The cache of blocks is not built.
 
 - **The snapshot spot.** It gets the physical URI before the pin, because the pin runs inside it.

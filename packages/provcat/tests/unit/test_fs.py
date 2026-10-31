@@ -226,6 +226,48 @@ def test_the_last_catalog_to_register_serves_the_scheme(cat, tmp_path):
     assert fsspec.url_to_fs("dd://ds/a.csv")[0].catalog is other
 
 
+def test_a_catalog_of_another_app_cannot_take_a_scheme_over(cat, tmp_path):
+    seen = {"a": 0, "b": 0}
+
+    def count(name):
+        def hook(ctx, req, next):
+            seen[name] += 1
+            return next(req)
+        return hook
+
+    a = Catalog(cat.config, cache_root=tmp_path / "a", hooks={"*": [count("a")]}, app="tenantA")
+    b = Catalog(cat.config, cache_root=tmp_path / "b", hooks={"*": [count("b")]}, app="tenantB")
+    a.fs()
+    with pytest.raises(ConfigError, match="app 'tenantA'.*app 'tenantB'.*fs\\(replace=True\\)"):
+        b.fs()
+    with pytest.raises(ConfigError, match="with other hooks"):
+        Catalog(cat.config, cache_root=tmp_path / "a2", hooks={"*": [count("b")]}, app="tenantA").fs()
+    assert b.fs(register=False).cat_file("dd://ds/a.csv") == b"0123456789"
+    with fsspec.open("dd://ds/a.csv", "rb") as f:
+        f.read()
+    assert seen["a"] > 0 and seen["b"] > 0
+    before = seen["b"]
+    with fsspec.open("dd://ds/a.csv", "rb") as f:
+        f.read()
+    assert seen["b"] == before  # fsspec still opens the catalog of tenant A
+
+
+def test_a_cell_run_again_takes_the_scheme_over_with_replace(cat, tmp_path):
+    def rec(ctx, req, next):
+        return next(req)
+
+    Catalog(cat.config, cache_root=tmp_path / "a", hooks={"*": [rec]}).fs()
+
+    def rec(ctx, req, next):  # noqa: F811  the cell again: a new function
+        return next(req)
+
+    again = Catalog(cat.config, cache_root=tmp_path / "a", hooks={"*": [rec]})
+    with pytest.raises(ConfigError, match="other hooks"):
+        again.fs()
+    again.fs(replace=True)
+    assert fsspec.url_to_fs("dd://ds/a.csv")[0].catalog is again
+
+
 def test_a_writer_dropped_without_close_puts_nothing(cat, tmp_path):
     import gc
 

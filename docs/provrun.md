@@ -141,6 +141,8 @@ Each step writes an evidence event:
 7. The outputter writes `output_artifact_created` for each file in the output folder. It does so for a failed run too, so the bundle holds no file that the evidence does not name.
 8. `RunContext` writes `run_completed` or `run_failed`, closes the evidence and writes the bundle.
 
+provrun reads and writes only through the `Catalog` that it is given. So every lookup, pin, fetch, snapshot, write and commit of a run goes through the hooks of that catalog. An orchestrator passes its hooks to that catalog, as "Hooks from a program" in [the reference](reference.md#hooks-from-a-program) shows.
+
 If a step raises an error, provrun writes `step_failed` with the error, and the run fails. The evidence of a failed run is still complete, and it verifies.
 
 In the PydanticAI backend, one PydanticAI capability writes `model_called` and `tool_called`. A capability is PydanticAI's hook on each step of an agent run. It records:

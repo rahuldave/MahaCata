@@ -415,3 +415,189 @@ def test_provc_reports_a_refusal(proxy, tmp_path, data, capsys):
     assert main(["--config", str(cfg), "--cache", str(tmp_path / "c"), "cat", "d://ds/a.csv"]) == 0
     assert main(["--config", str(cfg), "--cache", str(tmp_path / "c"), "cat", "data:///ds/a.csv"]) == 1
     assert "only logical URIs" in capsys.readouterr().err
+
+
+# Hooks that a caller, such as an orchestrator, passes in
+
+def test_a_caller_passes_hooks_with_no_file(tmp_path, data):
+    seen = []
+
+    def watch(ctx, req, next):
+        seen.append((ctx.app, ctx.principal, req.spot))
+        return next(req)
+
+    c = Catalog(data, cache_root=tmp_path / "c", hooks={"*": [watch]}, app="ingest", principal="alice")
+    assert c.read("d://ds/a.csv") == b"A"
+    assert seen == [("ingest", "alice", "session"), ("ingest", "alice", "resolve"),
+                    ("ingest", "alice", "fetch")]
+
+
+def test_two_apps_share_one_process(tmp_path, data):
+    nb = Catalog(data, cache_root=tmp_path / "c", hooks={"*": [hooks.logical_only]}, app="nb")
+    free = Catalog(data, cache_root=tmp_path / "c", hooks={}, app="free")
+    with pytest.raises(AccessDenied):
+        nb.read("data:///ds/a.csv")
+    assert free.read("data:///ds/a.csv") == b"A"
+    assert hooks.process_app() is None
+
+
+def test_a_caller_passes_an_app_loaded_from_a_file(proxy, tmp_path, data, monkeypatch):
+    proxy({"nb": {"cache_root": str(tmp_path / "nbc"), "*": ["provcat.logical_only"]}, "free": {}})
+    monkeypatch.delenv("PROVCAT_HOOKS")
+    nb = Catalog(data, hooks=hooks.load("nb", tmp_path / "hooks.yaml"))
+    assert nb.app == "nb" and nb.cache.root == tmp_path / "nbc"
+    with pytest.raises(AccessDenied):
+        nb.read("data:///ds/a.csv")
+    free = Catalog(data, cache_root=tmp_path / "c", hooks=hooks.load("free", tmp_path / "hooks.yaml"))
+    assert free.read("data:///ds/a.csv") == b"A"
+    with pytest.raises(ConfigError, match="those of app 'nb', not 'x'"):
+        Catalog(data, hooks=hooks.load("nb", tmp_path / "hooks.yaml"), app="x")
+
+
+def test_a_launched_process_refuses_hooks_from_a_caller(proxy, tmp_path, data):
+    proxy({"nb": {"*": ["provcat.logical_only"]}}, app="nb")
+    for kw in ({"hooks": {}}, {"hooks": hooks.Hooks()}, {"principal": "root"}):
+        with pytest.raises(ConfigError, match="started as app 'nb'"):
+            Catalog(data, cache_root=tmp_path / "c", **kw)
+
+
+@pytest.mark.parametrize("chains, message", [
+    ({"fetc": []}, r"unknown spots \['fetc'\]"),
+    ({"fetch": [42]}, "must be a list of functions"),
+    ({"fetch": recorder}, "must be a list of functions"),
+    ({"*": [recorder], "fetch": [recorder]}, "would run twice at fetch"),
+    ({1: [], "zz": []}, r"unknown spots \['zz', 1\]"),
+    ([("fetch", [])], "must be a mapping of spot to hooks, not list"),
+    ("ab", "must be a mapping of spot to hooks, not str"),
+])
+def test_bad_hooks_from_a_caller_are_refused(chains, message):
+    with pytest.raises(ConfigError, match=message):
+        hooks.Hooks(chains)
+
+
+def test_hooks_of_another_type_are_refused(tmp_path, data):
+    with pytest.raises(ConfigError, match="not list"):
+        Catalog(data, cache_root=tmp_path / "c", hooks=[recorder])
+
+
+class Watcher:
+    def __init__(self):
+        self.seen = []
+
+    def hook(self, ctx, req, next):
+        self.seen.append(req.spot)
+        return next(req)
+
+
+def test_a_bound_method_cannot_run_twice_at_a_spot():
+    w = Watcher()
+    with pytest.raises(ConfigError, match="would run twice at fetch"):
+        hooks.Hooks({"*": [w.hook], "fetch": [w.hook]})
+
+
+def test_a_read_only_mapping_of_hooks_is_taken(tmp_path, data):
+    from types import MappingProxyType
+
+    w = Watcher()
+    c = Catalog(data, cache_root=tmp_path / "c", hooks=MappingProxyType({"fetch": [w.hook]}))
+    c.read("d://ds/a.csv")
+    assert w.seen == ["fetch"]
+
+
+def test_a_proxy_must_hold_a_hooks(tmp_path, data):
+    with pytest.raises(ConfigError, match="must be a Hooks, not dict"):
+        Catalog(data, cache_root=tmp_path / "c", hooks=hooks.Proxy("x", None, {"fetch": []}))
+
+
+def test_an_empty_principal_is_refused(tmp_path, data):
+    with pytest.raises(ConfigError, match="principal must be a name"):
+        Catalog(data, cache_root=tmp_path / "c", principal="")
+
+
+def test_the_hooks_of_the_process_run_after_a_callers(proxy, tmp_path, data):
+    """A launcher that sets only PROVCAT_HOOKS gates the default app; a caller
+    can add hooks, and cannot drop the process's, with hooks={} or a principal."""
+    proxy({"default": {"*": ["provcat.logical_only", "t.rec"]}})
+    for kw in ({"hooks": {}}, {"principal": "mallory"}, {"hooks": hooks.Hooks()},
+               {"hooks": hooks.Proxy("x", None, hooks.Hooks())}):
+        c = Catalog(data, cache_root=tmp_path / "c", **kw)
+        with pytest.raises(AccessDenied):
+            c.read("data:///ds/a.csv")
+    order = []
+    mine = lambda ctx, req, next: (order.append("caller"), next(req))[1]  # noqa: E731
+    SEEN.clear()
+    c = Catalog(data, cache_root=tmp_path / "c", hooks={"fetch": [mine]}, principal="alice")
+    c.read("d://ds/a.csv")
+    assert c.context.principal == "alice" and order == ["caller"]
+    assert [s for s, *_ in SEEN if s == "fetch"]  # the process's recorder ran too
+    assert c.hooks.chains["fetch"] == (mine, hooks.logical_only, recorder)
+
+
+def test_a_callers_hook_cannot_change_a_request_past_the_process_gate(proxy, tmp_path, data):
+    import dataclasses
+
+    from provcat.uri import parse
+
+    proxy({"default": {"*": ["provcat.logical_only"]}})
+
+    def swap(ctx, req, next):  # turns a logical read into a physical one
+        return next(dataclasses.replace(req, logical=None, physical=parse("data:///ds/sub/b.csv")))
+
+    c = Catalog(data, cache_root=tmp_path / "c", hooks={"fetch": [swap]})
+    with pytest.raises(AccessDenied):
+        c.read("d://ds/a.csv")
+
+
+def test_a_principal_alone_keeps_the_hooks_of_the_process(proxy, tmp_path, data):
+    proxy({"default": {"fetch": ["t.rec"]}})
+    c = Catalog(data, cache_root=tmp_path / "c", principal="alice")
+    assert c.hooks.chains["fetch"] == (recorder,) and c.context.principal == "alice"
+
+
+@pytest.mark.parametrize("principal", [" alice", "alice\n", 5])
+def test_a_principal_that_is_not_a_plain_name_is_refused(tmp_path, data, principal):
+    with pytest.raises(ConfigError, match="principal must be a name"):
+        Catalog(data, cache_root=tmp_path / "c", principal=principal)
+
+
+def test_an_app_of_the_hooks_file_needs_its_hooks(proxy, tmp_path, data):
+    proxy({"ingest": {"*": ["provcat.logical_only"]}})
+    with pytest.raises(ConfigError, match="has hooks for app 'ingest'"):
+        Catalog(data, cache_root=tmp_path / "c", hooks={}, app="ingest")
+    other = tmp_path / "other.yaml"
+    other.write_text(json.dumps({"apps": {"ingest": {}}}))
+    with pytest.raises(ConfigError, match="not those of the hooks file"):
+        Catalog(data, cache_root=tmp_path / "c", hooks=hooks.load("ingest", other))
+    c = Catalog(data, cache_root=tmp_path / "c", hooks=hooks.load("ingest"))
+    with pytest.raises(AccessDenied):
+        c.read("data:///ds/a.csv")
+
+
+def test_a_hooks_with_no_chains_is_refused(tmp_path, data):
+    class Bare(hooks.Hooks):
+        def __init__(self):
+            pass
+
+    with pytest.raises(ConfigError, match="not Bare"):
+        Catalog(data, cache_root=tmp_path / "c", hooks=Bare())
+
+
+def test_a_hooks_own_eq_is_not_asked():
+    class Eq:
+        def __eq__(self, other):
+            return True
+
+        __hash__ = object.__hash__
+
+        def __call__(self, ctx, req, next):
+            return next(req)
+
+    a, b = Eq(), Eq()
+    h = hooks.Hooks({"fetch": [a, b]})  # two hooks, not one hook twice
+    assert not h.same_as(hooks.Hooks({"fetch": [b, a]}))
+
+
+def test_the_chains_of_a_catalog_cannot_be_cleared(tmp_path, data):
+    c = Catalog(data, cache_root=tmp_path / "c", hooks={"fetch": [recorder]})
+    with pytest.raises(AttributeError):
+        c.hooks.chains["fetch"].clear()
