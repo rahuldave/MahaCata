@@ -203,7 +203,7 @@ On S3, `If-None-Match` checks only the current version. Someone who deletes log 
 ### What is not guaranteed
 
 - **Commits that outlive their versions.** A lifecycle rule that expires old versions, or a person who deletes one, breaks the commits that name it. A read then fails with "not found". [src]
-- **One order across folders.** Each folder has its own log. A pin compares the commits of a folder and of the folders above it by their time, which comes from each writer's clock. Two commits in the same millisecond have no fixed order. [src]
+- **One order across folders.** Each folder has its own log. A pin compares the commits of a folder and of the folders above it by their time, which comes from each writer's clock. A commit records its time to the microsecond. If a folder and a folder above it have the same time, the folder above counts as newer. So a pin gives the same answer every time, but the answer is wrong when the folder below came second. When two writers' clocks differ, a later commit can also get an earlier time and sort as older. [src]
 - **ADLS Gen2.** Blob versioning does not work on accounts with a hierarchical namespace, so provcat cannot pin or commit there, and says so. [doc]
 - **An atomic branch.** A branch copies file by file. [src]
 - **Cost.** A commit lists every version under the folder twice, so it slows as the history grows. [src]
