@@ -29,6 +29,7 @@ website:
       - section: provcat
         contents:
           - tour.md
+          - reference.md
           - design.md
           - setup.md
           - transactions.md

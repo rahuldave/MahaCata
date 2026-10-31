@@ -199,12 +199,12 @@ fsspec has implementations for most of the stores that provcat reads:
 
 A driver that uses an fsspec implementation stays behind the lifecycle spots. So the hooks apply to it as to every other driver. The `hf` driver does not use the cache of `huggingface_hub` under `~/.cache/huggingface`. So the base cache is the only cache of its files.
 
-The provcat GitHub driver does not handle Git LFS now. A live test confirmed the problem. `provc fetch github://araines/serverless-php/php` writes the 133-byte pointer file, but `provc stat` gives the size of the content, 27,841,495 bytes. The fsspec GitHub file system reads the same contents API. If the content is a pointer, it downloads the `download_url` that GitHub gives for the file.
+The provcat GitHub driver did not handle Git LFS before step 1 below. `provc fetch github://araines/serverless-php/php` wrote the 133-byte pointer file, but `provc stat` gave the size of the content, 27,841,495 bytes. The driver now reads the content through the Git LFS batch API, as [the design](design.md#the-github-driver) explains.
 
 ## Plan of pull requests
 
-1. **Git LFS in the GitHub driver.** The driver replaces each pointer file with its content, in a single file and in a folder. It gets the content through the Git LFS batch API, and it checks the size and the SHA-256 against the pointer. A copy of a pointer file in the cache from before the fix is fetched again. A snapshot of such a copy named the pointer, so the evidence of a run that used it named the pointer too.
-2. **The `hf` driver.** It reads Hugging Face models, datasets and Spaces through the Hub API. It pins to a commit, and it takes `branch:`, `tag:`, `commit:` and `ts:`. It is read-only at first.
+1. **Git LFS in the GitHub driver. Done in commit 8609a4c.** The driver replaces each pointer file with its content, in a single file and in a folder. It gets the content through the Git LFS batch API, and it checks the size and the SHA-256 against the pointer. A copy of a pointer file in the cache from before the fix is fetched again. A snapshot of such a copy named the pointer, so the evidence of a run that used it named the pointer too.
+2. **The `hf` driver. Done in commit 780052f.** It reads Hugging Face models, datasets and Spaces through the Hub API. It pins to a commit, and it takes `branch:`, `tag:`, `commit:` and `ts:`. It is read-only at first.
 3. **Catalog entries.** The lookup takes entries by the rules above, in the YAML file and in etcd.
 4. **The lifecycle spots and the hooks.** The catalog runs each operation through its spots, and it pins before each read. The proxy configuration and the entry points come in. Nothing changes for users who have no hooks file.
 5. **The fsspec file system.** `catalog.fs()` gives the adapter, with a pin at open and the cache of blocks. The logical schemes register as fsspec protocols.

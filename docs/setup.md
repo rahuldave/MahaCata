@@ -1,6 +1,6 @@
 # Setting up provcat and its services
 
-This page lists the tools that provcat and its tests need, and how to set up each service. Read the [README](https://github.com/rahuldave/MahaCata#readme) first for the commands and the kinds of test.
+This page lists the tools that provcat and its tests need, and how to set up each service. Read [the reference](reference.md) first for the commands.
 
 ## What each part needs
 
@@ -26,6 +26,45 @@ provcat reaches the cloud stores through Python SDKs. It uses boto3 for S3 and f
 | `lakefs`, `etcd` | The servers themselves. |
 
 You do not need the `aws` command. The AWS SDK reads `~/.aws/credentials` and `~/.aws/config`.
+
+## Run the tests
+
+The provcat tests are in three folders, and each test gets the marker of its folder. The provrun tests are in `packages/provrun/tests`. They get no marker, so `-m unit` and `-m integration` select provcat tests only.
+
+| Folder | Marker | What the tests use |
+|---|---|---|
+| `packages/provcat/tests/unit` | `unit` | Only the code and temporary files. |
+| `packages/provcat/tests/integration` | `integration` | Servers on this machine: a fake GitHub API and a fake etcd in the test process, moto for S3, and emulators in Docker for GCS and Azure. |
+| `packages/provcat/tests/system` | `system` | Real services on the network. |
+
+`uv run pytest` runs the unit and integration tests. They need no network. The GCS and Azure tests need Docker and two images. If an image is missing, those tests skip and name the image to pull:
+
+```
+docker pull fsouza/fake-gcs-server:1.52.2
+docker pull mcr.microsoft.com/azure-storage/azurite:3.35.0
+```
+
+`packages/provcat/tests/object_store_suite.py` holds one set of tests for every object store. The integration tests run it against moto, fake-gcs-server and Azurite. The system tests run it against real AWS, GCS, Azure and lakeFS. Each system test makes its own bucket and deletes it afterwards. It uses the cloud's Python SDK, or the REST API for lakeFS.
+
+Run the system tests with `-m system`. "Set up each cloud for the system tests" below shows how to set up each service. Each service runs only if you set its variable:
+
+| Variable | Service |
+|---|---|
+| `PROVCAT_SYSTEM_AWS=1` | AWS S3 with the default credentials. `PROVCAT_SYSTEM_AWS_PROFILE` picks a profile. |
+| `PROVCAT_SYSTEM_GCS=<project>` | Google Cloud Storage, with Application Default Credentials. |
+| `PROVCAT_SYSTEM_AZURE=<subscription id>` | Azure. The tests make a resource group with two storage accounts, one ADLS Gen2 and one Blob Storage account with versioning on, and delete the group afterwards. `PROVCAT_SYSTEM_AZURE_LOCATION` picks the region, `eastus` by default. They need `uv sync --group system`. |
+| `PROVCAT_SYSTEM_LAKEFS=<url>` | lakeFS, with the keys of the AWS profile `lakefs`. Set `PROVCAT_SYSTEM_LAKEFS_DATA` to its blockstore path, and the tests also delete the storage folders that they made. |
+| `PROVCAT_SYSTEM_LAKEFS_B=<url>` | A second lakeFS, with the keys of the profile `lakefs-b`. With both lakeFS variables set, a test checks that two servers keep two orgs apart. `PROVCAT_SYSTEM_LAKEFS_B_DATA` names its blockstore path. |
+| `PROVCAT_SYSTEM_LAKEFS_ACL=<url>` | A lakeFS run by `packages/provcat/scripts/lakefs_acl_local.py`, with access control for each org. A test checks that one server keeps two orgs apart. `PROVCAT_SYSTEM_LAKEFS_ACL_CREDENTIALS` names the credentials file, `PROVCAT_SYSTEM_LAKEFS_ACL_DATA` the blockstore path, `PROVCAT_SYSTEM_LAKEFS_ACL_SERVER` the access-list server, and `PROVCAT_SYSTEM_LAKEFS_ACL_DIR` the folder of the setup. |
+| `PROVCAT_SYSTEM_GITHUB=1` | github.com. |
+| `PROVCAT_SYSTEM_HF=1` | huggingface.co, with public repositories and no token. |
+| `PROVCAT_SYSTEM_ETCD=<host:port>` | etcd. |
+
+For example:
+
+```
+PROVCAT_SYSTEM_AWS=1 uv run pytest -m system
+```
 
 ## Install and run lakeFS
 
@@ -245,7 +284,7 @@ The system tests check both on real GCS.
 
 ## Set up each cloud for the system tests
 
-Each system test makes its own bucket and deletes it afterwards, even when the test fails. The README lists the environment variable for each service.
+Each system test makes its own bucket and deletes it afterwards, even when the test fails. "Run the tests" above lists the environment variable for each service.
 
 ### AWS
 

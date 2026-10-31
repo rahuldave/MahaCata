@@ -1,6 +1,6 @@
 # Design of provcat
 
-This page records what the original provcat did, what this version keeps, and how the interfaces fit together. Read the [README](https://github.com/rahuldave/MahaCata#readme) first for the commands.
+This page records what the original provcat did, what this version keeps, and how the interfaces fit together. Read [the reference](reference.md) first for the commands.
 
 ## Terms
 
@@ -115,13 +115,19 @@ Each driver uses its cloud's Python SDK, never a command-line tool. The version 
 - **`refs`:** a branch, tag or default branch pinned to a commit. The record includes the kind, so `tag:v1` and `branch:v1/x` do not touch each other.
 - **`locks`:** one lock file for each folder. Fetches of one folder run one at a time, in threads and in processes.
 
-Some disks, for example the default disks of macOS and Windows, store `Guide.md` and `guide.md` as one file. The same is true of one name in two Unicode forms. Both drivers refuse to fetch a folder that holds two such names, and they compare every level of each path. They refuse it on Linux too, so that every cache can move to any disk. The check also treats `straße` and `strasse` as one name. A single file with such a name still works, because the hash in its record shows when the other name overwrote it.
+Some disks, for example the default disks of macOS and Windows, store `Guide.md` and `guide.md` as one file. The same is true of one name in two Unicode forms. The GitHub and Hugging Face drivers and the object stores refuse to fetch a folder that holds two such names. They compare every level of each path.
+
+They refuse such a folder on Linux too, so that every cache can move to any disk. The check also treats `straße` and `strasse` as one name. A single file with such a name still works, because the hash in its record shows when the other name overwrote it.
+
+### The GitHub driver
 
 The GitHub driver checks the kind of a ref through the git refs API, so `tag:main` reads the tag and not the branch. It follows an annotated tag to its commit. It fetches a folder as one tarball of the commit. It skips links, devices and names with `..` in the tarball, and unpacks with the Python `data` filter. Offline mode serves a file inside a folder that was fetched whole. The token goes only to the host of `api_url`, and `gh auth token` is asked for that host.
 
 The GitHub driver also reads files that Git LFS keeps. Git LFS is the Git extension that keeps large files outside the repository, with a small pointer file in their place. The contents API and the tarball both give the pointer file. So after each download, the driver looks for pointer files and asks the Git LFS batch API for their content, 100 at a time. It checks the size and the SHA-256 of each object against its pointer, and it keeps nothing that does not match.
 
 The LFS server is on the web host, for example `github.com` for `api.github.com`, so the token goes there too. A download link must use HTTPS, and a redirect can go only to HTTP or HTTPS. The download links from the batch API carry their own headers, and the token never goes to them.
+
+### The Hugging Face driver
 
 The Hugging Face driver reads models, datasets and Spaces. Its URI starts with the kind of repository, `models`, `datasets` or `spaces`, as in the paths of `HfFileSystem`. An example is `hf://datasets/owner/repo/path`. The kind names the place, not the use, so a logical name of either scheme can point at any of them. The next two parts are the owner and the name of the repository. Without a selector, the driver uses `main`, the default branch of every Hugging Face repository.
 
@@ -134,6 +140,8 @@ The driver downloads each file with the functions under `hf_hub_download` of `hu
 The driver checks each file it downloads. A file that Xet or Git LFS keeps must match the SHA-256 that the Hub lists, and any other file its git blob ID. The driver keeps nothing that does not match. It writes each file only into the provcat cache, not into the cache of `huggingface_hub` under `~/.cache/huggingface`, and it keeps no listings in memory. So the provcat cache holds the only copy. `huggingface_hub` and the Xet library still write small files of their own there, such as logs.
 
 The token goes to the endpoint of the store, so the endpoint must use HTTPS. Only the test servers on this machine may use plain HTTP. A page link of the Hub must point at the endpoint too. The token does not go to the download hosts that the Hub sends a download to. hf_xet sends it only to the Hub, for a Xet token. Without `token_env`, `huggingface_hub` finds the token in `HF_TOKEN` or in the file that `hf auth login` writes.
+
+### Folders in an object store
 
 An object store fetches a folder object by object, and then deletes cached files whose objects no longer exist. It removes the folder marker first, and writes it again only after the whole folder is current. It refuses a folder that holds keys no URI can name, for example `a//b`. It records the version that came with the downloaded bytes. The version is the ETag on S3 and Azure, and the generation on GCS. The S3 driver does not send `If-Match`, because S3-compatible servers do not all support it.
 

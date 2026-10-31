@@ -6,7 +6,16 @@ provcat resolves catalog URIs. A catalog URI names a dataset, a model, a prompt 
 
 provcat writes to every store but GitHub and Hugging Face. It commits in lakeFS and in versioned buckets, branches in lakeFS and in any bucket, and merges in lakeFS. It makes read-only snapshots of pinned versions.
 
-The first commit of this repository is the provcat code as it was found in `~/Catalog/provcat`. Read [docs/tour.md](docs/tour.md) for a guided tour with commands to run. Read [docs/setup.md](docs/setup.md) to install lakeFS, etcd and the tools that the tests need. Read [docs/design.md](docs/design.md) for what that code did, what changed and how the parts fit together. Read [docs/reference-server.md](docs/reference-server.md) to run and operate the shared lakeFS that keeps orgs apart. Read [docs/transactions.md](docs/transactions.md) for what a write and a commit guarantee, in lakeFS and in a bucket.
+The documentation is at [https://rahuldave.com/MahaCata/](https://rahuldave.com/MahaCata/). Its sources are in the folder `docs`:
+
+- [The tour of provcat](docs/tour.md) gives commands to run, with their output.
+- [The reference](docs/reference.md) lists the commands, the forms of a URI, the stores, the configuration and the cache.
+- [Setup](docs/setup.md) shows how to install lakeFS, etcd and the tools that the tests need, and how to run the tests.
+- [The design](docs/design.md) explains how the parts fit together, and lists the known limits.
+- [Transactions](docs/transactions.md) says what a write and a commit guarantee, in lakeFS and in a bucket.
+- [The reference server](docs/reference-server.md) shows how to run the shared lakeFS that keeps orgs apart.
+
+The first commit of this repository is the provcat code as it was found in `~/Catalog/provcat`.
 
 ## Layout
 
@@ -19,7 +28,7 @@ This repository is a uv workspace with two Python packages. A uv workspace is on
 
 provrun depends on provcat, and provcat does not depend on provrun. [docs/provrun-plan.md](docs/provrun-plan.md) is the plan that provrun follows.
 
-The folder `docs` is also a website, with a reference page for each module. [smalldocs](https://github.com/rahuldave/smalldocs) builds it. Run `uv run --group docs smalldocs preview docs`, and open http://127.0.0.1:4200.
+The folder `docs` is also [the website](https://rahuldave.com/MahaCata/), with a reference page for each module. [smalldocs](https://github.com/rahuldave/smalldocs) builds it, and it is published on each push to `main`. Run `uv run --group docs smalldocs preview docs`, and open http://127.0.0.1:4200.
 
 ## Install and run
 
@@ -33,147 +42,10 @@ uv run pytest
 
 The base package reads local files, GitHub, S3 and lakeFS. Google Cloud Storage, Azure and Hugging Face each need an extra, which installs the Python SDK of that service:
 
-```
-pip install 'provcat[gcs]'
-pip install 'provcat[azure]'
-pip install 'provcat[hf]'
-```
-
-`uv sync` installs all three for development.
-
-## Catalog URIs
-
-A URI has the form `scheme://first/part/part?at=kind:value`. The part after `?at=` is the selector. It picks a version.
-
-A **logical URI** has a scheme that the configuration defines, for example `data+table` or `code`. A **physical URI** has a scheme that names a store, for example `s3`, `github` or `file`. provcat resolves a logical URI to a physical URI in one step.
+provcat is not on PyPI. In another project, install it from GitHub, with the extras that you need in the brackets:
 
 ```
-data+table://acme/shared/prod/agreements/qa_outputs?at=stage:production
-  -> lakefs-acme://acme-data-shared/b8a2f9c123456/tables/agreements/qa_outputs
-
-code://octocat/Hello-World/master/README
-  -> github://octocat/Hello-World/README?at=branch:master
+pip install 'provcat[hf] @ git+https://github.com/rahuldave/MahaCata#subdirectory=packages/provcat'
 ```
 
-In the example configuration, the org is the tenant and the first part of every logical URI, as the owner is on GitHub. Each org gets its own lakeFS repositories, and each environment is a branch. Read the section "Tenants" in [docs/design.md](docs/design.md).
-
-| Selector | Meaning |
-|---|---|
-| `branch:X`, `tag:X`, `commit:X` | Use the git or lakeFS ref X. |
-| `version:N` | Fill `{version}` in the template, for a model version. |
-| `stage:NAME` | Look up NAME in the `stages` section and use the selector stored there. |
-| `ts:TIME` | Use the newest commit of the branch made at or before TIME. TIME is a date, a date and time, or Unix seconds. The `lakefs`, `github` and `hf` drivers resolve it. A GitHub or Hugging Face URI names a branch other than the default as `ts:BRANCH@TIME`. |
-
-## Stores
-
-A store is a named instance of a driver. Every driver reads. All but `github` and `hf` also write, as docs/design.md explains under "Writes". The stores `file`, `s3`, `github`, `gs`, `az` and `hf` exist without configuration. So a logical scheme cannot use one of those six names. The configuration can add more, for example a store `lakefs` that uses the `lakefs` driver with the lakeFS endpoint.
-
-| Driver | URI | What it does |
-|---|---|---|
-| `file` | `file:///abs/path` | Reads and writes local files, with no cache. `fetch` returns the path itself. Option `root` confines the store to one folder. |
-| `s3` | `s3://bucket/key` | Reads and writes AWS S3 or any S3-compatible server, for example MinIO. It branches in any bucket. In a bucket with versioning on, it also pins and commits. Options are `endpoint_url`, `region`, `profile` and `addressing_style`. |
-| `lakefs` | `lakefs://repo/ref/path?at=ts:TIME` | Reads and writes lakeFS through its S3 gateway. It pins, commits, branches and merges through its REST API. `pin` turns a branch or a time into a commit. `ls` of an empty branch gives `[]`, and `ls lakefs://repo` lists the branches. Options are those of `s3`, plus `api_url`. |
-| `github` | `github://owner/repo/path?at=branch:main` | Reads a file or a folder of a GitHub repository at a commit. `pin` turns a branch, a tag or a time into a commit. Options are `api_url`, `token_env`, `use_gh_cli` and `timeout`. |
-| `hf` | `hf://datasets/owner/repo/path?at=branch:main` | Reads a file or a folder of a Hugging Face model, dataset or Space at a commit. The first part is `models`, `datasets` or `spaces`. `pin` turns a branch, a tag or a time into a commit. Options are `endpoint`, `token_env` and `timeout`. Needs the `hf` extra. |
-| `gcs` | `gs://bucket/key` | Reads and writes Google Cloud Storage. It branches in any bucket. In a bucket with versioning on, it also pins and commits. Options are `project`, `endpoint_url` and `anonymous`. Needs the `gcs` extra. |
-| `azure` | `az://account/container/key` | Reads and writes Azure Blob Storage and ADLS Gen2. It branches in any container. In a Blob Storage account with versioning on, it also pins and commits. ADLS Gen2 has no versions. Options are `account_url` and `connection_string_env`. Needs the `azure` extra. |
-
-Each cloud driver uses that cloud's Python SDK and takes credentials from the usual places:
-
-- **S3:** the environment, a profile or an instance role.
-- **GCS:** Application Default Credentials.
-- **Azure:** `DefaultAzureCredential`, for example `az login`, or a connection string in the environment variable that `connection_string_env` names.
-
-Do not put keys in the provcat configuration. The GitHub driver reads a token from `GITHUB_TOKEN` or `GH_TOKEN`. If neither is set, it runs `gh auth token`. The Hugging Face driver lets `huggingface_hub` find a token, in `HF_TOKEN` or in the file that `hf auth login` writes.
-
-## Configuration
-
-provcat reads its configuration from the first of these sources that exists:
-
-1. The `--config` option of `provc`.
-2. The environment variable `PROVCAT_CONFIG`.
-3. The file `provcat.yaml` in the current folder.
-4. The built-in defaults, which have the five stores and no logical schemes.
-
-A source that starts with `etcd://host:port/prefix` is etcd. Any other source is a YAML file. [packages/provcat/config/provcat.example.yaml](packages/provcat/config/provcat.example.yaml) has every section and the logical schemes from the old provcat docs. A value can read the environment with `${oc.env:NAME,default}`.
-
-To copy a YAML configuration into etcd, run the command below. It copies the `${...}` references as written, so each reader fills them in from its own environment. It also deletes the sections in etcd that the file does not have.
-
-```
-uv run provc --config packages/provcat/config/provcat.example.yaml config push --to etcd://localhost:2379/provcat
-```
-
-A configuration can hold a part for each tenant, in its `tenants` section, and a part for the admin, in its `admin` section. `provc --tenant acme`, or `PROVCAT_TENANT=acme`, sees the shared sections and acme's part only. Without a tenant, `provc` is the admin, and sees every part. Read "A configuration for each tenant" in [docs/design.md](docs/design.md).
-
-## The cache
-
-The cache folder is `~/.cache/provcat`, or `$XDG_CACHE_HOME/provcat` if that variable is set. The environment variable `PROVCAT_CACHE`, the `cache.root` setting or the `--cache` option can change it. The example configuration sets `cache.root` to `PROVCAT_CACHE` or `~/.cache/provcat`, so it ignores `XDG_CACHE_HOME`. The files have readable paths.
-
-```
-<cache>/github/<owner>/<repo>/<commit>/<path>
-<cache>/<store name>/<bucket>/<key>                   an object store; for lakeFS the key holds the commit
-<cache>/<store name>@version-<ID>/<bucket>/<key>      a fixed version of a file
-<cache>/<store name>@commit-<ID>/<bucket>/<key>       a file or folder at a provcat commit
-<cache>/.provcat/        versions, finished folders and pinned refs
-```
-
-provcat stores a GitHub file under its commit, so the file never goes stale. provcat checks a file of an object store against its version before each use, and downloads it again when the version changed. The version is the ETag on S3 and Azure, and the generation on GCS. With `--offline`, provcat reads only the cache. For a branch, it uses the last commit that it pinned.
-
-A fetch can rewrite a cached file in place when a branch moves. So do not mount a cached path into a container. Mount a snapshot instead. `Catalog.snapshot(uri)` pins the URI, fetches that version, and copies it into `<cache>/.provcat/snapshots/<kind>/<sha256>/<name>`. The kind is `file` or `folder`, the folder name is the SHA-256 of the content, and the copy is read-only. Before provcat uses a snapshot again, it checks the digest, and it replaces a snapshot that someone changed.
-
-## Commands
-
-| Command | Output |
-|---|---|
-| `provc resolve URI` | The physical URI and the steps taken, as JSON. |
-| `provc pin URI` | The URI with a branch or tag replaced by its commit. In a versioned bucket, a file gets its version and a folder its newest commit. |
-| `provc stat URI` | One entry with its kind, size and version, as JSON. |
-| `provc ls URI` | The entries in a folder, as JSON. |
-| `provc fetch URI` | The local path of the file or folder. |
-| `provc cat URI` | The bytes of a file. |
-| `provc put URI PATH` | Writes a local file or folder at the URI, or standard input for `-`. |
-| `provc rm URI` | Deletes one object. |
-| `provc commit URI -m MSG [--meta K=V]` | Commits a lakeFS branch or a folder in a versioned bucket, and prints the URI pinned to the new commit. |
-| `provc branch URI --from REF` | Makes a lakeFS branch from a branch, a tag or a commit. In a bucket, copies a branch or a commit to a new branch. See [Commits in a bucket](docs/design.md#commits-in-a-bucket). |
-| `provc merge URI --from REF [-m MSG] [--meta K=V] [--strategy S]` | Merges a branch, a tag or a commit into a lakeFS branch, and prints the URI pinned to the merge commit. `--strategy` is `source-wins` or `dest-wins`. |
-| `provc config show` | The configuration and its source. |
-| `provc config push --to etcd://...` | Copies the configuration into etcd. |
-
-## Tests
-
-The provcat tests are in three folders, and each test gets the marker of its folder. The provrun tests are in `packages/provrun/tests`. They get no marker, so `-m unit` and `-m integration` select provcat tests only.
-
-| Folder | Marker | What the tests use |
-|---|---|---|
-| `packages/provcat/tests/unit` | `unit` | Only the code and temporary files. |
-| `packages/provcat/tests/integration` | `integration` | Servers on this machine: a fake GitHub API and a fake etcd in the test process, moto for S3, and emulators in Docker for GCS and Azure. |
-| `packages/provcat/tests/system` | `system` | Real services on the network. |
-
-`uv run pytest` runs the unit and integration tests. They need no network. The GCS and Azure tests need Docker and two images. If an image is missing, those tests skip and name the image to pull:
-
-```
-docker pull fsouza/fake-gcs-server:1.52.2
-docker pull mcr.microsoft.com/azure-storage/azurite:3.35.0
-```
-
-`packages/provcat/tests/object_store_suite.py` holds one set of tests for every object store. The integration tests run it against moto, fake-gcs-server and Azurite. The system tests run it against real AWS, GCS, Azure and lakeFS. Each system test makes its own bucket and deletes it afterwards. It uses the cloud's Python SDK, or the REST API for lakeFS.
-
-Run the system tests with `-m system`. [docs/setup.md](docs/setup.md) shows how to set up each service. Each service runs only if you set its variable:
-
-| Variable | Service |
-|---|---|
-| `PROVCAT_SYSTEM_AWS=1` | AWS S3 with the default credentials. `PROVCAT_SYSTEM_AWS_PROFILE` picks a profile. |
-| `PROVCAT_SYSTEM_GCS=<project>` | Google Cloud Storage, with Application Default Credentials. |
-| `PROVCAT_SYSTEM_AZURE=<subscription id>` | Azure. The tests make a resource group with one ADLS Gen2 account, and delete the group afterwards. They need `uv sync --group system`. |
-| `PROVCAT_SYSTEM_LAKEFS=<url>` | lakeFS, with the keys of the AWS profile `lakefs`. Set `PROVCAT_SYSTEM_LAKEFS_DATA` to its blockstore path, and the tests also delete the storage folders that they made. |
-| `PROVCAT_SYSTEM_LAKEFS_B=<url>` | A second lakeFS, with the keys of the profile `lakefs-b`. With both lakeFS variables set, a test checks that two servers keep two orgs apart. `PROVCAT_SYSTEM_LAKEFS_B_DATA` names its blockstore path. |
-| `PROVCAT_SYSTEM_LAKEFS_ACL=<url>` | A lakeFS run by `packages/provcat/scripts/lakefs_acl_local.py`, with access control for each org. A test checks that one server keeps two orgs apart. `PROVCAT_SYSTEM_LAKEFS_ACL_CREDENTIALS` names the credentials file, `PROVCAT_SYSTEM_LAKEFS_ACL_DATA` the blockstore path, `PROVCAT_SYSTEM_LAKEFS_ACL_SERVER` the access-list server, and `PROVCAT_SYSTEM_LAKEFS_ACL_DIR` the folder of the setup. |
-| `PROVCAT_SYSTEM_GITHUB=1` | github.com. |
-| `PROVCAT_SYSTEM_HF=1` | huggingface.co, with public repositories and no token. |
-| `PROVCAT_SYSTEM_ETCD=<host:port>` | etcd. |
-
-For example:
-
-```
-PROVCAT_SYSTEM_AWS=1 uv run pytest -m system
-```
+In a clone, `uv sync` installs all three.

@@ -29,7 +29,7 @@ admin:
 # Each tenant's own part: its stores, with its own keys, and its stages and
 # cache. "provc --tenant acme", or PROVCAT_TENANT=acme, sees the shared
 # sections and acme's part, and nothing of globex or the admin. The stores
-# file, s3, github, gs and az exist in every view without configuration. See
+# file, s3, github, gs, az and hf exist in every view without configuration. See
 # "Tenants" in docs/design.md.
 #
 # A tenant's store names end with -<tenant>, as the schemes below name them

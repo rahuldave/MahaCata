@@ -1,10 +1,10 @@
 # A guided tour of provcat
 
-This tour follows catalog URIs through provcat, one step at a time. Each step gives commands to run and the output they print. After each command, the tour says what happened inside. The tour reads only. [The design](design.md#writes) explains how provcat writes, commits, branches and merges. The [README](https://github.com/rahuldave/MahaCata#readme) is the reference for the commands, and [design.md](design.md) is the reference for the parts.
+This tour follows catalog URIs through provcat, one step at a time. Each step gives commands to run and the output they print. After each command, the tour says what happened inside. The tour reads only. [The design](design.md#writes) explains how provcat writes, commits, branches and merges. [The reference](reference.md) lists the commands, and [design.md](design.md) is the reference for the parts.
 
 ## Before you start
 
-You need Python 3.13, [uv](https://docs.astral.sh/uv/) and a GitHub login for `gh`. Run every command from the top folder of the repository.
+You need Python 3.13, [uv](https://docs.astral.sh/uv/) and a GitHub login for `gh`. Run every command from the top folder of a clone of [the repository](https://github.com/rahuldave/MahaCata).
 
 1. Install the package and its test tools.
 
@@ -340,6 +340,52 @@ A team can keep one configuration in etcd, a key-value server, instead of a YAML
 
 The push copies each `${oc.env:...}` value as written. Each reader fills the value in from its own environment, so one entry in etcd gives each person their own home folder. Do not give write access to the etcd prefix to people you do not trust. A value there can read the environment of every reader.
 
+## Step 7: Read a model from Hugging Face
+
+The `hf` store reads models, datasets and Spaces on the Hugging Face Hub. It needs the `hf` extra, which `uv sync` installs. A public repository needs no login. For a private or gated one, set `HF_TOKEN`, or log in with `hf auth login`.
+
+The first part of the URI is the kind of repository, which is `models`, `datasets` or `spaces`. The next two parts are the owner and the name of the repository. Pin a small test model.
+
+```
+$ uv run provc pin 'hf://models/hf-internal-testing/tiny-random-gpt2?at=branch:main'
+hf://models/hf-internal-testing/tiny-random-gpt2?at=commit:71034c5d8bde858ff824298bdedc65515b97d2b9
+```
+
+**What happened:** `HfStore.pin` asked the Hub for the branches and tags of the repository, and took the commit of `main`. It wrote the pin in a ref record, as the GitHub store does in Step 1. Without a selector, the store uses `main`.
+
+Look at a file, then fetch it.
+
+```
+$ uv run provc stat 'hf://models/hf-internal-testing/tiny-random-gpt2/model.safetensors'
+{
+  "uri": "hf://models/hf-internal-testing/tiny-random-gpt2/model.safetensors?at=commit:71034c5d8bde858ff824298bdedc65515b97d2b9",
+  "kind": "file",
+  "size": 453864,
+  "version": "71034c5d8bde858ff824298bdedc65515b97d2b9"
+}
+
+$ uv run provc fetch 'hf://models/hf-internal-testing/tiny-random-gpt2/model.safetensors'
+/tmp/provcat-tour/hf/models/hf-internal-testing/tiny-random-gpt2/71034c5d8bde858ff824298bdedc65515b97d2b9/model.safetensors
+```
+
+**What happened:** the Hub keeps this file in Xet, its storage for large files. The store downloaded it with the `hf_xet` package, which `huggingface_hub` uses for Xet, straight into a temporary file of the provcat cache. It checked the size and the SHA-256 against the ones that the Hub lists, and only then did the cache rename the file into place. Nothing went into the cache of `huggingface_hub`.
+
+A time picks the commit that a branch had then:
+
+```
+$ uv run provc pin 'hf://models/hf-internal-testing/tiny-random-gpt2?at=ts:2023-01-01'
+hf://models/hf-internal-testing/tiny-random-gpt2?at=commit:937b4d23b6648f5a1a0d1247b939b26981798903
+```
+
+`provc ls` lists a folder, and `provc fetch` of a folder downloads every file in it, one by one. Offline, `fetch` and `stat` serve what the store fetched before, and refuse the rest. `ls` needs the network.
+
+```
+$ uv run provc --offline fetch 'hf://models/hf-internal-testing/tiny-random-gpt2/tokenizer.json'
+provc: hf://models/hf-internal-testing/tiny-random-gpt2/tokenizer.json: commit 71034c5d8bde858ff824298bdedc65515b97d2b9 is not in the cache
+```
+
+A logical scheme can point at the Hub as at any store. A target such as `hf://datasets/{org}/{repo}/{path}` gives code a name that does not say where the data is. [The reference](reference.md#stores) lists the options of the store, and [the design](design.md#the-hugging-face-driver) gives the details. "Known limits" in the design lists what does not work yet.
+
 ## Where each step lives in the code
 
 | Step | Files |
@@ -349,6 +395,7 @@ The push copies each `${oc.env:...}` value as written. Each reader fills the val
 | Resolve a logical URI | `packages/provcat/src/provcat/resolver.py` |
 | Join the parts and pick the store | `packages/provcat/src/provcat/catalog.py` |
 | Read GitHub | `packages/provcat/src/provcat/stores/github.py` |
+| Read Hugging Face | `packages/provcat/src/provcat/stores/hf.py` |
 | Read and write S3 and MinIO | `packages/provcat/src/provcat/stores/s3.py`, with the shared logic of object stores in `stores/objects.py` |
 | Read and write GCS and Azure | `packages/provcat/src/provcat/stores/gcs.py` and `stores/azure.py` |
 | Read and write lakeFS, and commit, branch and merge | `packages/provcat/src/provcat/stores/lakefs.py` |
@@ -356,7 +403,7 @@ The push copies each `${oc.env:...}` value as written. Each reader fills the val
 | Keep files, records and locks | `packages/provcat/src/provcat/cache.py` |
 | The `provc` command | `packages/provcat/src/provcat/cli.py` |
 
-The tests in `packages/provcat/tests` and `packages/provrun/tests` are a second set of examples. The system tests use real services, and each runs only when you set its environment variable. The README lists them.
+The tests in `packages/provcat/tests` and `packages/provrun/tests` are a second set of examples. The system tests use real services, and each runs only when you set its environment variable. "Run the tests" in [setup](setup.md) lists them.
 
 ## Where to go next
 
