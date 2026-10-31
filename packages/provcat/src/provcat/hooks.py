@@ -13,8 +13,16 @@ A recorder calls ``next`` and then records the request and the answer. A gate
 raises an error, or calls ``next``. Hooks run before the base cache, so a read
 from the cache passes the gates too.
 
-The proxy configuration gives each app its hooks. It is a local YAML file, in
-PROVCAT_HOOKS or at ``~/.config/provcat/hooks.yaml``:
+A program that runs the catalog for others, such as an orchestrator, passes
+its hooks to each Catalog, so several apps can share one process. The hooks
+of the process, from the proxy configuration below, run last, next to the
+store, so they see the request that runs::
+
+    cat = Catalog(config, hooks=Hooks({"*": [record]}), app="ingest", principal="alice")
+    cat = Catalog(config, hooks=hooks.load("ingest", "hooks.yaml"))
+
+Otherwise the proxy configuration gives each app its hooks. It is a local
+YAML file, in PROVCAT_HOOKS or at ``~/.config/provcat/hooks.yaml``:
 
     apps:
       default: {}
@@ -34,7 +42,7 @@ import json
 import os
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from importlib.metadata import entry_points
 from pathlib import Path
@@ -58,8 +66,8 @@ class AccessDenied(ProvcatError):
 
 @dataclass(frozen=True)
 class Context:
-    """Who uses the catalog. The principal is the user of the process until
-    profiles come."""
+    """Who uses the catalog. The principal is the user of the process, or the
+    name that a caller passes as principal=."""
 
     app: str | None
     principal: str
@@ -86,11 +94,53 @@ class Request:
 Hook = Callable[[Context, Request, Callable[[Request], Any]], Any]
 
 
-class Hooks:
-    """The hook chain of each spot for one app."""
+def same(a: Any, b: Any) -> bool:
+    """Whether two hooks are one: the same object, or the same method of the
+    same object. A hook's own __eq__ is not asked."""
+    if a is b:
+        return True
+    return (hasattr(a, "__self__") and hasattr(a, "__func__") and hasattr(b, "__self__")
+            and hasattr(b, "__func__") and a.__self__ is b.__self__ and a.__func__ is b.__func__)
 
-    def __init__(self, chains: dict[str, list[Hook]] | None = None):
-        self.chains = {s: list((chains or {}).get(s, [])) for s in SPOTS}
+
+class Hooks:
+    """The hook chain of each spot for one app.
+
+    ``chains`` maps a spot to a list of hooks. The hooks under ``"*"`` run at
+    every spot, before the hooks of the spot, as in the proxy configuration::
+
+        Hooks({"*": [record], "fetch": [only_logical]})
+    """
+
+    def __init__(self, chains: Mapping[str, list[Hook]] | None = None):
+        if chains is not None and not isinstance(chains, Mapping):
+            raise ConfigError(f"hooks must be a mapping of spot to hooks, not {type(chains).__name__}")
+        chains = dict(chains or {})
+        unknown = set(chains) - {"*", *SPOTS}
+        if unknown:
+            raise ConfigError(f"hooks: unknown spots {sorted(unknown, key=repr)}; the spots are {', '.join(SPOTS)}")
+        for spot, chain in chains.items():
+            if not isinstance(chain, (list, tuple)) or not all(callable(h) for h in chain):
+                raise ConfigError(f"hooks: {spot} must be a list of functions")
+        self.chains = {}
+        for spot in SPOTS:
+            both = [*chains.get("*", []), *chains.get(spot, [])]
+            # Each access to obj.method makes a new bound method, so compare with same().
+            if any(same(h, g) for i, h in enumerate(both) for g in both[:i]):
+                raise ConfigError(f"hooks: a hook would run twice at {spot}")
+            self.chains[spot] = tuple(both)
+
+    def then(self, other: Hooks) -> Hooks:
+        """These hooks, and then other's, at each spot. A hook in both runs
+        twice, which a gate or a recorder allows."""
+        both = Hooks()
+        both.chains = {spot: (*self.chains[spot], *other.chains[spot]) for spot in SPOTS}
+        return both
+
+    def same_as(self, other: Hooks) -> bool:
+        """Whether other runs the same hooks at each spot, in the same order."""
+        return all(len(self.chains[s]) == len(other.chains[s])
+                   and all(map(same, self.chains[s], other.chains[s])) for s in SPOTS)
 
     def run(self, ctx: Context, req: Request, work: Callable[[Request], Any]) -> Any:
         """Run the chain of req.spot around work."""
@@ -202,10 +252,42 @@ def load(app: str | None, path: str | Path | None = None) -> Proxy:
     return Proxy(name, root, Hooks(chains))
 
 
+def given(hooks: Hooks | Proxy | Mapping | None, app: str | None) -> Proxy:
+    """The proxy of a caller that passes its own hooks to a Catalog: a Hooks,
+    a Proxy from load(), a mapping for Hooks, or None for none of its own.
+    The hooks of the process, from PROVCAT_HOOKS or the default file, run
+    last, next to the store, so they see the request that runs; a caller
+    adds hooks and never drops or gets round one. A process that a launcher
+    started with PROVCAT_APP refuses. An app that the hooks file names is
+    refused unless the caller passes its Proxy from load()."""
+    launched = process_app()
+    if launched is not None:
+        raise ConfigError(f"this process was started as app {launched!r}, so its hooks come from "
+                          f"the hooks file; a caller cannot pass its own")
+    own = process_proxy()
+    if isinstance(hooks, Proxy):
+        if app is not None and app != hooks.app:
+            raise ConfigError(f"the hooks given are those of app {hooks.app!r}, not {app!r}")
+        if not isinstance(hooks.hooks, Hooks) or not isinstance(getattr(hooks.hooks, "chains", None), dict):
+            raise ConfigError(f"the Proxy's hooks must be a Hooks, not {type(hooks.hooks).__name__}")
+        if hooks.app in _process_file_apps and not hooks.hooks.same_as(load(hooks.app).hooks):
+            raise ConfigError(f"the hooks given for app {hooks.app!r} are not those of the hooks file")
+        return Proxy(hooks.app, hooks.cache_root or own.cache_root, hooks.hooks.then(own.hooks))
+    if app is not None and app in _process_file_apps:
+        raise ConfigError(f"the hooks file has hooks for app {app!r}; pass hooks.load({app!r}) "
+                          f"to open the catalog as that app")
+    if isinstance(hooks, Mapping):
+        hooks = Hooks(hooks)
+    if hooks is not None and not isinstance(getattr(hooks, "chains", None), dict):
+        raise ConfigError(f"hooks must be a Hooks, a Proxy or a mapping, not {type(hooks).__name__}")
+    return Proxy(app if app is not None else own.app, own.cache_root, (hooks or Hooks()).then(own.hooks))
+
+
 # The app of this process and its part of the proxy configuration, read once.
 _UNREAD = object()
 _process_app: Any = _UNREAD
 _process_proxy: Proxy | None = None
+_process_file_apps: frozenset[str] = frozenset()  # the apps of the hooks file, read with it
 _lock = threading.Lock()
 
 
@@ -226,24 +308,43 @@ def process_proxy(app: str | None = None) -> Proxy:
     """The hooks of this process. The hooks file is read once, at the first
     catalog that opens without an error. A later change to PROVCAT_HOOKS or to
     the file does not change the hooks."""
-    global _process_proxy
+    global _process_proxy, _process_file_apps
     name = process_app(app)
     with _lock:
         if _process_proxy is None:
             _process_proxy = load(name)
+            _process_file_apps = _apps_in_file()
         return _process_proxy
+
+
+def _apps_in_file() -> frozenset[str]:
+    """The apps that the hooks file names, after load() has read it once."""
+    file = Path(os.environ.get("PROVCAT_HOOKS") or DEFAULT_FILE).expanduser()
+    try:
+        data = yaml.safe_load(file.read_text())
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return frozenset()
+    apps = data.get("apps") if isinstance(data, dict) else None
+    return frozenset(a for a in apps if isinstance(a, str) and a != "default") if isinstance(apps, dict) else frozenset()
 
 
 def _forget_process_app() -> None:
     """For tests: read PROVCAT_APP and the hooks file again at the next call."""
-    global _process_app, _process_proxy
+    global _process_app, _process_proxy, _process_file_apps
     with _lock:
         _process_app = _UNREAD
         _process_proxy = None
+        _process_file_apps = frozenset()
 
 
-def context(app: str | None, tenant: str | None) -> Context:
-    """Who uses a catalog: the app, the user of the process and the tenant."""
+def context(app: str | None, tenant: str | None, principal: str | None = None) -> Context:
+    """Who uses a catalog: the app, the principal (by default the user of the
+    process) and the tenant."""
+    if principal is not None:
+        if not isinstance(principal, str) or not principal.isprintable() or principal.strip() != principal \
+                or not principal:
+            raise ConfigError(f"the principal must be a name, not {principal!r}")
+        return Context(app, principal, tenant)
     try:
         who = getpass.getuser()
     except (KeyError, OSError):

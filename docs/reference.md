@@ -184,6 +184,28 @@ provcat comes with two hooks:
 
 A hook takes three arguments, `hook(ctx, req, next)`. `ctx` holds the app, the principal and the tenant. `req` holds the spot, the logical URI, the physical URI and the other arguments. `next(req)` runs the rest of the chain and returns the answer. A gate raises `provcat.AccessDenied`.
 
+### Hooks from a program
+
+A program that runs the catalog for others, such as an orchestrator, passes the hooks to each `Catalog`. Then several apps can share one process:
+
+```python
+from provcat import Catalog, hooks
+
+cat = Catalog(config, hooks={"*": [record], "fetch": [hooks.logical_only]}, app="ingest", principal="alice")
+cat = Catalog(config, hooks=hooks.load("ingest", "hooks.yaml"))   # one app of a hooks file
+```
+
+| Rule | What it means |
+|---|---|
+| `hooks` is a dict, a `Hooks` or a `Proxy`. | A dict maps spots, and `"*"`, to lists of functions. `hooks.load(app, path)` gives the `Proxy` of one app of a hooks file, with its `cache_root`. |
+| The process's hooks run last. | If `PROVCAT_HOOKS` is set, or `~/.config/provcat/hooks.yaml` exists, the caller's hooks run first, and then those of the file's `default` app, next to the store. So the process's gates see the request that runs, even if a caller's hook changes it. A caller adds hooks and never gets round one. |
+| `app` and `principal` name the caller. | Each hook gets them in `ctx`. The principal is otherwise the user of the process. It must be a name, with no space at its ends and no control character. `principal` alone keeps the process's hooks. |
+| An app of the hooks file needs its hooks. | If the process's hooks file names the app, the caller passes `hooks.load(app)`. Other hooks under that app's name are refused. |
+| A launched process refuses them. | If a launcher started the process with `PROVCAT_APP`, a `Catalog` refuses `hooks` and `principal`. So code inside such a process cannot drop its gates. |
+| The hooks go through everything. | provrun and the fsspec file system take a `Catalog`, so every read and write they make runs through the hooks of that catalog. |
+| The hooks bind only that catalog. | Code in an orchestrator's process, a tool of a run for example, can make its own `Catalog` with only the process's hooks. To confine code, a launcher starts it in its own process with `PROVCAT_APP`. |
+
+
 Hooks hold back code that uses the catalog. Code that calls a store directly, or writes its own configuration, gets past them. "Hooks" in [the design](design.md#hooks) explains the rest.
 
 ## Files and fsspec
@@ -213,7 +235,7 @@ with fsspec.open("code://octocat/Hello-World/master/README", "rb") as f:
 | Paths are whole URIs. | `fs.ls("code://...")` gives the names under the URI, as URIs of the same scheme. A `/` in a selector is written `%2F`. A path with `?at=` is never a glob pattern. |
 | `fs()` registers the logical schemes. | After `cat.fs()`, `fsspec.open` and libraries built on fsspec take the logical URIs of `cat`. `cat.fs(register=False)` registers nothing. |
 | A known protocol is refused. | `cat.fs()` refuses a logical scheme that fsspec already knows, such as `memory` or `data`. Store names are never registered, so `s3://` in fsspec stays fsspec's own. |
-| The last catalog wins. | If two catalogs in one process register a scheme, the second one serves it. The registry keeps that catalog for the life of the process. A registered file system cannot be pickled; use `register=False` to send one to another process. |
+| The last catalog wins, within one caller. | If two catalogs in one process register a scheme, the second one serves it, if both have the same app, principal, tenant and hooks. A catalog with another of these is refused, so fsspec never runs one caller's reads through another caller's hooks. It uses `fs(register=False)`, or `fs(replace=True)` to take the scheme over on purpose. A notebook cell that runs again makes new hook functions, so it needs `replace=True`. The registry keeps the catalog for the life of the process. A registered file system cannot be pickled; use `register=False` to send one to another process. |
 | fsspec caches are not gated. | A chained cache such as `simplecache::dd://...` keeps copies that the hooks never see. Do not use one over a catalog. |
 
 ## The cache

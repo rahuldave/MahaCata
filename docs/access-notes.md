@@ -130,7 +130,7 @@ apps:
 
 - **The hooks.** Each name is a Python entry point in the group `provcat.hooks`. A package registers its hooks when it is installed. So the file names hooks, and it holds no code and no path to code. If two packages register one name, provcat refuses to start.
 - **The spots.** The hooks under `"*"` run at every spot, first. The hooks under a spot run after them. A name can be in a chain only once.
-- **The app.** The launcher sets the app name and the path of the hooks file when it starts the process, through `PROVCAT_APP` and `PROVCAT_HOOKS`. provcat reads them once, when the process opens its first catalog. A later `Catalog.open(app=...)` can name only that app. Code in the process cannot pick an app with fewer hooks.
+- **The app.** The launcher sets the app name and the path of the hooks file when it starts the process, through `PROVCAT_APP` and `PROVCAT_HOOKS`. provcat reads them once, when the process opens its first catalog. A later `Catalog.open(app=...)` can name only that app. Code in the process cannot pick an app with fewer hooks. A process that no launcher started, such as an orchestrator, can instead pass the hooks to each `Catalog`, as "Hooks from a program" in [the reference](reference.md#hooks-from-a-program) shows.
 - **The writer.** The person who runs the machine writes the hooks file. The principal whose reads it controls must not be able to write it.
 - **The root of the base cache.** `cache_root` in the section of an app takes the place of `cache.root` in the configuration. Two apps with two roots keep two records of pins, so `--offline` in one app does not see the pins of the other.
 - **No app.** If `PROVCAT_APP` is not set and the file exists, the process gets the `default` section.
@@ -163,7 +163,7 @@ These rules apply to entries:
 
 The catalog also takes a physical URI, for example `github://owner/repo/path`. It does no lookup for one, so a hook sees no logical name. A gate can refuse physical URIs. The provrun broker already does so outside the `dev` environment.
 
-The fsspec adapter registers the logical schemes as fsspec protocols. fsspec keeps one registration for each protocol in a process. So one catalog per process registers them, and provcat refuses a second catalog that tries to register them. Other catalogs in the process work through their own `catalog.fs()`.
+The fsspec adapter registers the logical schemes as fsspec protocols. fsspec keeps one registration for each protocol in a process. A later catalog with the same app, principal, tenant and hooks takes the registration over. provcat refuses one with another app, principal, tenant or hooks, so fsspec never runs one caller's reads through another's hooks. Other catalogs in the process work through their own `catalog.fs(register=False)`. `catalog.fs(replace=True)` takes the registration over on purpose, for example when a notebook cell runs again.
 
 The adapter does not register the stores. fsspec and `huggingface_hub` already register `github` and `hf` for their own file systems, and provcat does not replace them. Code reaches a physical URI through `catalog.fs()` only.
 
