@@ -1,20 +1,22 @@
 """Configuration sources.
 
-A configuration is a dict with up to six sections:
+A configuration is a dict with up to seven sections:
 
 - ``stores``: named store instances, each ``{driver: ..., <options>}``.
 - ``schemes``: logical URI schemes and their templates (see resolver.py).
 - ``stages``: stage pointers, ``{logical-uri: {stage-name: "kind:value"}}``.
+- ``entries``: rules for one logical name or prefix, ``{logical-uri: {target: ..., ref: ...}}``
+  (see resolver.py).
 - ``cache``: ``{root: <folder>}``.
-- ``tenants``: ``{name: {stores: ..., stages: ..., cache: ...}}``, the part of
+- ``tenants``: ``{name: {stores: ..., stages: ..., entries: ..., cache: ...}}``, the part of
   each tenant. The schemes are shared.
-- ``admin``: ``{stores: ..., stages: ..., cache: ...}``, the part that only the
+- ``admin``: ``{stores: ..., stages: ..., entries: ..., cache: ...}``, the part that only the
   admin sees, such as a store with keys that read every tenant's data.
 
 ``view(cfg, tenant)`` gives the configuration that one tenant sees: the shared
 sections and that tenant's part. With no tenant it gives the admin's view, the
 shared sections, the admin part and every tenant's part. A tenant may name only its own
-stores and stages, so that no tenant can take over another's. Each scheme that
+stores, stages and entries, so that no tenant can take over another's. Each scheme that
 names its tenant part, with ``tenant: org``, says whose a URI is.
 
 In etcd each tenant's part lives under ``<prefix>/tenants/<name>/<section>``,
@@ -47,8 +49,8 @@ from pathlib import Path
 
 from .errors import ConfigError
 
-SECTIONS = ("stores", "schemes", "stages", "cache", "tenants", "admin")
-TENANT_SECTIONS = ("stores", "stages", "cache")
+SECTIONS = ("stores", "schemes", "stages", "entries", "cache", "tenants", "admin")
+TENANT_SECTIONS = ("stores", "stages", "entries", "cache")
 DEFAULT_FILE = "provcat.yaml"
 TENANT_NAME = re.compile(r"[a-z0-9]{1,20}")  # as the org in the example schemes
 
@@ -103,7 +105,7 @@ def _owner(uri: str, schemes: dict) -> str | None:
 
 
 def _check_part(cfg: dict, name: str, part: dict, where: str) -> None:
-    """A tenant names only its own stores and stages."""
+    """A tenant names only its own stores, stages and entries."""
     for store in part.get("stores", {}):
         if not str(store).endswith("-" + name):
             raise ConfigError(f"{where}: tenants.{name}: store {store!r} must end with -{name}, "
@@ -113,6 +115,25 @@ def _check_part(cfg: dict, name: str, part: dict, where: str) -> None:
         owner = _owner(str(key), schemes)
         if owner != name:
             raise ConfigError(f"{where}: tenants.{name}: the stage {key!r} is not a URI of {name}")
+    for key, raw in part.get("entries", {}).items():
+        if _owner(str(key), schemes) != name:
+            raise ConfigError(f"{where}: tenants.{name}: the entry {key!r} is not a URI of {name}")
+        target = raw.get("target") if isinstance(raw, dict) else None
+        if not isinstance(target, str) or any("${" in str(v) for v in raw.values()):
+            # The check reads the text before ${...} is filled in, so a filled-in
+            # value could name any store.
+            raise ConfigError(f"{where}: tenants.{name}: the entry {key!r} must have a target "
+                              "with no ${...} values")
+        store, _, rest = target.partition("://")
+        if not store.endswith("-" + name):
+            raise ConfigError(f"{where}: tenants.{name}: the entry {key!r} must go to a store that ends "
+                              f"with -{name}, not {store!r}")
+        place = rest.split("/", 1)[0].split("?", 1)[0]
+        if place != name and not place.startswith(name + "-"):
+            # As a template gives lakefs-{org}://{org}-data-..., so access
+            # lists that grant acme-* keep holding.
+            raise ConfigError(f"{where}: tenants.{name}: the entry {key!r} must go to a bucket or "
+                              f"repository named {name} or {name}-..., not {place!r}")
 
 
 class View(dict):
@@ -127,7 +148,7 @@ class View(dict):
 def _name(section: str, key: str) -> str:
     """The form in which two names are the same: a stage key as the resolver
     reads it, so a trailing "/" or a percent-encoding is not a new name."""
-    if section != "stages":
+    if section not in ("stages", "entries"):
         return key
     from .errors import UriError
     from .uri import parse
@@ -155,7 +176,7 @@ def view(cfg: dict, tenant: str | None = None, where: str = "config") -> View:
     for label, part in parts:
         if label != "admin":
             _check_part(cfg, label.split(".", 1)[1], part, where)
-        for section in ("stores", "stages"):
+        for section in ("stores", "stages", "entries"):
             mine = out.setdefault(section, {})
             names = {_name(section, k) for k in mine}
             for key, value in part.get(section, {}).items():

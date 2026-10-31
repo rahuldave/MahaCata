@@ -71,7 +71,11 @@ class Catalog:
         self.offline = offline
         stores = {**DEFAULT_STORES, **cfg.get("stores", {})}
         self.stores: dict[str, Store] = {n: make_store(n, s or {}, offline=offline) for n, s in stores.items()}
-        self.resolver = resolver or TemplateResolver(cfg.get("schemes"), cfg.get("stages"), tenant)
+        self.resolver = resolver or TemplateResolver(cfg.get("schemes"), cfg.get("stages"), tenant,
+                                                     cfg.get("entries"))
+        for entry in getattr(self.resolver, "entries", {}).values():
+            if entry.store not in self.stores and self.resolver.serves(entry.key):
+                raise ConfigError(f"entries.{entry.key}: there is no store named {entry.store!r}")
         clash = [n for n in self.stores if self.resolver.handles(n)]
         if clash:
             raise ConfigError(f"{clash} are both stores and logical schemes; rename one")

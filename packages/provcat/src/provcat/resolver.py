@@ -48,6 +48,34 @@ A scheme without ``tenant`` serves every tenant.
 ``match`` gives a regular expression for a part. A URI whose part does not
 match the whole expression is refused, so that names such as lakeFS
 repository names stay valid and cannot run together.
+
+Entries send one logical name, or every name under a prefix, somewhere other
+than the template of its scheme::
+
+    entries:
+      "code://acme/tokenizer/prod":
+        target: "github://acme/tokenizer/{path}?at=branch:prod"
+      "code://acme/tokenizer/prod/weights":
+        target: "hf://models/acme/tokenizer/{path}"
+      "data+table://acme/shared/prod/corpora":
+        target: "lakefs-acme://acme-corpora/{ref}/{path}"
+        ref: main
+
+- The longest key that is a prefix of the URI wins, by whole parts. A URI
+  that no key matches goes to the template of its scheme.
+- ``{path}`` is the rest of the URI after the key, each part encoded. A target
+  without ``{path}`` serves only the URI that is its key.
+- ``{ref}`` is for a store that keeps the branch in the path, such as lakeFS.
+  ``branch:``, ``tag:`` and ``commit:`` on the URI fill it, and ``ref`` is the
+  default. A target without ``{ref}`` takes the selector of the URI in place of
+  its own ``?at=``.
+- ``ts:TIME`` keeps the branch of the target. A target that names a branch in
+  ``?at=`` gives it as ``ts_branch``, as a template does. A target fixed to a
+  tag or a commit refuses ``ts:``. ``version:`` is refused.
+- A stage of the URI comes first, and its selector then applies as above.
+- A key must be a URI of a logical scheme, with no ``?at=``. Its parts must
+  fit the ``parts`` and ``match`` of the scheme as far as the key goes. The
+  store of a target is fixed text.
 """
 from __future__ import annotations
 
@@ -191,10 +219,113 @@ class SchemeSpec:
                    bool(raw.get("pass_selector", False)), tuple(patterns), store_field, tenant)
 
 
+@dataclass(frozen=True)
+class EntrySpec:
+    key: Uri  # the logical prefix, with no selector
+    target: str
+    ref: str | None = None
+
+    @property
+    def parts(self) -> tuple[str, ...]:
+        return (self.key.authority,) + self.key.segments
+
+    @property
+    def has_path(self) -> bool:
+        return "path" in _fields(self.target)
+
+    @property
+    def has_ref(self) -> bool:
+        return "ref" in _fields(self.target)
+
+    @property
+    def store(self) -> str:
+        return self.target.split("://", 1)[0]
+
+    def format(self, path: str, ref: str | None) -> str:
+        target = self.target if path else self.target.replace("/{path}", "{path}")
+        return target.format_map({"path": path, "ref": ref or ""})
+
+
+def _fields(template: str) -> list[str]:
+    return [f for _, f, _, _ in string.Formatter().parse(template) if f is not None]
+
+
+def _check_parts(spec: SchemeSpec, uri: Uri, given: tuple[str, ...]) -> None:
+    """Refuse a URI, or the key of an entry, whose parts do not fit the scheme."""
+    if len(given) > len(spec.parts) and not spec.rest:
+        shape = "/".join(spec.parts)
+        raise ResolveError(f"{uri} does not match {spec.name}://{shape}")
+    named = dict(zip(spec.parts, given))
+    for part, pattern in spec.match:
+        if part in named and not pattern.fullmatch(named[part]):
+            raise ResolveError(f"{uri}: {part} {named[part]!r} does not match {pattern.pattern}")
+
+
+def _entry(key: object, raw: object, specs: dict[str, SchemeSpec]) -> EntrySpec:
+    if not isinstance(key, str):
+        raise ResolveError(f"entries: key {key!r} must be a URI string")
+    where = f"entries.{key}"
+    try:
+        uri = parse(key)
+    except UriError as e:
+        raise ResolveError(f"entries: bad key {key!r}: {e}") from e
+    if uri.selector is not None:
+        raise ResolveError(f"entries: key {key!r} must not have ?at=")
+    spec = specs.get(uri.scheme)
+    if spec is None:
+        raise ResolveError(f"entries: key {key!r} is not a URI of a logical scheme")
+    if not uri.authority:
+        raise ResolveError(f"entries: key {key!r} needs a first part after //")
+    _check_parts(spec, uri, (uri.authority,) + uri.segments)
+    if not isinstance(raw, dict):
+        raise ResolveError(f"{where} must be a mapping with a target")
+    unknown = set(raw) - {"target", "ref"}
+    if unknown:
+        raise ResolveError(f"{where}: unknown keys {sorted(unknown)}")
+    target, ref = raw.get("target"), raw.get("ref")
+    if not isinstance(target, str) or "://" not in target:
+        raise ResolveError(f"{where}.target must be a URI template")
+    try:
+        fields = list(string.Formatter().parse(target))
+    except ValueError as e:
+        raise ResolveError(f"{where}.target is not a valid template: {e}") from None
+    for _, name, spec_text, conv in fields:
+        if name is None:
+            continue
+        if name not in ("path", "ref") or spec_text or conv:
+            raise ResolveError(f"{where}.target: the only fields are {{path}} and {{ref}}, got {{{name}}}")
+    entry = EntrySpec(uri, target, ref)
+    place = target.split("://", 1)[1].split("/", 1)[0]
+    if _fields(entry.store) or _fields(place):
+        raise ResolveError(f"{where}.target: the store name and the first part after // must be fixed text")
+    if entry.has_ref != (ref is not None):
+        raise ResolveError(f"{where}: a target with {{ref}} needs a ref, the default branch, "
+                           "and a ref needs {ref} in the target")
+    if ref is not None and (not isinstance(ref, str) or not ref or "{" in ref or "/" in ref
+                            or ref in (".", "..")):
+        raise ResolveError(f"{where}.ref must be a branch name without /, as it fills one part of the path")
+    for path in ("", "x/y"):
+        try:
+            got = parse(entry.format(path, ref))
+        except (UriError, ValueError, KeyError) as e:
+            raise ResolveError(f"{where}.target does not make a valid URI: {e}") from None
+        if entry.has_ref and got.selector is not None:
+            raise ResolveError(f"{where}.target: a target with {{ref}} cannot also have ?at=")
+    return entry
+
+
 class TemplateResolver(Resolver):
-    def __init__(self, schemes: dict | None = None, stages: dict | None = None, tenant: str | None = None):
+    def __init__(self, schemes: dict | None = None, stages: dict | None = None, tenant: str | None = None,
+                 entries: dict | None = None):
         self.tenant = tenant
         self.specs = {n: SchemeSpec.from_config(n, s) for n, s in (schemes or {}).items()}
+        self.entries: dict[tuple[str, ...], EntrySpec] = {}
+        for key, raw in (entries or {}).items():
+            entry = _entry(key, raw, self.specs)
+            name = (entry.key.scheme,) + entry.parts
+            if name in self.entries:
+                raise ResolveError(f"entries: {key!r} is {str(entry.key)!r}, which another key also names")
+            self.entries[name] = entry
         self.stages = {}
         for key, pointers in (stages or {}).items():
             if not isinstance(key, str):
@@ -228,6 +359,22 @@ class TemplateResolver(Resolver):
             raise ResolveError(f"stage {name!r} for {key} points at another stage")
         return sel
 
+    def serves(self, uri: Uri) -> bool:
+        """False for a URI that names another tenant, which this resolver refuses."""
+        spec = self.specs.get(uri.scheme)
+        if self.tenant is None or spec is None or not spec.tenant:
+            return True
+        named = dict(zip(spec.parts, (uri.authority,) + uri.segments))
+        return named.get(spec.tenant, self.tenant) == self.tenant
+
+    def _match(self, uri: Uri, given: tuple[str, ...]) -> EntrySpec | None:
+        """The entry with the longest key that is a prefix of the URI."""
+        for k in range(len(given), 0, -1):
+            entry = self.entries.get((uri.scheme,) + given[:k])
+            if entry is not None and (entry.has_path or k == len(given)):
+                return entry
+        return None
+
     def resolve(self, uri: Uri) -> Resolution:
         spec = self.specs.get(uri.scheme)
         if spec is None:
@@ -236,19 +383,23 @@ class TemplateResolver(Resolver):
             raise ResolveError(f"{uri}: a logical URI needs a first part after //")
         given = (uri.authority,) + uri.segments
         n = len(spec.parts)
-        if len(given) < n or (len(given) > n and not spec.rest):
-            shape = "/".join(spec.parts) + (f"/<{spec.rest}...>" if spec.rest else "")
-            raise ResolveError(f"{uri} does not match {spec.name}://{shape}")
-        def q(v: str) -> str:
-            return quote(v, safe=_SAFE.replace("&", ""))
-
         named = dict(zip(spec.parts, given))
+        if self.tenant is not None and spec.tenant and spec.tenant not in named:
+            raise ResolveError(f"{uri} is too short to name its {spec.tenant}; this catalog is for {self.tenant}")
         if self.tenant is not None and spec.tenant and named[spec.tenant] != self.tenant:
             raise ResolveError(f"{uri}: {spec.tenant} {named[spec.tenant]!r} is another tenant; "
                                f"this catalog is for {self.tenant}")
-        for part, pattern in spec.match:
-            if not pattern.fullmatch(named[part]):
-                raise ResolveError(f"{uri}: {part} {named[part]!r} does not match {pattern.pattern}")
+        _check_parts(spec, uri, given)
+        entry = self._match(uri, given)
+        if entry is not None:
+            return self._resolve_entry(uri, given, entry)
+        if len(given) < n:
+            shape = "/".join(spec.parts) + (f"/<{spec.rest}...>" if spec.rest else "")
+            raise ResolveError(f"{uri} does not match {spec.name}://{shape}")
+
+        def q(v: str) -> str:
+            return quote(v, safe=_SAFE.replace("&", ""))
+
         if spec.store_field and not _STORE_VALUE.fullmatch(named[spec.store_field]):
             raise ResolveError(f"{uri}: {spec.store_field} {named[spec.store_field]!r} picks the store, "
                                "so it must be lowercase letters and digits only")
@@ -301,4 +452,44 @@ class TemplateResolver(Resolver):
         # A ts: keeps the default branch, but a target without {ref} drops it.
         # The store that reads the time may need it, so it goes along.
         ts_branch = default.value if sel and sel.kind == "ts" and default and not _uses_ref(spec.target) else None
+        return Resolution(uri, physical, tuple(via), ts_branch)
+
+    def _selector(self, uri: Uri, via: list[str]) -> Selector | None:
+        """The selector of the URI, with a stage looked up."""
+        sel = uri.selector
+        if sel and sel.kind == "stage":
+            target = self._stage(uri, sel.value)
+            via.append(f"stage:{sel.value} -> {target}")
+            sel = target
+        if sel and sel.kind == "ts":
+            try:
+                parse_ts(sel.value)
+            except UriError as e:
+                raise ResolveError(f"{uri}: {e}") from None
+        return sel
+
+    def _resolve_entry(self, uri: Uri, given: tuple[str, ...], entry: EntrySpec) -> Resolution:
+        via: list[str] = []
+        sel = self._selector(uri, via)
+        if sel and sel.kind not in _REF_KINDS and sel.kind != "ts":
+            raise ResolveError(f"{uri}: an entry takes branch:, tag:, commit:, ts: or stage:, not {sel.kind}:")
+        safe = _SAFE.replace("&", "")
+        path = "/".join(quote(v, safe=safe) for v in given[len(entry.parts):])
+        ref = sel.value if sel and sel.kind in _REF_KINDS else entry.ref
+        try:
+            physical = parse(entry.format(path, quote(ref, safe=safe) if ref else None))
+        except UriError as e:
+            raise ResolveError(f"{uri} resolves to a bad URI through the entry {entry.key}: {e}") from e
+        own, ts_branch = physical.selector, None
+        if sel and own is not None and own.kind != "branch" and sel.kind != "commit":
+            # A target fixed to a tag or a commit names one version. A run may
+            # still fix another commit, but a branch or a time would move it.
+            raise ResolveError(f"{uri}: the entry {entry.key} is fixed to {own}, so it takes only commit:, "
+                               f"not {sel.kind}:")
+        if sel and sel.kind in _REF_KINDS and not entry.has_ref:
+            physical = physical.with_selector(sel)
+        elif sel and sel.kind == "ts":
+            physical = physical.with_selector(sel)
+            ts_branch = own.value if own is not None else None
+        via.append(f"entry {entry.key} -> {physical}")
         return Resolution(uri, physical, tuple(via), ts_branch)

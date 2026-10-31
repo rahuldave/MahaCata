@@ -11,7 +11,7 @@ These notes describe the intended way to use provcat and provrun from code. They
 | lookup | The step that turns a logical URI into a physical URI. It reads the YAML file that the user gives to provc, or etcd. |
 | scheme template | A lookup rule for every URI of one scheme, as in `schemes:` today. |
 | stage | A named pin for one logical URI, as in `stages:` today. |
-| catalog entry | A lookup rule for one logical URI or one prefix of it. Entries do not exist yet. |
+| catalog entry | A lookup rule for one logical URI or one prefix of it. [The reference](reference.md#entries) gives the rules. |
 | pin | The physical URI with a fixed version in place of a moving name, such as a branch. |
 | principal | Who asks: the tenant, the actor and, in a run, the run ID. |
 | app | The program that uses the catalog, for example `provc`, `provrun` or a notebook. |
@@ -153,11 +153,11 @@ entries:
 These rules apply to entries:
 
 - **Longest prefix.** The longest prefix wins. A prefix matches whole path segments only, so `code://acme/tok` does not match `code://acme/tokenizer`. If no entry matches, the scheme template applies, as now.
-- **Fields.** A target can use one field, `{path}`, which is the rest of the URI after the prefix. provcat encodes each segment of `{path}` as the templates do now, so a path cannot add a selector or climb with `..`.
+- **Fields.** A target can use `{path}`, which is the rest of the URI after the prefix. provcat encodes each segment of `{path}` as the templates do now, so a path cannot add a selector or climb with `..`. The build added a second field, `{ref}`, with a `ref` default. lakeFS keeps the branch in the path, so without `{ref}` an entry for lakeFS could not take `?at=commit:ID`.
 - **Selectors.** A selector on the URI, for example `?at=commit:ID`, takes the place of the selector in the target. So a run can fix a version of any name. A `ts:` selector keeps the branch of the target, as the templates do now. So `?at=ts:2026-01-01` on the first entry above becomes `ts:prod@2026-01-01` on GitHub.
 - **Stages.** A stage of a URI comes before an entry, as it comes before a template now.
 - **The scheme rules.** The prefix must match the `parts` and the `match` patterns of its scheme, up to its length. A key cannot name a store, because the catalog does not look up a physical URI.
-- **Tenants.** Entries live in the shared part or in a tenant's part of the configuration. provcat checks an entry of a tenant as it checks a stage. The scheme names one part of the key with its `tenant:` key, and that part must be the tenant. The store of the target must end with `-` and the tenant. The tenant view of the configuration must take in `entries` for this, and today it takes in only `stores` and `stages`.
+- **Tenants.** Entries live in the shared part or in a tenant's part of the configuration. provcat checks an entry of a tenant as it checks a stage. The scheme names one part of the key with its `tenant:` key, and that part must be the tenant. The store of the target must end with `-` and the tenant. The tenant view of the configuration takes in `entries` for this. The build added two rules. A tenant entry has no `${...}` values. Its bucket or repository is named for the tenant, as `acme` or `acme-...`.
 
 ## Physical URIs
 
@@ -205,7 +205,7 @@ The provcat GitHub driver did not handle Git LFS before step 1 below. `provc fet
 
 1. **Git LFS in the GitHub driver. Done in commit 8609a4c.** The driver replaces each pointer file with its content, in a single file and in a folder. It gets the content through the Git LFS batch API, and it checks the size and the SHA-256 against the pointer. A copy of a pointer file in the cache from before the fix is fetched again. A snapshot of such a copy named the pointer, so the evidence of a run that used it named the pointer too.
 2. **The `hf` driver. Done in commit 780052f.** It reads Hugging Face models, datasets and Spaces through the Hub API. It pins to a commit, and it takes `branch:`, `tag:`, `commit:` and `ts:`. It is read-only at first.
-3. **Catalog entries.** The lookup takes entries by the rules above, in the YAML file and in etcd.
+3. **Catalog entries. Done.** The lookup takes entries by the rules above, in the YAML file and in etcd.
 4. **The lifecycle spots and the hooks.** The catalog runs each operation through its spots, and it pins before each read. The proxy configuration and the entry points come in. Nothing changes for users who have no hooks file.
 5. **The fsspec file system.** `catalog.fs()` gives the adapter, with a pin at open and the cache of blocks. The logical schemes register as fsspec protocols.
 6. **provrun on the hooks.** The broker becomes a gate hook, and the evidence becomes a recorder hook. The agent moves to its own process or container, and undeclared opens go from it to the provrun process. This step changes provrun, so it needs agreement on provrun's design first.

@@ -77,6 +77,12 @@ A template can use only plain `{name}` fields, and only the names in the list ab
 
 The resolver percent-encodes each value in the template, so a value can never add a path segment or a `?at=` to the physical URI. A ref that contains `/` fails when the ref fills one path segment, as it does for lakeFS.
 
+### Entries
+
+An entry is a rule for one logical name or one prefix, in the `entries` section. The resolver tries the entries before the template of the scheme, and the longest key wins. [The reference](reference.md#entries) gives the rules. The resolver checks each key against the `parts` and `match` of its scheme when it loads the configuration. The catalog checks that the store of each target exists.
+
+An entry has two fields, `{path}` and `{ref}`. The resolver encodes them as it encodes the fields of a template. `{ref}` is there because lakeFS keeps the branch in the path. Without it, an entry for lakeFS could not take `?at=commit:ID`, and a run could not fix the version of such a name.
+
 ### Stores
 
 A driver class has four methods for reading. Each method takes the cache.
@@ -244,25 +250,26 @@ One configuration holds every tenant. The schemes are shared, so every tenant ma
 
 | Section | What it holds | Who sees it |
 |---|---|---|
-| `tenants.<name>` | The tenant's stores, stages and cache root. | That tenant and the admin. |
-| `admin` | Stores, stages and a cache root for the admin, such as the store `lakefs`, whose keys read every repository. | The admin only. |
+| `tenants.<name>` | The tenant's stores, stages, entries and cache root. | That tenant and the admin. |
+| `admin` | Stores, stages, entries and a cache root for the admin, such as the store `lakefs`, whose keys read every repository. | The admin only. |
 
 `provc --tenant acme`, or `PROVCAT_TENANT=acme`, opens acme's view. It holds the shared sections and acme's part. provcat cuts the view before it fills in `${...}` values, so another tenant's part is never read. Without a tenant, `provc` opens the admin's view, which holds every part. `provc config show --tenant acme` prints a view.
 
 A scheme names the part that says whose a URI is, with `tenant: org`. In acme's view, a URI of such a scheme with another org is refused. A scheme without `tenant`, such as `code`, serves every tenant.
 
-Three rules keep one tenant from passing for another:
+These rules keep one tenant from passing for another:
 
 - **Store names.** A tenant's store names end with `-<tenant>`, as in `lakefs-acme` and `s3-acme`. So no tenant can define `lakefs-globex`, which globex's URIs resolve to.
 - **Stages.** A tenant's stages must be URIs of that tenant. So acme cannot point globex's `stage:production` anywhere.
-- **One name, one place.** A store or stage named in two parts is an error. Two ways of writing one stage URI, such as with a trailing `/`, count as one name.
+- **Entries.** A tenant's entries must be URIs of that tenant. Each must go to a store of that tenant, whose name ends with `-<tenant>`, and to a bucket or repository named `<tenant>` or `<tenant>-...`. So an access list that grants `acme-*` still holds. A tenant's entry has no `${...}` values, because the check reads the text before provcat fills them in.
+- **One name, one place.** A store, stage or entry named in two parts is an error. Two ways of writing one stage URI, such as with a trailing `/`, count as one name.
 - **The tenant picks the store.** In a scheme whose store name has a field, as in `lakefs-{org}`, the tenant part must be that field.
 
 In etcd, each part has its own keys:
 
 | Key | Holds |
 |---|---|
-| `<prefix>/schemes`, `/stores`, `/stages`, `/cache` | The shared sections. |
+| `<prefix>/schemes`, `/stores`, `/stages`, `/entries`, `/cache` | The shared sections. |
 | `<prefix>/tenants` | The list of tenant names, for the admin. |
 | `<prefix>/tenants/<name>/<section>` | One section of a tenant's part. |
 | `<prefix>/tenants/<name>/name` | The tenant's name, which marks that the tenant exists, even with an empty part. |

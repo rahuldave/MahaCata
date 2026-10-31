@@ -386,13 +386,64 @@ provc: hf://models/hf-internal-testing/tiny-random-gpt2/tokenizer.json: commit 7
 
 A logical scheme can point at the Hub as at any store. A target such as `hf://datasets/{org}/{repo}/{path}` gives code a name that does not say where the data is. [The reference](reference.md#stores) lists the options of the store, and [the design](design.md#the-hugging-face-driver) gives the details. "Known limits" in the design lists what does not work yet.
 
+## Step 8: Send one name somewhere else with an entry
+
+The `code` template sends every `code://` name to GitHub. An entry sends one name, or every name under a prefix, somewhere else. The example configuration has one entry. It sends the weights of `Hello-World` to a model on Hugging Face, while the rest of the repository stays on GitHub:
+
+```yaml
+entries:
+  "code://octocat/Hello-World/master/weights":
+    target: "hf://models/hf-internal-testing/tiny-random-gpt2/{path}"
+```
+
+Resolve a name under the entry, and one beside it.
+
+```
+$ uv run provc --config $C resolve 'code://octocat/Hello-World/master/weights/config.json'
+{
+  "logical": "code://octocat/Hello-World/master/weights/config.json",
+  "physical": "hf://models/hf-internal-testing/tiny-random-gpt2/config.json",
+  "via": [
+    "entry code://octocat/Hello-World/master/weights -> hf://models/hf-internal-testing/tiny-random-gpt2/config.json"
+  ]
+}
+
+$ uv run provc --config $C resolve 'code://octocat/Hello-World/master/README'
+{
+  "logical": "code://octocat/Hello-World/master/README",
+  "physical": "github://octocat/Hello-World/README?at=branch:master",
+  "via": [
+    "code template -> github://octocat/Hello-World/README?at=branch:master"
+  ]
+}
+```
+
+**What happened:** the resolver looked for the longest key that is a prefix of each URI, by whole parts. The first URI is under the key, so `{path}` took the rest of it, `config.json`. The second URI is under no key, so the `code` template took it, as in Step 2. The `via` list names the rule that each URI went through.
+
+Every command takes the name, and a selector on the name still picks the version:
+
+```
+$ uv run provc --config $C stat 'code://octocat/Hello-World/master/weights/config.json'
+{
+  "uri": "hf://models/hf-internal-testing/tiny-random-gpt2/config.json?at=commit:71034c5d8bde858ff824298bdedc65515b97d2b9",
+  "kind": "file",
+  "size": 807,
+  "version": "71034c5d8bde858ff824298bdedc65515b97d2b9"
+}
+
+$ uv run provc --config $C pin 'code://octocat/Hello-World/master/weights/config.json?at=ts:2023-01-01'
+hf://models/hf-internal-testing/tiny-random-gpt2/config.json?at=commit:937b4d23b6648f5a1a0d1247b939b26981798903
+```
+
+Code that reads `code://octocat/Hello-World/master/weights/config.json` does not change when the entry moves the weights. "Entries" in [the reference](reference.md#entries) gives the rules, including the ones for tenants.
+
 ## Where each step lives in the code
 
 | Step | Files |
 |---|---|
 | Parse a URI and its selector | `packages/provcat/src/provcat/uri.py` |
 | Read the configuration | `packages/provcat/src/provcat/config.py` |
-| Resolve a logical URI | `packages/provcat/src/provcat/resolver.py` |
+| Resolve a logical URI, with its entries | `packages/provcat/src/provcat/resolver.py` |
 | Join the parts and pick the store | `packages/provcat/src/provcat/catalog.py` |
 | Read GitHub | `packages/provcat/src/provcat/stores/github.py` |
 | Read Hugging Face | `packages/provcat/src/provcat/stores/hf.py` |

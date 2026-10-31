@@ -106,7 +106,7 @@ provcat reads its configuration from the first of these sources that exists:
 3. The file `provcat.yaml` in the current folder.
 4. The built-in defaults, which have the six stores and no logical schemes.
 
-A source that starts with `etcd://host:port/prefix` is etcd. Any other source is a YAML file. [packages/provcat/config/provcat.example.yaml](https://github.com/rahuldave/MahaCata/blob/main/packages/provcat/config/provcat.example.yaml) has every section and the logical schemes from the old provcat docs. A value can read the environment with `${oc.env:NAME,default}`.
+A source that starts with `etcd://host:port/prefix` is etcd. Any other source is a YAML file. [packages/provcat/config/provcat.example.yaml](https://github.com/rahuldave/MahaCata/blob/main/packages/provcat/config/provcat.example.yaml) has every section, the logical schemes from the old provcat docs and one entry. A value can read the environment with `${oc.env:NAME,default}`.
 
 To copy a YAML configuration into etcd, run the command below. It copies the `${...}` references as written, so each reader fills them in from its own environment. It also deletes the sections in etcd that the file does not have.
 
@@ -115,6 +115,37 @@ uv run provc --config packages/provcat/config/provcat.example.yaml config push -
 ```
 
 A configuration can hold a part for each tenant, in its `tenants` section, and a part for the admin, in its `admin` section. `provc --tenant acme`, or `PROVCAT_TENANT=acme`, sees the shared sections and acme's part only. Without a tenant, `provc` is the admin, and sees every part. Read "A configuration for each tenant" in [the design](design.md).
+
+## Entries
+
+A scheme template sends every name of a scheme to one place. An entry sends one name, or every name under a prefix, somewhere else. The `entries` section of the configuration holds them:
+
+```yaml
+entries:
+  "code://acme/tokenizer/prod":
+    target: "github://acme/tokenizer/{path}?at=branch:prod"
+  "code://acme/tokenizer/prod/weights":
+    target: "hf://models/acme/tokenizer/{path}"
+  "data+table://acme/shared/prod/corpora/wiki":
+    target: "lakefs-acme://acme-corpora/{ref}/wiki"
+    ref: main
+```
+
+With these entries, `code://acme/tokenizer/prod/src/a.py` reads GitHub, and `code://acme/tokenizer/prod/weights/model.bin` reads Hugging Face. The code that uses the names does not change when an entry moves them.
+
+| Rule | What it means |
+|---|---|
+| The longest key wins. | A key matches whole parts of the URI, so `code://acme/tok` does not match `code://acme/tokenizer`. A URI that no key matches goes to the template of its scheme. |
+| `{path}` is the rest of the URI. | It holds the parts after the key, each one encoded, so a name cannot add a `?at=` or climb with `..`. A target without `{path}` serves only the URI that is its key. |
+| A selector on the URI wins. | `?at=branch:`, `tag:` or `commit:` takes the place of the `?at=` of the target. So a run can fix the version of any name. |
+| `{ref}` is for a branch in the path. | lakeFS keeps the branch in the path. A target with `{ref}` needs a `ref`, its default branch, and the selector of the URI fills `{ref}`. Such a target has no `?at=`. |
+| `ts:` keeps the branch. | `?at=ts:TIME` asks for the commit that the branch of the target had at TIME. `version:` is refused. |
+| A fixed target stays fixed. | A target whose `?at=` names a tag or a commit takes only `commit:` from the URI. It refuses `branch:`, `tag:` and `ts:`, which would move it. |
+| A stage comes first. | `?at=stage:NAME` looks up the stage of the URI, and its selector then applies as above. |
+| A key fits its scheme. | A key is a URI of a logical scheme, with no `?at=`. Its parts must match the `parts` and `match` of the scheme, as far as the key goes. A URI under the key must still fit the scheme. |
+| The place is fixed. | The store name of a target, and the bucket or repository after `//`, are plain text. The store must exist. A `ref` is one part of a path, so it has no `/`. |
+
+`provc resolve` shows the entry that a URI went through, in its `via` list. A tenant's part of the configuration can hold entries too. Each key must be a URI of that tenant, of a scheme that names its tenant part with `tenant:`. Each target must go to a store whose name ends with `-` and the tenant, as in `s3-acme`. Its bucket or repository must be named for the tenant, as `acme` or `acme-...`, as the templates name them. A tenant's entry cannot hold `${...}` values, because provcat checks it before it fills them in.
 
 ## The cache
 
