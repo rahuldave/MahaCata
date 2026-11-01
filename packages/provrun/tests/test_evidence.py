@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from provrun.evidence import EvidenceError, EvidenceRecorder, Sink, read_events, verify
+from provrun.evidence import EvidenceError, EvidenceRecorder, Sink, read_events, sha256_bytes, verify
 
 
 def recorder(tmp_path, **kw):
@@ -176,3 +176,113 @@ def test_the_tracer_claims_no_schema_url(monkeypatch):
         monkeypatch.undo()
         importlib.reload(otel)
     assert seen["name"] == "provrun" and seen.get("schema_url") is None
+
+
+# Each test below is one finding of the review of provevi's Phase 1.
+
+def test_a_store_that_is_falsy_is_still_used(tmp_path):
+    from provevi import FileStore
+
+    class Store(FileStore):
+        runs: list = []
+
+        def __len__(self):
+            return len(self.runs)
+
+        def open_run(self, run_id, folder):
+            self.runs.append(run_id)
+            return super().open_run(run_id, folder)
+
+    s = Store()
+    EvidenceRecorder("run-x", "t", tmp_path / "evidence", store=s)
+    assert s.runs == ["run-x"]
+
+
+def _failing_store(where):
+    import sqlite3
+
+    from provevi import FileStore
+    from provevi.store import FileRunWriter
+
+    class Writer(FileRunWriter):
+        def append(self, line):
+            if where == "append":
+                raise sqlite3.OperationalError("database is locked")
+            super().append(line)
+
+        def seal(self, manifest):
+            if where == "seal":
+                raise sqlite3.OperationalError("database is locked")
+            super().seal(manifest)
+
+    class Store(FileStore):
+        def open_run(self, run_id, folder):
+            return Writer(folder)
+
+    return Store()
+
+
+def test_any_store_error_is_lost_in_lenient_mode_and_recorded(tmp_path):
+    r = EvidenceRecorder("run-x", "t", tmp_path / "evidence", mode="lenient", store=_failing_store("append"))
+    with pytest.warns(UserWarning, match="database is locked"):
+        assert r.emit("run_created", "test") is None
+    assert r.problems and "database is locked" in r.problems[0]
+    with pytest.raises(EvidenceError, match="database is locked"):
+        EvidenceRecorder("run-y", "t", tmp_path / "e2", store=_failing_store("append")).emit("run_created", "t")
+
+
+def test_a_seal_that_fails_is_reported(tmp_path):
+    r = EvidenceRecorder("run-x", "t", tmp_path / "evidence", store=_failing_store("seal"))
+    r.emit("run_created", "test")
+    with pytest.raises(EvidenceError, match="cannot seal the evidence"):
+        r.close()
+    r = EvidenceRecorder("run-y", "t", tmp_path / "e2", mode="lenient", store=_failing_store("seal"))
+    with pytest.raises(EvidenceError, match="cannot seal"):
+        r.close()
+
+
+def test_a_store_that_keeps_no_files_is_refused_at_close(tmp_path):
+    from provevi import EvidenceStore, RunWriter
+
+    class Memory(RunWriter):
+        def __init__(self):
+            self.lines, self.blobs, self.sealed = [], {}, None
+
+        def append(self, line):
+            self.lines.append(line)
+
+        def close(self):
+            pass
+
+        def put_payload(self, data):
+            raw = data.encode() if isinstance(data, str) else data
+            self.blobs[sha256_bytes(raw)] = raw
+            return sha256_bytes(raw)
+
+        def get_payload(self, digest):
+            return self.blobs[digest]
+
+        def payload_names(self):
+            return sorted(self.blobs)
+
+        def seal(self, manifest):
+            self.sealed = manifest
+
+        def manifest(self):
+            return self.sealed
+
+    class Store(EvidenceStore):
+        def open_run(self, run_id, folder):
+            return Memory()
+
+    for mode in ("strict", "lenient"):
+        r = EvidenceRecorder("run-x", "t", tmp_path / mode, mode=mode, store=Store())
+        r.emit("run_created", "test")
+        with pytest.raises(EvidenceError, match="kept no events.jsonl"):
+            r.close()
+
+
+def test_the_recorder_still_has_its_payload_store(tmp_path):
+    r = EvidenceRecorder("run-x", "t", tmp_path / "evidence")
+    digest = r.writer.put_payload(b"x")
+    assert r.payloads.get(digest) == b"x"

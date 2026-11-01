@@ -1,6 +1,8 @@
 """Evidence: typed, append-only events for one run, chained by hash.
 
-A run writes its evidence into one folder::
+provrun decides what each event means and builds the chain; provevi stores
+the events and checks them. A run writes its evidence through a provevi
+store, by default the ``file`` store, into one folder::
 
     <run>/evidence/events.jsonl            one event on each line, in order
     <run>/evidence/payloads/<sha256>       large payloads, named by their SHA-256
@@ -21,21 +23,25 @@ incomplete.
 from __future__ import annotations
 
 import contextlib
-import hashlib
-import json
-import os
-import tempfile
 import threading
 import warnings
-from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
-from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import provevi
+from provevi import (CONFIDENCE, ENDINGS, EvidenceEvent, EvidenceStore, FileStore, JsonlSink, PayloadStore,
+                     Sink, sha256_bytes, verify, verify_against)
+from provevi.events import canonical as _canonical
+from provevi.events import now as _now
+
 from . import otel
 from .errors import ProvrunError
+
+__all__ = [
+    "CONFIDENCE", "ENDINGS", "EVENT_TYPES", "MODES", "EvidenceError", "EvidenceEvent", "EvidenceRecorder",
+    "JsonlSink", "PayloadStore", "Sink", "Step", "read_events", "sha256_bytes", "verify", "verify_against",
+]
 
 EVENT_TYPES = frozenset({
     "run_created", "run_completed", "run_failed",
@@ -45,107 +51,21 @@ EVENT_TYPES = frozenset({
     "prompt_rendered", "model_called", "tool_called",
     "output_artifact_created", "note_added", "trace_imported", "step_failed",
 })
-CONFIDENCE = ("observed", "parsed", "inferred", "verified")
 MODES = ("strict", "lenient")
 
 
-class EvidenceError(ProvrunError):
-    """Evidence could not be written or does not verify."""
+class EvidenceError(ProvrunError, provevi.EvidenceError):
+    """Evidence could not be written or does not verify. It is also a
+    provevi EvidenceError, which is what provevi's checks raise."""
 
 
-def _canonical(obj: Any) -> str:
-    # ASCII only, so no character in a value, such as U+2028, can split a line.
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
-
-
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-@dataclass(frozen=True)
-class EvidenceEvent:
-    run_id: str
-    seq: int
-    time: str
-    type: str
-    component: str
-    actor: str
-    refs: tuple[str, ...] = ()
-    data: dict = field(default_factory=dict)
-    payload: str | None = None
-    confidence: str = "observed"
-    prev: str | None = None
-
-    def line(self) -> str:
-        """The canonical JSON line of the event; its hash is the next event's prev."""
-        d = asdict(self)
-        d["refs"] = list(self.refs)
-        return _canonical(d)
-
-    @classmethod
-    def from_line(cls, line: str) -> EvidenceEvent:
-        d = json.loads(line)
-        d["refs"] = tuple(d.get("refs", ()))
-        return cls(**d)
-
-
-class Sink(ABC):
-    """A place that evidence lines go to."""
-
-    @abstractmethod
-    def append(self, line: str) -> None: ...
-
-    def close(self) -> None:
-        pass
-
-
-class JsonlSink(Sink):
-    """Appends each line to a local file, and flushes it at once."""
-
-    def __init__(self, path: Path):
-        self.path = path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self._f = path.open("a", encoding="utf-8")
-
-    def append(self, line: str) -> None:
-        self._f.write(line + "\n")
-        self._f.flush()
-
-    def close(self) -> None:
-        if not self._f.closed:
-            self._f.flush()
-            os.fsync(self._f.fileno())
-            self._f.close()
-
-
-class PayloadStore:
-    """Large payloads, each in a file named by its SHA-256, written once."""
-
-    def __init__(self, root: Path):
-        self.root = root
-
-    def put(self, data: bytes | str) -> str:
-        raw = data.encode() if isinstance(data, str) else data
-        digest = sha256_bytes(raw)
-        dest = self.root / digest
-        if not dest.exists():
-            self.root.mkdir(parents=True, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(dir=self.root, prefix=".tmp-")
-            try:
-                with os.fdopen(fd, "wb") as f:
-                    f.write(raw)
-                os.replace(tmp, dest)
-            except BaseException:
-                Path(tmp).unlink(missing_ok=True)
-                raise
-        return digest
-
-    def get(self, digest: str) -> bytes:
-        return (self.root / digest).read_bytes()
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+def read_events(folder: Path) -> list[EvidenceEvent]:
+    """The events of an evidence folder, as provevi.read_events reads them.
+    Raises provrun's EvidenceError at a line that is not an event."""
+    try:
+        return provevi.read_events(folder)
+    except provevi.EvidenceError as e:
+        raise EvidenceError(str(e)) from e
 
 
 class Step:
@@ -163,7 +83,8 @@ class EvidenceRecorder:
 
     def __init__(self, run_id: str, actor: str, folder: Path, *, mode: str = "strict",
                  sinks: list[Sink] | None = None,
-                 redact: Callable[[dict], dict] | None = None):
+                 redact: Callable[[dict], dict] | None = None,
+                 store: EvidenceStore | None = None):
         if mode not in MODES:
             raise ValueError(f"evidence mode must be one of {MODES}, not {mode!r}")
         self.run_id = run_id
@@ -171,13 +92,21 @@ class EvidenceRecorder:
         self.folder = folder
         self.mode = mode
         self.redact = redact or (lambda d: d)
-        self.payloads = PayloadStore(folder / "payloads")
-        self.sinks: list[Sink] = [JsonlSink(folder / "events.jsonl"), *(sinks or [])]
+        # The store's writer is the first sink: an event counts as written
+        # only when the store holds its line.
+        self.writer = (store if store is not None else FileStore()).open_run(run_id, folder)
+        self.sinks: list[Sink] = [self.writer, *(sinks or [])]
         self.problems: list[str] = []
         self.closed = False
         self._seq = 0
         self._prev: str | None = None
         self._lock = threading.Lock()
+
+    @property
+    def payloads(self):
+        """The payload store of a file store's writer, kept for callers of
+        earlier versions. Use ``writer.get_payload`` instead."""
+        return getattr(self.writer, "payloads", None)
 
     def _fail(self, message: str) -> None:
         self.problems.append(message)
@@ -202,11 +131,11 @@ class EvidenceRecorder:
                 if payload is not None:
                     if isinstance(payload, (dict, list)):
                         payload = _canonical(payload)
-                    ref = self.payloads.put(payload)
+                    ref = self.writer.put_payload(payload)
                 event = EvidenceEvent(self.run_id, self._seq, _now(), type, component, self.actor,
                                       tuple(str(r) for r in refs), data, ref, confidence, self._prev)
                 line = event.line()
-            except (OSError, TypeError, ValueError) as e:
+            except Exception as e:  # a store may raise any error; the mode decides
                 self._fail(f"cannot write the {type} event: {e}")
                 return None
             # The chain moves on only when the primary sink, the local file,
@@ -214,7 +143,7 @@ class EvidenceRecorder:
             primary, *others = self.sinks
             try:
                 primary.append(line)
-            except OSError as e:
+            except Exception as e:
                 self._fail(f"sink {primary.__class__.__name__} lost the {type} event: {e}")
                 return None
             self._seq += 1
@@ -222,7 +151,7 @@ class EvidenceRecorder:
             for sink in others:
                 try:
                     sink.append(line)
-                except OSError as e:
+                except Exception as e:
                     self._fail(f"sink {sink.__class__.__name__} lost the {type} event: {e}")
             return event
 
@@ -248,128 +177,37 @@ class EvidenceRecorder:
         """Write the manifest and close the sinks. Returns the manifest."""
         with self._lock:
             if self.closed:
-                return json.loads((self.folder / "manifest.json").read_text())
+                return self.writer.manifest()
             self.closed = True
             for sink in self.sinks:
                 try:
                     sink.close()
-                except OSError as e:
+                except Exception as e:
                     self.problems.append(f"cannot close sink {sink.__class__.__name__}: {e}")
+            try:
+                payloads = self.writer.payload_names()
+            except Exception as e:
+                payloads = []
+                self.problems.append(f"cannot list the payloads: {e}")
             manifest = {
                 "run_id": self.run_id,
                 "events": self._seq,
                 "last": self._prev,
-                "payloads": sorted(p.name for p in self.payloads.root.glob("*")
-                                   if not p.name.startswith(".")) if self.payloads.root.exists() else [],
+                "payloads": payloads,
                 "complete": not self.problems,
                 "problems": self.problems,
             }
-            (self.folder / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+            try:
+                self.writer.seal(manifest)
+            except Exception as e:
+                # With no manifest nothing can verify the run, so this fails
+                # it in both modes.
+                raise EvidenceError("; ".join([*self.problems, f"cannot seal the evidence: {e}"])) from e
+            # provevi's checks and the bundle read the files in the evidence
+            # folder, so a store must keep them there, in both modes.
+            if not all((self.folder / n).is_file() for n in ("events.jsonl", "manifest.json")):
+                raise EvidenceError(f"the store kept no events.jsonl and manifest.json in {self.folder}; "
+                                    "nothing can verify the run")
             if self.problems and self.mode == "strict":
                 raise EvidenceError("; ".join(self.problems))
             return manifest
-
-
-def _lines(folder: Path) -> list[str]:
-    text = (folder / "events.jsonl").read_text(encoding="utf-8")
-    lines = text.split("\n")
-    if lines and lines[-1] == "":
-        lines.pop()
-    return lines
-
-
-def read_events(folder: Path) -> list[EvidenceEvent]:
-    """The events of an evidence folder. Raises EvidenceError at a line that is
-    not an event."""
-    events = []
-    for n, line in enumerate(_lines(folder)):
-        try:
-            events.append(EvidenceEvent.from_line(line))
-        except (ValueError, TypeError) as e:
-            raise EvidenceError(f"line {n}: not an event: {e}") from e
-    return events
-
-
-ENDINGS = ("run_completed", "run_failed")
-
-
-def verify(folder: Path, run_id: str | None = None) -> list[str]:
-    """Check the chain, the sequence, the payloads and the manifest of one
-    evidence folder, and that it is the whole record of one run: run_created
-    first, one ending event last, as many events as the manifest says, and the
-    run ID given, if one is. Returns the problems found; an empty list means it
-    verifies.
-
-    The check proves that the folder is consistent. Someone who can write the
-    folder can still write a consistent false record. To rule that out,
-    compare the folder with the bundle committed in the store, which
-    ``verify_against`` does."""
-    problems: list[str] = []
-    path = folder / "events.jsonl"
-    if not path.exists():
-        return [f"{path} is missing"]
-    prev = None
-    expected = run_id
-    run_id = None
-    types: list[str] = []
-    lines = _lines(folder)
-    for n, line in enumerate(lines):
-        try:
-            event = EvidenceEvent.from_line(line)
-        except (ValueError, TypeError) as e:
-            problems.append(f"line {n}: not an event: {e}")
-            prev = sha256_bytes(line.encode())
-            continue
-        if event.line() != line:
-            problems.append(f"line {n}: not in canonical form")
-        if event.seq != n:
-            problems.append(f"line {n}: seq is {event.seq}")
-        if event.prev != prev:
-            problems.append(f"line {n}: the chain is broken")
-        types.append(event.type)
-        run_id = run_id or event.run_id
-        if event.run_id != run_id:
-            problems.append(f"line {n}: run {event.run_id}, not {run_id}")
-        if event.payload is not None:
-            p = folder / "payloads" / event.payload
-            if not p.exists():
-                problems.append(f"line {n}: payload {event.payload} is missing")
-            elif sha256_bytes(p.read_bytes()) != event.payload:
-                problems.append(f"line {n}: payload {event.payload} was changed")
-        prev = sha256_bytes(line.encode())
-    if expected is not None and run_id != expected:
-        problems.append(f"the events are of run {run_id}, not {expected}")
-    if not types or types[0] != "run_created":
-        problems.append("the first event is not run_created")
-    if not types or types[-1] not in ENDINGS:
-        problems.append("the last event is not run_completed or run_failed")
-    if sum(t in ENDINGS for t in types) > 1:
-        problems.append("the run ends more than once")
-    manifest_path = folder / "manifest.json"
-    if not manifest_path.exists():
-        problems.append("manifest.json is missing; the run did not close")
-    else:
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except ValueError:
-            return problems + ["manifest.json is not JSON"]
-        if manifest.get("last") != prev:
-            problems.append("the manifest does not end where the events end")
-        if manifest.get("events") != len(lines):
-            problems.append(f"the manifest counts {manifest.get('events')} events, and there are {len(lines)}")
-        if manifest.get("run_id") != run_id:
-            problems.append(f"the manifest is of run {manifest.get('run_id')}, not {run_id}")
-        if not manifest.get("complete", False):
-            problems.append("the recorder lost events: " + "; ".join(manifest.get("problems", [])))
-    return problems
-
-
-def verify_against(folder: Path, events: bytes, manifest: bytes) -> list[str]:
-    """Compare the local evidence with the events and the manifest read from
-    the committed bundle. A difference means that one of them was changed."""
-    problems = []
-    if (folder / "events.jsonl").read_bytes() != events:
-        problems.append("events.jsonl differs from the committed bundle")
-    if (folder / "manifest.json").read_bytes() != manifest:
-        problems.append("manifest.json differs from the committed bundle")
-    return problems

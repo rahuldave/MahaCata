@@ -1,6 +1,6 @@
 # The design of provevi
 
-provevi is the evidence store of MahaCata, beside provcat and provrun. Its command is `prove`. This page says what provevi is, the driver interface it offers, the tables it keeps, and how each agent and library is wired to it. [The plan](provevi-plan.md) says how it is built. Nothing of provevi is built yet.
+provevi is the evidence store of MahaCata, beside provcat and provrun. Its command is `prove`. This page says what provevi is, the driver interface it offers, the tables it keeps, and how each agent and library is wired to it. [The plan](provevi-plan.md) says how it is built. Phase 1 is built, and [provevi's page](provevi.md) describes it.
 
 The design draws on four research notes, written on 2026-10-31:
 
@@ -226,9 +226,7 @@ For provevi this means:
 - **The store is an object the caller passes in,** never a global. Two stores can be open in one process.
 - **Every command is a function first.** `runs`, `show`, `trace`, `verify` and `export` are library functions that return data, and the command prints them.
 
-A read of the code on 2026-10-31 found one place where this rule does not hold yet:
-
-- **provrun's checks of outputs and bundles live in its command line.** `_verify_outputs`, `_bundle_pin` and `_verify_bundle` are in `provrun/cli.py`, so an orchestrator cannot call them. Decision 2 fixes this, because they move into the provevi library.
+On 2026-10-31, provrun's checks of outputs and bundles were in its command line, so an orchestrator could not call them. Phase 1 moved them into the provevi library, as `verify_outputs`, `bundle_pin` and `verify_bundle`.
 provcat's command line is already thin. It opens a `Catalog` and calls its methods. A program can also pass its own hooks to each `Catalog`, with `hooks=`, and provrun's library entry, `run_file`, does what `provr run` does.
 
 ## The command line

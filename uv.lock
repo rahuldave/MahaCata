@@ -11,6 +11,7 @@ resolution-markers = [
 members = [
     "mahacata",
     "provcat",
+    "provevi",
     "provrun",
 ]
 
@@ -1643,6 +1644,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "provcat" },
+    { name = "provevi" },
     { name = "provrun", extra = ["litellm", "pydantic-ai"] },
 ]
 
@@ -1667,6 +1669,7 @@ system = [
 [package.metadata]
 requires-dist = [
     { name = "provcat", editable = "packages/provcat" },
+    { name = "provevi", editable = "packages/provevi" },
     { name = "provrun", extras = ["litellm", "pydantic-ai"], editable = "packages/provrun" },
 ]
 
@@ -2475,12 +2478,24 @@ requires-dist = [
 provides-extras = ["gcs", "azure", "hf", "fs"]
 
 [[package]]
+name = "provevi"
+version = "0.1.0"
+source = { editable = "packages/provevi" }
+dependencies = [
+    { name = "provcat" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "provcat", editable = "packages/provcat" }]
+
+[[package]]
 name = "provrun"
 version = "0.1.0"
 source = { editable = "packages/provrun" }
 dependencies = [
     { name = "opentelemetry-api" },
     { name = "provcat" },
+    { name = "provevi" },
     { name = "pyyaml" },
 ]
 
@@ -2498,6 +2513,7 @@ requires-dist = [
     { name = "litellm", marker = "extra == 'litellm'", specifier = "==1.83.0" },
     { name = "opentelemetry-api", specifier = ">=1.30.0" },
     { name = "provcat", editable = "packages/provcat" },
+    { name = "provevi", editable = "packages/provevi" },
     { name = "pydantic-ai-filesystem-sandbox", marker = "extra == 'pydantic-ai'", specifier = ">=0.9.0" },
     { name = "pydantic-ai-slim", marker = "extra == 'pydantic-ai'", specifier = ">=2.64.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },

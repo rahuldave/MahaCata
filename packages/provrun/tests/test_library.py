@@ -228,3 +228,44 @@ def test_litellm_prints_nothing_on_stdout_when_the_provider_is_unknown(tmp_path,
     outcome = run_file_sync(rf, catalog=catalog, runs_root=runs)
     assert outcome.status == "failed"
     assert capfd.readouterr().out == ""
+
+
+def test_run_file_writes_through_the_store_it_is_given(tmp_path, catalog, runs, docs):
+    from provevi import FileStore
+
+    opened = []
+
+    class Store(FileStore):
+        def open_run(self, run_id, folder):
+            opened.append(run_id)
+            return super().open_run(run_id, folder)
+
+    outcome = run_file_sync(RunFile.load(write(tmp_path, GOOD, docs)), catalog=catalog, runs_root=runs,
+                            backend=LiteLLMBackend(answer), store=Store())
+    assert outcome.status == "completed", outcome.error
+    assert opened == [outcome.run_id]
+
+
+def test_provr_verify_and_prove_verify_agree(tmp_path, catalog, runs, docs, capsys):
+    from provevi.cli import main as prove
+
+    outcome = run_file_sync(RunFile.load(write(tmp_path, GOOD, docs)), catalog=catalog, runs_root=runs,
+                            backend=LiteLLMBackend(answer))
+    for tamper in (None, lambda: (outcome.folder / "output" / "response.txt").write_text("x")):
+        if tamper:
+            tamper()
+        a = provr(["--runs", str(runs), "verify", outcome.run_id])
+        out_a = capsys.readouterr()
+        b = prove(["--runs", str(runs), "verify", outcome.run_id])
+        out_b = capsys.readouterr()
+        assert a == b and out_a.out == out_b.out
+        assert out_a.err.replace("provr:", "prove:") == out_b.err
+
+
+def test_provr_verify_reports_a_bad_config_without_a_traceback(tmp_path, catalog, runs, docs, capsys):
+    outcome = run_file_sync(RunFile.load(write(tmp_path, GOOD, docs)), catalog=catalog, runs_root=runs,
+                            backend=LiteLLMBackend(answer))
+    args = ["--runs", str(runs), "verify", outcome.run_id, "--bundle", "run://a/b/dev/x?at=commit:1",
+            "--config", str(tmp_path / "none.yaml")]
+    assert provr(args) == 1
+    assert "cannot open the catalog" in capsys.readouterr().err
