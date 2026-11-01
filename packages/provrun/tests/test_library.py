@@ -269,3 +269,82 @@ def test_provr_verify_reports_a_bad_config_without_a_traceback(tmp_path, catalog
             "--config", str(tmp_path / "none.yaml")]
     assert provr(args) == 1
     assert "cannot open the catalog" in capsys.readouterr().err
+
+
+def test_a_run_file_can_name_a_sqlite_store(tmp_path, catalog, runs, docs, capsys):
+    from provevi import SqliteStore
+
+    path = tmp_path / "evidence.db"
+    rf = RunFile.load(write(tmp_path, GOOD.replace("actor: tester", f"actor: tester, store: 'sqlite:///{path}'"),
+                            docs))
+    assert rf.settings.store == f"sqlite:///{path}"
+    outcome = run_file_sync(rf, catalog=catalog, runs_root=runs, backend=LiteLLMBackend(answer))
+    assert outcome.status == "completed", outcome.error
+    store = SqliteStore(path)
+    assert store.runs_reading(f"file://{docs}/report.txt") == [outcome.run_id]
+    assert store.run(outcome.run_id)["status"] == "completed"
+    assert provr(["--runs", str(runs), "--store", f"sqlite:///{path}", "verify", outcome.run_id]) == 0
+    capsys.readouterr()
+
+
+def test_provr_run_takes_a_store(tmp_path, runs, docs, capsys):
+    from provevi import SqliteStore
+
+    path = tmp_path / "evidence.db"
+    assert provr(["--runs", str(runs), "--store", f"sqlite:///{path}", "run", str(write(tmp_path, GOOD, docs))]) == 0
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+    assert SqliteStore(path).list_runs() == [run_id]
+
+
+@pytest.mark.parametrize("store, message", [("postgres://x/db", "names no store"), ("sqlite://x.db", "not a sqlite")])
+def test_a_bad_store_is_refused_when_the_file_loads(tmp_path, store, message):
+    with pytest.raises(RunFileError, match=message):
+        RunFile.load(write(tmp_path, GOOD.replace("actor: tester", f"actor: tester, store: '{store}'")))
+
+
+def test_a_writer_without_record_bundle_gives_no_warning(tmp_path, catalog, runs, docs):
+    import warnings
+
+    from provevi import EvidenceStore
+    from provevi.store import FileRunWriter
+
+    class Writer:  # a writer that does not subclass RunWriter
+        def __init__(self, folder):
+            self.files = FileRunWriter(folder)
+
+        def __getattr__(self, name):
+            if name == "record_bundle":
+                raise AttributeError(name)
+            return getattr(self.files, name)
+
+    class Store(EvidenceStore):
+        def open_run(self, run_id, folder):
+            return Writer(folder)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        outcome = run_file_sync(RunFile.load(write(tmp_path, GOOD, docs)), catalog=catalog, runs_root=runs,
+                                backend=LiteLLMBackend(answer), store=Store())
+    assert outcome.status == "completed", outcome.error
+
+
+def test_the_recorder_payloads_work_with_the_sqlite_store(tmp_path):
+    from provevi import SqliteStore
+
+    from provrun.evidence import EvidenceRecorder
+
+    r = EvidenceRecorder("run-x", "t", tmp_path / "evidence", store=SqliteStore(tmp_path / "e.db"))
+    digest = r.writer.put_payload(b"x")
+    assert r.payloads.get(digest) == b"x"
+
+
+def test_provr_show_reads_from_the_store(tmp_path, runs, docs, capsys):
+    path = tmp_path / "evidence.db"
+    store = ["--runs", str(runs), "--store", f"sqlite:///{path}"]
+    assert provr(store + ["run", str(write(tmp_path, GOOD, docs))]) == 0
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+    import sqlite3
+
+    sqlite3.connect(path, isolation_level=None).execute("DELETE FROM provevi_events WHERE seq > 0")
+    assert provr(store + ["show", run_id]) == 0
+    assert len(capsys.readouterr().out.splitlines()) == 1  # the store's one row, not the folder's lines

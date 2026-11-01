@@ -86,7 +86,7 @@ On macOS `/tmp` is a link to `/private/tmp`, and `find_run` gives the real path.
 | Function | What it does |
 |---|---|
 | `RunFile.load(path)` | Reads and checks a run file. A missing or bad part raises `RunFileError`. |
-| `run_file(rf, catalog=..., runs_root=..., mode=..., bundle_scheme=...)` | Runs it, as a coroutine. It also takes `broker`, `resolver`, `stager` and `backend`, which replace the defaults. `bundle_scheme=False` writes no bundle through the catalog, even if the run file sets a scheme. |
+| `run_file(rf, catalog=..., runs_root=..., mode=..., bundle_scheme=...)` | Runs it, as a coroutine. It also takes `broker`, `resolver`, `stager`, `backend` and `store`, which replace the defaults. Without `store`, it opens the run file's store. `bundle_scheme=False` writes no bundle through the catalog, even if the run file sets a scheme. |
 | `run_file_sync(rf, ...)` | The same, for a program with no event loop running. |
 | `outcome.to_dict()` | The summary that `provr run` prints. |
 | `find_run(run, root, ids_only=False)` | The absolute folder of a run, from its ID or its path. A run ID under `root` comes before a folder in the working directory. With `ids_only=True`, only a run ID is taken, so a name from a user cannot reach another folder. A missing run raises `RunNotFound`. |
@@ -113,7 +113,7 @@ Two settings in provrun affect the whole process:
 
 A run file has two sections:
 
-- **`run`** names the org, the domain, the environment and the actor of the run. It can also hold `allow`, a list of more URIs that the stub broker allows, and `bundle_scheme`. Any other key is refused. The org, the domain and the environment become parts of the run URI. So each must be one part, with no `/`, `?`, `#` or space. Each entry of `allow` must be a URI.
+- **`run`** names the org, the domain, the environment and the actor of the run. It can also hold `allow`, a list of more URIs that the stub broker allows, `bundle_scheme`, and `store`, the evidence store, such as `sqlite:///evidence.db`. [provevi's page](provevi.md) describes the stores. Any other key is refused. The org, the domain and the environment become parts of the run URI. So each must be one part, with no `/`, `?`, `#` or space. Each entry of `allow` must be a URI.
 - **`agent`** is an agent spec.
 
 | Key of the agent spec | Meaning |
@@ -188,7 +188,7 @@ The local check proves that the folder is consistent. But someone who can write 
 
 Someone who can write the folder can delete that file. So a checker who does not trust the folder passes the commit with `--bundle URI`. `--require-bundle` fails a run that has no commit to compare with.
 
-The runs root is `~/.local/share/provrun/runs`, or `$XDG_DATA_HOME/provrun/runs` if that variable is set. The environment variable `PROVRUN_RUNS` or the option `--runs` changes it.
+The runs root is `~/.local/share/provrun/runs`, or `$XDG_DATA_HOME/provrun/runs` if that variable is set. The environment variable `PROVRUN_RUNS` or the option `--runs` changes it. The option `--store` chooses the evidence store, as in `provr --store sqlite:///evidence.db run run.yaml`. For `provr run`, it takes the place of the run file's store. `provr show` reads the events from it, and `provr verify` also checks the run as the store holds it.
 
 provrun also opens an OpenTelemetry span for each step, with the names of the GenAI semantic conventions. Each event holds the trace ID and the span ID of its span, if a tracer provider is set.
 

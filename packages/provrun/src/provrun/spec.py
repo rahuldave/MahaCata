@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from provevi import ProveviError, check_store_uri
 
 from .context import check_scheme, check_segment
 from .errors import RunFileError, RunSettingError
@@ -160,8 +161,9 @@ class RunSettings:
     actor: str
     allow: tuple[str, ...] = ()
     bundle_scheme: str | None = None
+    store: str | None = None  # the evidence store, such as sqlite:///evidence.db; the file store if None
 
-    KEYS = ("org", "domain", "env", "actor", "allow", "bundle_scheme")
+    KEYS = ("org", "domain", "env", "actor", "allow", "bundle_scheme", "store")
 
     @classmethod
     def from_dict(cls, d: dict, where: str = "the run section") -> RunSettings:
@@ -171,7 +173,7 @@ class RunSettings:
         missing = [k for k in ("org", "domain", "env", "actor") if not d.get(k)]
         if missing:
             raise RunFileError(f"{where} needs {missing}")
-        for k in ("org", "domain", "env", "actor", "bundle_scheme"):
+        for k in ("org", "domain", "env", "actor", "bundle_scheme", "store"):
             if d.get(k) is not None and not isinstance(d[k], str):
                 raise RunFileError(f"{where}: {k} must be a string")
         allow = d.get("allow") or []
@@ -184,9 +186,12 @@ class RunSettings:
                 check_scheme(d["bundle_scheme"])
             for a in allow:
                 check_uri(a, "allow")
-        except (RunSettingError, TypeError, ValueError) as e:
+            if d.get("store") is not None:
+                check_store_uri(d["store"])
+        except (RunSettingError, ProveviError, TypeError, ValueError) as e:
             raise RunFileError(f"{where}: {e}") from e
-        return cls(d["org"], d["domain"], d["env"], d["actor"], tuple(allow), d.get("bundle_scheme"))
+        return cls(d["org"], d["domain"], d["env"], d["actor"], tuple(allow), d.get("bundle_scheme"),
+                   d.get("store"))
 
 
 @dataclass(frozen=True)

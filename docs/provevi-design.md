@@ -1,6 +1,6 @@
 # The design of provevi
 
-provevi is the evidence store of MahaCata, beside provcat and provrun. Its command is `prove`. This page says what provevi is, the driver interface it offers, the tables it keeps, and how each agent and library is wired to it. [The plan](provevi-plan.md) says how it is built. Phase 1 is built, and [provevi's page](provevi.md) describes it.
+provevi is the evidence store of MahaCata, beside provcat and provrun. Its command is `prove`. This page says what provevi is, the driver interface it offers, the tables it keeps, and how each agent and library is wired to it. [The plan](provevi-plan.md) says how it is built. Phases 1 and 2 are built, and [provevi's page](provevi.md) describes them.
 
 The design draws on four research notes, written on 2026-10-31:
 
@@ -56,8 +56,8 @@ Candidate drivers, by URI scheme:
 
 | Scheme | What it stores | State |
 |---|---|---|
-| `file` | JSONL events and `payloads/<sha256>` in a folder. provrun commits the folder through provcat when the run sets a bundle scheme. | provrun writes this now. |
-| `sqlite` | provevi's own tables (see "The run record"). With the optional extra `provevi[mlflow]`, also a copy of each experiment, run and trace in MLflow's tables in the same file. | Planned first. |
+| `file` | JSONL events and `payloads/<sha256>` in a folder. provrun commits the folder through provcat when the run sets a bundle scheme. | Built in Phase 1. |
+| `sqlite` | provevi's own tables (see "The run record"). With the optional extra `provevi[mlflow]`, also a copy of each experiment, run and trace in MLflow's tables in the same file. | Its tables are built in Phase 2. The copy in MLflow comes in Phase 3. |
 | `mlflow+http` | The MLflow copy, through a running `mlflow server`. MLflow's Claude Code and Codex plugins, its TypeScript SDK and the small `mlflow-tracing` package need one. | Not in the plan yet. |
 | `otlp` | Sends spans on to any OpenTelemetry collector. Stores nothing. | Not in the plan yet. |
 

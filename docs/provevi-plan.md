@@ -22,7 +22,7 @@ provrun depends on provevi, and provevi depends on provcat. provevi never import
 
 ## Phase 1: the package, and the `file` store
 
-**Status: done, but for one part of step 3.** [provevi's page](provevi.md) describes what it built. A store cannot yet read a run back. So each store keeps the files in the run folder, where the checks and the bundle read them. Phase 2 adds reading through the store, because the `sqlite` store needs it.
+**Status: done.** [provevi's page](provevi.md) describes what it built. Reading a run back through the store, the part of step 3 that Phase 1 left, came in Phase 2.
 
 Move what stores and checks evidence out of provrun, into a new package at `packages/provevi`.
 
@@ -39,6 +39,8 @@ Move what stores and checks evidence out of provrun, into a new package at `pack
 **Done when:** provrun has no storage or check code of its own, and `provr verify` and `prove verify` give the same answer.
 
 ## Phase 2: the `sqlite` store
+
+**Status: done.** [provevi's page](provevi.md) describes the store, and Step 9 of [the provrun tour](provrun-tour.md) uses it.
 
 Write provevi's own tables, as [the design](provevi-design.md#the-run-record) gives them. They hold experiments, runs, run settings, events, the URIs in events, payloads and assessments. Grants, refusals, inputs and outputs are views over the events.
 
@@ -65,7 +67,7 @@ Write each experiment, run and trace into MLflow's tables in the same SQLite fil
 5. Set `MLFLOW_DISABLE_AGENT_HINT=1`, flush before reading back, and fail loudly on a tracking URI that the installed MLflow cannot write.
 6. Write `prove ui`, which opens MLflow's viewer on the store.
 
-**Tests:** a run shows in MLflow under provrun's run ID, with its settings, inputs, traces and assessments. The copy can be deleted and rebuilt from provevi's tables. A test runs against the pinned MLflow minor release.
+**Tests:** a run shows in MLflow under provrun's run ID, with its settings, inputs, traces and assessments. The copy can be deleted and rebuilt from provevi's tables. A test runs against the pinned MLflow minor release. provevi uses SQLite's WAL mode only, so a test checks that MLflow's writes leave the shared file in WAL mode.
 
 **Done when:** a real PydanticAI run and a real LiteLLM run show in MLflow's viewer, and verify with `prove verify`.
 

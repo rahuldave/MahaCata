@@ -179,6 +179,12 @@ class RunContext:
         bundle = self._write_bundle()
         (self.folder / "bundle.json").write_text(json.dumps(
             {"uri": bundle.uri, "pinned": bundle.pinned, "note": bundle.note}, indent=2) + "\n")
+        try:
+            record = getattr(self.recorder.writer, "record_bundle", None)
+            if record is not None:
+                record(bundle.uri, bundle.pinned)
+        except Exception as e:  # the bundle is written; only the store's note of it is lost
+            warnings.warn(f"the store did not record the bundle of {self.run_id}: {e}", stacklevel=2)
         if lost is not None:
             raise lost
         return bundle
