@@ -17,11 +17,11 @@ from pathlib import Path
 
 import provevi
 from provcat import ProvcatError
+import provevi.cli
 from provevi.cli import add_verify_arguments, verify_command
 
-from .context import default_runs_root, find_run
+from .context import default_runs_root
 from .errors import ProvrunError
-from .evidence import read_events
 
 
 def cmd_run(args) -> int:
@@ -32,28 +32,26 @@ def cmd_run(args) -> int:
 
     rf = RunFile.load(args.runfile)
     catalog = Catalog.open(args.config, tenant=args.tenant)
+    store = provevi.open_store(args.store) if args.store else None
     outcome = run_file_sync(rf, catalog=catalog, runs_root=args.runs, mode=args.mode,
-                            bundle_scheme=args.bundle_scheme)
+                            bundle_scheme=args.bundle_scheme, store=store)
     print(json.dumps(outcome.to_dict(), indent=2))
     return 0 if outcome.status == "completed" else 1
 
 
 def cmd_show(args) -> int:
-    folder = find_run(args.run, args.runs)
-    for e in read_events(folder / "evidence"):
-        refs = " ".join(e.refs)
-        data = json.dumps(e.data, ensure_ascii=False, default=str)
-        print(f"{e.seq:4} {e.time} {e.type:24} {e.component:24} {refs} {data}")
-    return 0
+    return provevi.cli.cmd_show(args)
 
 
 def cmd_verify(args) -> int:
-    return verify_command(args, "provr", find_run(args.run, args.runs))
+    return verify_command(args, "provr")
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="provr", description=__doc__.splitlines()[0])
     ap.add_argument("--runs", type=Path, default=default_runs_root(), help="the runs root")
+    ap.add_argument("--store", help="the evidence store: file or sqlite:///path. For run, it takes the place of "
+                                    "the run file's store; show and verify read the run from it")
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run the agent in a run file")
     r.add_argument("runfile")

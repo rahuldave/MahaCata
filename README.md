@@ -27,7 +27,7 @@ This repository is a uv workspace with three Python packages. A uv workspace is 
 | provrun | `packages/provrun` | Runs agents and model calls on data that provcat resolves, and records the evidence of each run. Its command is `provr`. Read [docs/provrun.md](docs/provrun.md), and take the tour in [docs/provrun-tour.md](docs/provrun-tour.md). |
 | provevi | `packages/provevi` | Stores, reads and checks the evidence of runs. Its command is `prove`. Read [docs/provevi.md](docs/provevi.md). |
 
-provrun depends on provevi and provcat, and provevi depends on provcat. [docs/provrun-plan.md](docs/provrun-plan.md) is the plan that provrun follows. The first phase of provevi is built; [docs/provevi.md](docs/provevi.md) describes it, and [docs/provevi-design.md](docs/provevi-design.md) and [docs/provevi-plan.md](docs/provevi-plan.md) describe the rest.
+provrun depends on provevi and provcat, and provevi depends on provcat. [docs/provrun-plan.md](docs/provrun-plan.md) is the plan that provrun follows. The first two phases of provevi are built; [docs/provevi.md](docs/provevi.md) describes it, and [docs/provevi-design.md](docs/provevi-design.md) and [docs/provevi-plan.md](docs/provevi-plan.md) describe the rest.
 
 The folder `docs` is also [the website](https://rahuldave.com/MahaCata/), with a reference page for each module. [smalldocs](https://github.com/rahuldave/smalldocs) builds it, and it is published on each push to `main`. Run `uv run --group docs smalldocs preview docs`, and open http://127.0.0.1:4200.
 

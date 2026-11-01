@@ -19,6 +19,8 @@ from .events import EvidenceEvent, sha256_bytes
 if TYPE_CHECKING:
     from provcat import Catalog
 
+    from .store import EvidenceStore, RunRecord
+
 #: The events that end a run. A run's evidence starts with run_created and ends with one of these.
 ENDINGS = ("run_completed", "run_failed")
 
@@ -84,9 +86,9 @@ def _digest(path: Path) -> str | None:
         return None
 
 
-def verify(folder: Path, run_id: str | None = None) -> list[str]:
+def verify(folder: Path | RunRecord, run_id: str | None = None) -> list[str]:
     """Check the chain, the sequence, the payloads and the manifest of one
-    evidence folder, and that it is the whole record of one run: run_created
+    evidence folder, or of a run that a store reads back, and that it is the whole record of one run: run_created
     first, one ending event last, as many events as the manifest says, the
     payloads that the manifest lists, and the run ID given, if one is. Returns
     the problems found; an empty list means it verifies. A malformed folder
@@ -96,15 +98,19 @@ def verify(folder: Path, run_id: str | None = None) -> list[str]:
     folder can still write a consistent false record. To rule that out,
     compare the folder with the bundle committed in the store, which
     ``verify_against`` does."""
+    from .store import FolderRecord, RunRecord
+
+    record = folder if isinstance(folder, RunRecord) else FolderRecord(Path(folder))
     problems: list[str] = []
     try:
-        lines = _lines(folder)
+        lines = record.lines()
     except EvidenceError as e:
         return [str(e)]
     prev = None
     expected = run_id
     run_id = None
     types: list[str] = []
+    next_seq = 0  # after a gap, counting goes on from the seq found, so a gap is reported once
     for n, line in enumerate(lines):
         try:
             event = EvidenceEvent.from_line(line)
@@ -114,8 +120,9 @@ def verify(folder: Path, run_id: str | None = None) -> list[str]:
             continue
         if event.line() != line:
             problems.append(f"line {n}: not in canonical form")
-        if event.seq != n:
-            problems.append(f"line {n}: seq is {event.seq}")
+        if event.seq != next_seq:
+            problems.append(f"line {n}: seq is {event.seq}, not {next_seq}")
+        next_seq = event.seq + 1 if isinstance(event.seq, int) else next_seq + 1
         if event.prev != prev:
             problems.append(f"line {n}: the chain is broken")
         types.append(event.type)
@@ -126,16 +133,15 @@ def verify(folder: Path, run_id: str | None = None) -> list[str]:
             if not isinstance(event.payload, str) or not _SHA256.fullmatch(event.payload):
                 problems.append(f"line {n}: payload {event.payload!r} is not a SHA-256")
             else:
-                p = folder / "payloads" / event.payload
                 try:
-                    there = p.exists()
-                except OSError as e:
+                    digest = record.payload_digest(event.payload)
+                except (OSError, EvidenceError) as e:
                     problems.append(f"line {n}: cannot read payload {event.payload}: {e}")
-                    there = None
-                if there is False:
-                    problems.append(f"line {n}: payload {event.payload} is missing")
-                elif there and _digest(p) != event.payload:
-                    problems.append(f"line {n}: payload {event.payload} was changed")
+                else:
+                    if digest is None:
+                        problems.append(f"line {n}: payload {event.payload} is missing")
+                    elif digest != event.payload:
+                        problems.append(f"line {n}: payload {event.payload} was changed")
         prev = sha256_bytes(line.encode())
     if expected is not None and run_id != expected:
         problems.append(f"the events are of run {run_id}, not {expected}")
@@ -145,12 +151,19 @@ def verify(folder: Path, run_id: str | None = None) -> list[str]:
         problems.append("the last event is not run_completed or run_failed")
     if sum(t in ENDINGS for t in types) > 1:
         problems.append("the run ends more than once")
-    manifest_path = folder / "manifest.json"
-    if not manifest_path.exists():
+    try:
+        problems += record.problems()
+        raw = record.manifest_bytes()
+        present, odd = record.payload_files()
+    except EvidenceError as e:
+        return problems + [str(e)]
+    except OSError:
+        return problems + ["manifest.json cannot be read"]
+    if raw is None:
         return problems + ["manifest.json is missing; the run did not close"]
     try:
-        manifest = json.loads(manifest_path.read_bytes())
-    except (OSError, ValueError, RecursionError):
+        manifest = json.loads(raw)
+    except (ValueError, RecursionError):
         return problems + ["manifest.json is not JSON"]
     if not isinstance(manifest, dict):
         return problems + ["manifest.json is not a JSON object"]
@@ -164,11 +177,7 @@ def verify(folder: Path, run_id: str | None = None) -> list[str]:
         lost = manifest.get("problems")
         problems.append("the recorder lost events: "
                         + ("; ".join(map(str, lost)) if isinstance(lost, list) else str(lost)))
-    present, odd = _files(folder / "payloads")
     problems += sorted(odd)
-    # The store leaves out hidden names, such as its own temporary files and
-    # a .DS_Store that macOS writes, so the check leaves them out too.
-    present = {rel for rel in present if not rel.startswith(".")}
     listed = manifest.get("payloads")
     if isinstance(listed, list):
         listed = set(map(str, listed))
@@ -304,15 +313,66 @@ class RunCheck:
         return {"run_id": self.run_id, "ok": self.ok, "problems": self.problems, "pinned": self.pinned}
 
 
+def verify_store_copy(run_folder: Path, store: EvidenceStore) -> list[str]:
+    """Check the run as the store holds it, and that the files in the run's
+    evidence folder, which are its bundle, are the same as the store's."""
+    from .errors import CannotReadBack, ProveviError
+
+    run_id = Path(run_folder).name
+    ev = Path(run_folder) / "evidence"
+    try:
+        record = store.read_run(run_id, folder=ev)
+    except CannotReadBack:
+        return []  # a store that only writes leaves the check to the folder
+    except ProveviError as e:  # RunNotFound, or a file that cannot be read
+        return [f"in the store: {e}"]
+    try:
+        problems = [f"in the store: {p}" for p in verify(record, run_id=run_id)]
+        if problems:
+            return problems
+        events = "".join(f"{line}\n" for line in record.lines()).encode()
+        manifest = record.manifest_bytes()
+        stored = store.run(run_id) if hasattr(store, "run") else None
+    except ProveviError as e:
+        return [f"in the store: {e}"]
+    for name, want in (("events.jsonl", events), ("manifest.json", manifest)):
+        try:
+            same = (ev / name).read_bytes() == want
+        except OSError:
+            same = False
+        if not same:
+            problems.append(f"{name} in the run folder differs from the store")
+    if stored is not None:
+        try:
+            noted = json.loads((Path(run_folder) / "bundle.json").read_bytes())
+        except (OSError, ValueError, RecursionError):
+            noted = {}
+        noted = noted if isinstance(noted, dict) else {}
+        # A store column left empty means the store did not record the bundle,
+        # which provrun allows; a recorded value must match bundle.json.
+        for key, col in (("uri", "bundle_uri"), ("pinned", "pinned_bundle")):
+            if stored.get(col) is not None and noted.get(key) != stored.get(col):
+                problems.append(f"the store's {col} differs from bundle.json")
+    return problems
+
+
 def verify_run(run_folder: Path, *, catalog: Catalog | Callable[[], Catalog] | None = None,
-               bundle: str | None = None, require_bundle: bool = False) -> RunCheck:
+               bundle: str | None = None, require_bundle: bool = False,
+               store: EvidenceStore | None = None) -> RunCheck:
     """Check a run as ``prove verify`` does: its evidence, then its outputs,
-    then its committed bundle. A malformed run gives problems, never an
+    then its committed bundle. With a store that keeps its own record, such as
+    a SqliteStore, the run as the store holds it is checked too, and must
+    match the folder. A malformed run gives problems, never an
     exception. bundle is the pinned URI of the bundle, taken
     from outside the run folder; without it, the one in bundle.json is used."""
     run_folder = Path(run_folder)
     check = RunCheck(run_folder.name)
     check.problems = verify(run_folder / "evidence", run_id=run_folder.name)
+    if store is not None and not check.problems:
+        from .store import FileStore
+
+        if not isinstance(store, FileStore):
+            check.problems = verify_store_copy(run_folder, store)
     if check.problems:
         return check
     check.problems = verify_outputs(run_folder)

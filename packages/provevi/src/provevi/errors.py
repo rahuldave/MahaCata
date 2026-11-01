@@ -12,3 +12,8 @@ class EvidenceError(ProveviError):
 
 class RunNotFound(ProveviError, LookupError):
     """No run folder has the run ID or path that was given."""
+
+
+class CannotReadBack(ProveviError):
+    """The store keeps no record of its own to read a run back from, so the
+    checks read the files in the run folder only."""

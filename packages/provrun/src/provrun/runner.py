@@ -123,8 +123,13 @@ async def run_file(rf: RunFile, *, catalog: Catalog, runs_root: Path | None = No
     """Run a checked run file. bundle_scheme, when given, takes the place of
     the run file's; False writes no bundle through the catalog. The other
     keyword arguments (broker, resolver, stager, backend, store) go to
-    run_agent."""
+    run_agent. Without store, the run file's store setting opens one, and
+    without that the file store is used."""
     s = rf.settings
+    if parts.get("store") is None and s.store is not None:
+        from provevi import open_store
+
+        parts["store"] = open_store(s.store)
     scheme = s.bundle_scheme if bundle_scheme is None else (None if bundle_scheme is False else bundle_scheme)
     return await run_agent(rf.agent, catalog=catalog, org=s.org, domain=s.domain, env=s.env, actor=s.actor,
                            allow=list(s.allow), runs_root=runs_root, mode=mode, bundle_scheme=scheme, **parts)

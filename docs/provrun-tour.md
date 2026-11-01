@@ -345,7 +345,58 @@ run-20261030T204319Z-e7abedc6: the evidence and the outputs verify, and match th
 
 Quote a URI that holds `?` on the command line. zsh reads an unquoted `?` as a wildcard, and fails with `no matches found`.
 
-## Step 9: Call a real model (optional)
+## Step 9: Keep the evidence in SQLite
+
+The runs so far wrote their evidence only as files in each run folder. A `sqlite` store also keeps every run in one SQLite file, so you can ask questions across runs. Run the same file twice with `--store`. Four slashes make the path absolute.
+
+```
+$ export S=sqlite:////tmp/provrun-tour/evidence.db
+$ uv run provr --store $S run /tmp/provrun-tour/run.yaml --config $PROVCAT_CONFIG
+{
+  "run_id": "run-20261101T131105Z-57ed54db",
+  "status": "completed",
+  ...
+}
+$ uv run provr --store $S run /tmp/provrun-tour/run.yaml --config $PROVCAT_CONFIG
+{
+  "run_id": "run-20261101T131120Z-c36d10ec",
+  ...
+}
+```
+
+Ask which runs read the report, which experiments there are, and what the first run was allowed to read.
+
+```
+$ uv run prove --store $S runs --reading data://acme/demo/dev/reports/report.txt
+run-20261101T131105Z-57ed54db
+run-20261101T131120Z-c36d10ec
+
+$ uv run prove --store $S experiments
+acme/demo/dev/revenue-question  created by you@example.com at 2026-11-01T13:11:05.894033Z
+
+$ uv run prove --store $S access run-20261101T131105Z-57ed54db
+   2 granted  mounted_snapshot   data://acme/demo/dev/reports/report.txt  in the allow list; org and environment match
+```
+
+**What happened:**
+- Each run wrote each event as a row of the file, as it happened. The run folder still holds the same files as before, so the committed bundle is the same.
+- The experiment is the agent's name in its org, domain and environment. Its first run made it.
+- `runs --reading` matched the URI of each staged input.
+
+Now delete one row, and check the run.
+
+```
+$ sqlite3 /tmp/provrun-tour/evidence.db "DELETE FROM provevi_events WHERE run_id = 'run-20261101T131105Z-57ed54db' AND seq = 3"
+$ uv run prove --store $S verify run-20261101T131105Z-57ed54db --config $PROVCAT_CONFIG
+prove: in the store: line 3: seq is 4, not 3
+prove: in the store: line 3: the chain is broken
+prove: in the store: refs of row 3 have no event
+prove: in the store: the manifest counts 13 events, and there are 12
+```
+
+The command exits with status 1. Without `--store`, `prove verify` checks only the run folder, which still verifies.
+
+## Step 10: Call a real model (optional)
 
 This step needs `ANTHROPIC_API_KEY` in the environment, and it costs a few cents.
 
@@ -380,5 +431,6 @@ chmod -R u+w /tmp/provrun-tour && rm -rf /tmp/provrun-tour
 | Write the events | `packages/provrun/src/provrun/evidence.py`, through a store in `packages/provevi/src/provevi/store.py` |
 | Check the evidence, the outputs and the bundle | `packages/provevi/src/provevi/checks.py` |
 | Commit the bundle | `packages/provrun/src/provrun/context.py` |
+| Keep the evidence in SQLite, and answer queries | `packages/provevi/src/provevi/sqlite.py` |
 | The library entry and its errors | `packages/provrun/src/provrun/runner.py`, `spec.py` and `errors.py` |
 | The commands | `packages/provrun/src/provrun/cli.py`; `provr verify` calls `packages/provevi/src/provevi/cli.py` |
