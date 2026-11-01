@@ -57,7 +57,7 @@ Candidate drivers, by URI scheme:
 | Scheme | What it stores | State |
 |---|---|---|
 | `file` | JSONL events and `payloads/<sha256>` in a folder. provrun commits the folder through provcat when the run sets a bundle scheme. | Built in Phase 1. |
-| `sqlite` | provevi's own tables (see "The run record"). With the optional extra `provevi[mlflow]`, also a copy of each experiment, run and trace in MLflow's tables in the same file. | Its tables are built in Phase 2. The copy in MLflow comes in Phase 3. |
+| `sqlite` | provevi's own tables (see "The run record"). With the optional extra `provevi[mlflow]`, also a copy of each experiment, run and trace in MLflow's tables in the same file. | Its tables are built in Phase 2. The copy in MLflow comes in Phase 4. |
 | `mlflow+http` | The MLflow copy, through a running `mlflow server`. MLflow's Claude Code and Codex plugins, its TypeScript SDK and the small `mlflow-tracing` package need one. | Not in the plan yet. |
 | `otlp` | Sends spans on to any OpenTelemetry collector. Stores nothing. | Not in the plan yet. |
 
@@ -156,6 +156,11 @@ The decisions, agreed on 2026-10-31, are these:
 8. **The first build stores content as it is, with no redaction,** but only in payloads named by hash, never in span attributes. Redaction rules come later, behind provrun's redaction hook.
 9. **An experiment is a catalog object,** with an `experiment://` URI, as a sealed run is committed under its bundle scheme. So a run names the exact version of its experiment.
 10. **The first build covers PydanticAI and LiteLLM.** Claude Code and Codex come second, with the span receiver, their hooks and their session files.
+
+Two decisions were added on 2026-11-01:
+
+11. **No library logs a run by itself.** During a run, provrun turns off each path by which a library records or sends data. Examples are MLflow's autolog, LiteLLM's callbacks and PydanticAI's instrumentation. The operator approves exceptions in a policy, one library at a time. Phase 3 of [the plan](provevi-plan.md) gives the steps.
+12. **The trace database is a separate tool.** [The trace database](trace-database.md) is built from sealed runs, apart from any run.
 
 For decision 3:
 

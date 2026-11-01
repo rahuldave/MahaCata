@@ -1,6 +1,6 @@
 # The plan for provevi
 
-This plan builds provevi, the evidence store, in five phases. [The design](provevi-design.md) says what provevi is and why. Each phase ends with tests that pass, docs that match the code, and a site that builds.
+This plan builds provevi, the evidence store, in six phases. [The design](provevi-design.md) says what provevi is and why. Each phase ends with tests that pass, docs that match the code, and a site that builds.
 
 ## Terms
 
@@ -9,6 +9,13 @@ This plan builds provevi, the evidence store, in five phases. [The design](prove
 - **Sink:** an object that provrun's recorder hands each event line to. A store gives provrun a sink.
 - **Seal:** the end of a run's evidence. The store writes the manifest and records the last hash.
 - **Copy in MLflow:** the experiments, runs and traces that provevi writes into MLflow's tables, for MLflow's viewer.
+- **Autolog:** MLflow's feature that patches a library, such as PydanticAI, so that each call writes a trace into MLflow.
+- **Callback list:** a list in the `litellm` module of loggers that LiteLLM calls after each model call.
+- **Tracer provider:** the OpenTelemetry object that makes spans and hands each finished span to its span processors.
+- **Span processor:** an object that a tracer provider hands each span to, for example to send it somewhere.
+- **Audit hook:** a function that Python calls before events such as a network connection, set with `sys.addaudithook`.
+- **Logfire:** a service and a library from the makers of PydanticAI that collect OpenTelemetry spans.
+- **Evidence modes:** provrun has two, strict and lenient. In strict mode, a problem fails the run. In lenient mode, the problem gives a warning.
 
 ## How the packages depend on each other
 
@@ -56,7 +63,38 @@ Write provevi's own tables, as [the design](provevi-design.md#the-run-record) gi
 
 **Done when:** a query across runs, such as "which runs read this URI", works from the library and from `prove`.
 
-## Phase 3: the copy in MLflow
+## Phase 3: control of what libraries log
+
+In a controlled environment, the evidence must be the only record of a run, unless the operator approves another. The libraries that provrun loads can record or send data by themselves. [MLflow autolog](provevi-research/mlflow-autolog.md) and [Library telemetry](provevi-research/library-telemetry.md) list each path, and each was tested. Examples:
+
+- `import litellm` fetches a price table from GitHub, and loads a `.env` file from a folder above its install folder.
+- MLflow's LiteLLM autolog stays in LiteLLM's async callback lists after `autolog(disable=True)`.
+- MLflow's PydanticAI autolog sets `instrument=True` on each new agent, so PydanticAI sends its own spans, prompts included.
+- `logfire.configure()` takes the global tracer, meter and logger providers, and exports to `OTEL_EXPORTER_OTLP_ENDPOINT` even with `send_to_logfire=False`.
+
+The code goes into provrun, in a new module, because it acts on the process that runs the agent. provevi checks the policy and records what the module blocked.
+
+1. **Write the telemetry policy.** The operator owns a policy file. It lists the approved libraries, with the versions that were tested and the telemetry that each may use. It lists the approved destinations, such as Logfire, an OpenTelemetry endpoint or the copy in MLflow. For each destination, it says what the destination may receive. The levels are names and times, also token counts, or also bodies. It lists the network hosts that a run may reach. A run file's `telemetry` section can narrow the policy, but never widen it.
+2. **Set the environment before any import.** Set `LITELLM_LOCAL_MODEL_COST_MAP=True`, `LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS=True`, `LITELLM_MODE=PRODUCTION`, `PYDANTIC_AI_NO_BANNER=1`, `MLFLOW_USE_DEFAULT_TRACER_PROVIDER=true`, `MLFLOW_DISABLE_TELEMETRY=true` and `MLFLOW_TRACE_SAMPLING_RATIO=0`. Remove each `OTEL_*`, `LOGFIRE_*` and debug variable that the policy does not approve. Do not use `OTEL_SDK_DISABLED`, because it also stops provrun's own spans.
+3. **Own the providers.** provrun sets the global tracer, meter and logger providers first. Its tracer provider refuses a span processor that it did not add, and records the attempt.
+4. **Turn MLflow off, if it is loaded.** Do this step only when `mlflow` is in `sys.modules`, because the calls import MLflow. Call `mlflow.autolog(disable=True)` and each library's `autolog(disable=True)`, because the general call does not undo a library's call. Then call `mlflow.tracing.disable()`. If MLflow was imported before step 2, also call `set_telemetry_client()` so that it reads the new variables.
+5. **Clear LiteLLM's callbacks.** Clear all seven callback lists, and keep only the loggers that the policy approves. A `callbacks=` argument on one call stays in the global lists, so compare the lists with a snapshot after each call.
+6. **Turn PydanticAI's instrumentation off.** Call `Agent.instrument_all(False)`, and set `agent.instrument = False` on each agent. These calls do not stop an `Instrumentation` capability that an agent was given, or a model wrapped in `InstrumentedModel`. So remove each such capability, and unwrap each such model. An approved instrumentation uses provrun's providers.
+7. **Quiet the loggers.** Set the loggers of the libraries to `WARNING`, because some log request bodies at `DEBUG`.
+8. **Guard the network.** A Python audit hook allows connections only to the hosts in the policy, such as the model provider and the catalog's backends.
+9. **Keep approved spans as evidence.** A span processor on provrun's tracer provider takes the spans of approved instrumentation. It moves each body, such as a prompt in an attribute, into a payload named by its hash. Then it writes the span into the run's evidence. Then it sends each destination what the policy lets it receive. The span receiver of Phase 6 does the same for spans that come from another process.
+10. **Check during the run.** A check of about 5 microseconds after each model call finds a callback, a patch or a tracer that came back. A full scan for patched methods, about 650 milliseconds, runs at the start and the end of a run. In strict mode, a finding fails the run. In lenient mode, it writes an evidence event and a warning.
+
+**Tests:** each path in the two research notes has a test that the path is blocked or approved as the policy says. The tests run offline, with an audit hook that refuses every host except loopback.
+
+**Done when:** a real PydanticAI run and a real LiteLLM run reach only the approved hosts. MLflow, Logfire and an OpenTelemetry exporter are installed for the test, with their variables set. Their evidence records each attempt that the policy blocked.
+
+**Open:**
+
+- The SDKs of OpenAI and Anthropic send `X-Stainless-*` headers, with the operating system, the processor, and the Python and SDK versions, to the model provider. The research did not settle whether `default_headers` can remove them.
+- Streamed calls, the OpenAI Agents SDK and the Claude Agent SDK are not tested yet.
+
+## Phase 4: the copy in MLflow
 
 Write each experiment, run and trace into MLflow's tables in the same SQLite file, as an optional extra, `provevi[mlflow]`.
 
@@ -71,7 +109,7 @@ Write each experiment, run and trace into MLflow's tables in the same SQLite fil
 
 **Done when:** a real PydanticAI run and a real LiteLLM run show in MLflow's viewer, and verify with `prove verify`.
 
-## Phase 4: experiments in the catalog
+## Phase 5: experiments in the catalog
 
 1. Store an experiment as a catalog object, at `experiment://<org>/<domain>/<env>/<name>`, holding its agent spec and its description.
 2. Let a run file name its experiment by URI. provrun pins it, and the run records the pinned version.
@@ -81,7 +119,7 @@ Write each experiment, run and trace into MLflow's tables in the same SQLite fil
 
 **Done when:** an experiment has versions, and each run names the version it ran.
 
-## Phase 5: Claude Code and Codex
+## Phase 6: Claude Code and Codex
 
 1. Write the span receiver as a context manager. It listens on `localhost`, at a free port, for the length of a run.
 2. Let provrun start Claude Code or Codex in a run. It sets their hooks, their OTLP address and `TRACEPARENT`, so that everything they send lands in that run.
@@ -91,6 +129,10 @@ Write each experiment, run and trace into MLflow's tables in the same SQLite fil
 
 **Done when:** a Claude Code run and a Codex run each give a sealed, verified run with their spans in the store.
 
+## A separate tool: the trace database
+
+[The trace database](trace-database.md) holds the steps of runs as rows that SQL can join, for analysis and for reinforcement learning. It is a separate package and command, built from sealed runs. It is not part of a run, and it is not a phase of this plan.
+
 ## Checks before each commit
 
 1. Run the tests of all three packages.
@@ -99,6 +141,6 @@ Write each experiment, run and trace into MLflow's tables in the same SQLite fil
 
 ## Out of scope for this plan
 
-- Redaction rules. The first build stores content as it is, but only in payloads named by hash, never in span attributes.
+- Redaction rules for the evidence. The first build stores content as it is, but only in payloads named by hash, never in span attributes. The levels of Phase 3 step 1 are not redaction. They choose what a destination outside the evidence receives.
 - A long-lived `prove serve` daemon. The receiver is written so that it can run as one later.
 - Stores other than `file` and `sqlite`, such as a shared database server.

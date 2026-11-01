@@ -47,10 +47,13 @@ website:
           - provevi.md
           - provevi-design.md
           - provevi-plan.md
+          - trace-database.md
           - provevi-research/earlier-runtime-traces.md
           - provevi-research/mlflow-tracing.md
           - provevi-research/agent-hooks-claude-codex.md
           - provevi-research/agent-hooks-pydanticai-litellm.md
+          - provevi-research/mlflow-autolog.md
+          - provevi-research/library-telemetry.md
       - section: Reference
         contents: api/*
 
