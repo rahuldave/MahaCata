@@ -6,7 +6,7 @@ MahaCata holds three Python packages that work together.
 
 - **provcat** resolves catalog URIs. A catalog URI names a dataset, a model, a prompt or some code in words that stay the same when the storage changes. provcat turns it into the URI of a store, such as S3, lakeFS, GitHub or Hugging Face, or into a pinned version. It reads the object, or fetches it into a local cache and returns the path. A local file needs no cache. It writes to every store but GitHub and Hugging Face. It commits in lakeFS and in versioned buckets, branches in lakeFS and in any bucket, and merges in lakeFS. It makes read-only snapshots of pinned versions.
 - **provrun** runs agents and model calls on data that provcat resolves. It asks a broker for each input, stages provcat's read-only snapshots of them and runs the agent. It records the evidence of the run as a chain of hashed events.
-- **provevi** stores, reads and checks the evidence of runs. Its command is `prove`. The first two of its five phases are built, with a SQLite store that answers questions across runs. [Its page](provevi.md) says what it does now. [The design](provevi-design.md) and [the plan](provevi-plan.md) say what comes next.
+- **provevi** stores, reads and checks the evidence of runs. Its command is `prove`. The first two of its six phases are built, with a SQLite store that answers questions across runs. [Its page](provevi.md) says what it does now. [The design](provevi-design.md) and [the plan](provevi-plan.md) say what comes next.
 
 provrun depends on provevi and provcat, and provevi depends on provcat. provcat depends on neither.
 
