@@ -353,7 +353,7 @@ def set_up(home: Path, port: int, acl_port: int, orgs: list[str], token: str) ->
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--dir", default="~/Catalog/lakefs-acl", help="the folder for configs, databases and data")
+    ap.add_argument("--dir", default="~/.local/share/provcat/lakefs-acl", help="the folder for configs, databases and data")
     ap.add_argument("--lakefs", default="~/Projects/lakeFS/lakefs", help="the lakefs program")
     ap.add_argument("--acl-server", default="~/Projects/lakeFS/acl-server", help="the access-list server")
     ap.add_argument("--port", type=int, default=8002, help="the lakeFS port on 127.0.0.1")

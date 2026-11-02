@@ -87,7 +87,10 @@ def test_bad_tenant_sections(bad, match):
 
 def test_a_catalog_for_a_tenant_refuses_another_tenants_uris(tmp_path):
     c = Catalog(cfg(), tenant="acme", cache_root=tmp_path)
-    assert str(c.resolve("t://acme/a?at=stage:prod").physical) == "file-acme:///a"
+    assert str(c.resolve("t://acme/a").physical) == "file-acme:///a"
+    # The stage of acme is found. Its commit has no place in the target, so it is refused, not dropped.
+    with pytest.raises(ResolveError, match="commit:1 would be dropped"):
+        c.resolve("t://acme/a?at=stage:prod")
     with pytest.raises(ResolveError, match="org 'globex' is another tenant; this catalog is for acme"):
         c.resolve("t://globex/a")
     assert str(c.resolve("open://globex/a").physical) == "file:///globex/a"  # no tenant part

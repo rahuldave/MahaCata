@@ -331,3 +331,33 @@ def test_bad_request_hint_covers_head_and_only_lakefs_like_stores(s3_endpoint, t
     with pytest.raises(StoreError) as e:
         aws.stat("s3://my-bucket/reports/q1.parquet")
     assert "lakeFS" not in str(e.value)
+
+
+def test_a_logical_uri_of_a_bucket_scheme_reads_a_commit_and_a_version(s3_endpoint, bucket, tmp_path):
+    # The files scheme of the example puts the branch in the path. A commit or
+    # a version of a logical URI goes in ?at=, and reads the bytes it fixed.
+    from pathlib import Path
+
+    from provcat import YamlConfig
+
+    cfg = YamlConfig(Path(__file__).parents[2] / "config" / "provcat.example.yaml").load()
+    cfg["stores"]["s3-acme"] = {"driver": "s3", "endpoint_url": s3_endpoint}
+    bucket.create_bucket(Bucket="acme-sales")
+    bucket.put_bucket_versioning(Bucket="acme-sales", VersioningConfiguration={"Status": "Enabled"})
+    c = Catalog(cfg, cache_root=tmp_path / "cache")
+    c.put("files://acme/sales/t/a.csv", b"old")
+    c.put("files://acme/sales/t/sub/b.csv", b"b")
+    pinned = c.commit("files://acme/sales/t", "first")
+    assert str(pinned).startswith("s3-acme://acme-sales/main/t?at=commit:")
+    version = c.pin("files://acme/sales/t/a.csv").selector
+    assert version.kind == "version"
+    c.put("files://acme/sales/t/a.csv", b"new")
+
+    assert c.read("files://acme/sales/t/a.csv") == b"new"
+    assert c.read(f"files://acme/sales/t/a.csv?at={pinned.selector}") == b"old"
+    assert c.read(f"files://acme/sales/t/a.csv?at={version}") == b"old"
+    folder = c.fetch(f"files://acme/sales/t?at={pinned.selector}")
+    assert (folder / "a.csv").read_bytes() == b"old"
+    assert c.snapshot(f"files://acme/sales/t?at={pinned.selector}").pinned == pinned
+    with pytest.raises(UriError, match="fixed version"):
+        c.put(f"files://acme/sales/t/a.csv?at={version}", b"x")

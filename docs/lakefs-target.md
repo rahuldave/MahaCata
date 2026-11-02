@@ -67,14 +67,14 @@ When it is ready, it prints two lines:
 
 ```
 lakeFS on http://127.0.0.1:8002, with access control for acme, globex
-export AWS_SHARED_CREDENTIALS_FILE=/Users/<you>/Catalog/lakefs-acl/credentials
+export AWS_SHARED_CREDENTIALS_FILE=/Users/<you>/.local/share/provcat/lakefs-acl/credentials
 ```
 
 The script has these options:
 
 | Option | Default | What it sets |
 |---|---|---|
-| `--dir` | `~/Catalog/lakefs-acl` | The folder for the configs, the databases and the data. |
+| `--dir` | `~/.local/share/provcat/lakefs-acl` | The folder for the configs, the databases and the data. |
 | `--lakefs` | `~/Projects/lakeFS/lakefs` | The lakeFS program. |
 | `--acl-server` | `~/Projects/lakeFS/acl-server` | The access-list server program. |
 | `--port` | `8002` | The lakeFS port on `127.0.0.1`. |
@@ -166,7 +166,7 @@ Each run also checks the saved key of every org it is given with `--org`. If tha
 Point provcat at the server and its keys:
 
 ```bash
-export AWS_SHARED_CREDENTIALS_FILE=~/Catalog/lakefs-acl/credentials
+export AWS_SHARED_CREDENTIALS_FILE=~/.local/share/provcat/lakefs-acl/credentials
 ```
 
 ```bash
@@ -269,9 +269,9 @@ The system tests run against the real server. Start it first, then:
 ```bash
 PROVCAT_SYSTEM_LAKEFS_ACL=http://127.0.0.1:8002 \
 PROVCAT_SYSTEM_LAKEFS_ACL_SERVER=http://127.0.0.1:8011 \
-PROVCAT_SYSTEM_LAKEFS_ACL_DIR=~/Catalog/lakefs-acl \
-PROVCAT_SYSTEM_LAKEFS_ACL_CREDENTIALS=~/Catalog/lakefs-acl/credentials \
-PROVCAT_SYSTEM_LAKEFS_ACL_DATA=~/Catalog/lakefs-acl/data \
+PROVCAT_SYSTEM_LAKEFS_ACL_DIR=~/.local/share/provcat/lakefs-acl \
+PROVCAT_SYSTEM_LAKEFS_ACL_CREDENTIALS=~/.local/share/provcat/lakefs-acl/credentials \
+PROVCAT_SYSTEM_LAKEFS_ACL_DATA=~/.local/share/provcat/lakefs-acl/data \
 uv run pytest -m system packages/provcat/tests/system/test_lakefs_acl.py
 ```
 
@@ -291,7 +291,7 @@ GOTOOLCHAIN=go1.26.4 go test ./pkg/api ./pkg/graveler/... ./pkg/catalog/... ./pk
 | `something already listens on 127.0.0.1:8002` | Another lakeFS, or an earlier run, holds the port. | Stop it. `lsof -i :8002` shows what holds it. |
 | `... was made with other ports` | The ports differ from the first run. | Use the first run's ports, or edit `listen_address` and `endpoint` in the config files. |
 | `... takes calls without the token` | The access-list server is a stock build. | Build `acl-server` from the fork. |
-| `api-token ... can be read by other users` | Its mode changed. | `chmod 600 ~/Catalog/lakefs-acl/api-token`. |
+| `api-token ... can be read by other users` | Its mode changed. | `chmod 600 ~/.local/share/provcat/lakefs-acl/api-token`. |
 | An org's keys get `insufficient permissions` | The org may not do this, or a policy changed less than 23 seconds ago. | Check the group's policies as the admin. |
 | The admin gets 401 everywhere | The admin locked itself out. | Run with `--repair-admin`. |
 | `lakeFS still refuses the new admin keys` | lakeFS did not take the new key in time. | Look at the lakeFS output, then run `--repair-admin` again. |

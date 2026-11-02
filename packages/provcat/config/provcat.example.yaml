@@ -108,8 +108,11 @@ schemes:
 
   # files://org/project/path[?at=branch:X|version:ID|commit:ID]
   # A plain bucket for each project, named org-project, whose first folders
-  # are the branches, main among them. See "Commits in a bucket" in
-  # docs/design.md.
+  # are the branches, main among them. branch:X picks the folder. A bucket
+  # keeps a fixed version in ?at=, so commit:ID and version:ID stay on main
+  # and go on as ?at=, and tag: is refused. A commit made on another branch
+  # reads through the physical URI that provc commit prints. See "Commits in
+  # a bucket" in docs/design.md.
   files:
     parts: [org, project]
     rest: path

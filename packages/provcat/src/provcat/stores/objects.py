@@ -110,6 +110,7 @@ def _in_meta(key: str) -> bool:
 
 class ObjectStore(Store):
     page_size: int | None = None  # None leaves it to the server; tests set it small to force paging
+    refs_in_path = False  # the first folder is a branch; a commit or a version goes in ?at=
 
     @abstractmethod
     def locate(self, uri: Uri) -> tuple[str, str]: ...
@@ -404,6 +405,16 @@ class ObjectStore(Store):
         m = self._manifest(uri, sel.value, cache)
         folder = m["folder"]
         if folder and key != folder and not key.startswith(folder + "/"):
+            theirs, _, below = folder.partition("/")
+            ours, _, rest = key.partition("/")
+            n = len(uri.segments) - len(key.split("/"))  # the segments before the key, as an Azure container
+            if ours and n >= 0 and uri.segments[n] == ours and theirs != ours \
+                    and (not below or rest == below or rest.startswith(below + "/")):
+                # The same folder on another branch: a logical URI of a bucket
+                # scheme reads a commit on the default branch of its scheme.
+                there = Uri(uri.scheme, uri.authority, uri.segments[:n] + (theirs,) + uri.segments[n + 1:], sel)
+                raise NotFound(f"{uri}: commit {sel.value} was made on branch {theirs!r}, not {ours!r}; "
+                               f"read it as {there}")
             raise NotFound(f"{uri}: commit {sel.value} is of {folder!r}, which does not hold {key!r}")
         return m, key[len(folder):].lstrip("/") if folder else key
 

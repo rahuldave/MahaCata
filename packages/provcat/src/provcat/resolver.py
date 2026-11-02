@@ -24,6 +24,18 @@ Selectors on a logical URI:
 
 - ``branch:X``, ``tag:X``, ``commit:X`` set ``{ref}`` to X.
 - ``version:N`` sets ``{version}`` to N. ``{ref}`` keeps its default.
+- A bucket (the s3, gcs and azure drivers) keeps only branches in its path,
+  and a fixed version goes in ``?at=``. So for a target whose store is a
+  bucket, ``commit:ID`` keeps ``{ref}`` at its default and goes on to the
+  physical URI as ``?at=commit:ID``. ``version:ID`` does the same when the
+  target has no ``{version}``. ``tag:`` is refused, because a bucket has no
+  tags. The resolver asks ``refs_in_path`` which stores are buckets; the
+  catalog gives it one that reads the attribute of the same name on each
+  store. A resolver without it treats every store as lakeFS does.
+- A selector that nothing uses is refused, never dropped. ``version:`` needs
+  ``{version}``, and ``branch:``, ``tag:`` and ``commit:`` need ``{ref}``,
+  unless the target has ``{at}``, the scheme has ``pass_selector``, or the
+  store is a bucket that takes the selector in ``?at=``.
 - ``stage:NAME`` looks up NAME in ``stages`` and uses the selector stored there.
 - ``ts:TIME`` keeps ``{ref}`` at its default, and goes on to the physical URI
   as ``?at=ts:TIME``, with or without ``pass_selector``. Only the store can say
@@ -71,7 +83,10 @@ than the template of its scheme::
   its own ``?at=``.
 - ``ts:TIME`` keeps the branch of the target. A target that names a branch in
   ``?at=`` gives it as ``ts_branch``, as a template does. A target fixed to a
-  tag or a commit refuses ``ts:``. ``version:`` is refused.
+  tag or a commit refuses ``ts:``.
+- A target whose store is a bucket follows the bucket rules above:
+  ``commit:`` and ``version:`` keep ``{ref}`` at ``ref`` and go on as
+  ``?at=``, and ``tag:`` is refused. Any other store refuses ``version:``.
 - A stage of the URI comes first, and its selector then applies as above.
 - A key must be a URI of a logical scheme, with no ``?at=``. Its parts must
   fit the ``parts`` and ``match`` of the scheme as far as the key goes. The
@@ -82,6 +97,7 @@ from __future__ import annotations
 import re
 import string
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import quote
 
@@ -316,8 +332,13 @@ def _entry(key: object, raw: object, specs: dict[str, SchemeSpec]) -> EntrySpec:
 
 class TemplateResolver(Resolver):
     def __init__(self, schemes: dict | None = None, stages: dict | None = None, tenant: str | None = None,
-                 entries: dict | None = None):
+                 entries: dict | None = None, refs_in_path: Callable[[str], bool | None] | None = None):
+        """``refs_in_path`` takes a store name, and gives False for a bucket,
+        which keeps only branches in its path, True for a store such as
+        lakeFS, and None for a name it does not know. Without it, every store
+        is taken to keep refs in its path."""
         self.tenant = tenant
+        self.refs_in_path = refs_in_path
         self.specs = {n: SchemeSpec.from_config(n, s) for n, s in (schemes or {}).items()}
         self.entries: dict[tuple[str, ...], EntrySpec] = {}
         for key, raw in (entries or {}).items():
@@ -345,6 +366,11 @@ class TemplateResolver(Resolver):
 
     def handles(self, scheme: str) -> bool:
         return scheme in self.specs
+
+    def _bucket(self, store: str) -> bool:
+        """True when the store keeps only branches in its path, as a bucket does."""
+        ask = getattr(self, "refs_in_path", None)
+        return ask is not None and ask(store) is False
 
     def _stage(self, uri: Uri, name: str) -> Selector:
         key = str(uri.without_selector())
@@ -423,11 +449,34 @@ class TemplateResolver(Resolver):
         # The default branch can name parts, for example "{env}", so that each
         # environment is its own branch. A version or ts selector keeps the default.
         default = Selector("branch", spec.ref.format_map(named)) if spec.ref is not None else None
-        ref_sel = sel if sel and sel.kind in _REF_KINDS else default
+        fields = set(_fields(spec.target))
+        bucket = self._bucket(spec.target.split("://", 1)[0].format_map(values))
+        extra = None  # a fixed version that a bucket takes in ?at=
+        # On a bucket only a branch stands in the path, so a fixed version
+        # leaves {ref} at the default, even when {at} places the selector.
+        fixed = bucket and sel is not None and (
+            sel.kind == "commit" or (sel.kind == "version" and "version" not in fields))
+        if bucket and sel and sel.kind == "tag":
+            raise ResolveError(f"{uri}: {spec.name} goes to a bucket, which has no tags; "
+                               "use commit: or version:")
+        if fixed:
+            if "at" not in fields:
+                extra = sel
+            if "ref" in fields and default is None:
+                raise ResolveError(f"{uri}: {spec.name} goes to a bucket, which keeps {sel.kind}: in ?at=, "
+                                   "so its {ref} needs a ref, the default branch")
+        ref_sel = sel if sel and sel.kind in _REF_KINDS and not fixed else default
         if ref_sel:
             values["ref"] = q(ref_sel.value)
-        if sel and sel.kind == "version":
+        if sel and sel.kind == "version" and not fixed:
             values["version"] = q(sel.value)
+        # A selector that nothing uses is refused, so a read never gets the
+        # moving branch in place of the version that the URI names.
+        if sel and sel.kind != "ts" and not (fixed or spec.pass_selector or "at" in fields):
+            place = "version" if sel.kind == "version" else "ref"
+            if place not in fields:
+                raise ResolveError(f"{uri}: the target of {spec.name} has no {{{place}}} and no ?at=, "
+                                   f"so {sel} would be dropped")
         sel = sel or default
         if sel:
             values["at"] = q(str(sel))
@@ -444,7 +493,7 @@ class TemplateResolver(Resolver):
             physical = parse(text)
         except UriError as e:
             raise ResolveError(f"{uri} resolves to a bad URI {text!r}: {e}") from e
-        if sel is not None and (spec.pass_selector or sel.kind == "ts"):
+        if sel is not None and (spec.pass_selector or sel.kind == "ts" or extra is not None):
             if physical.selector is not None:
                 raise ResolveError(f"{spec.name}: target already has ?at=, so the selector {sel} cannot be added")
             physical = physical.with_selector(sel)
@@ -471,11 +520,17 @@ class TemplateResolver(Resolver):
     def _resolve_entry(self, uri: Uri, given: tuple[str, ...], entry: EntrySpec) -> Resolution:
         via: list[str] = []
         sel = self._selector(uri, via)
-        if sel and sel.kind not in _REF_KINDS and sel.kind != "ts":
+        bucket = self._bucket(entry.store)
+        if sel and sel.kind not in _REF_KINDS and sel.kind != "ts" and not (bucket and sel.kind == "version"):
             raise ResolveError(f"{uri}: an entry takes branch:, tag:, commit:, ts: or stage:, not {sel.kind}:")
+        if bucket and sel and sel.kind == "tag":
+            raise ResolveError(f"{uri}: the entry {entry.key} goes to a bucket, which has no tags; "
+                               "use commit: or version:")
+        # A bucket keeps a fixed version in ?at=, so {ref} stays at the default branch.
+        fixed = bucket and sel is not None and sel.kind in ("commit", "version")
         safe = _SAFE.replace("&", "")
         path = "/".join(quote(v, safe=safe) for v in given[len(entry.parts):])
-        ref = sel.value if sel and sel.kind in _REF_KINDS else entry.ref
+        ref = sel.value if sel and sel.kind in _REF_KINDS and not fixed else entry.ref
         try:
             physical = parse(entry.format(path, quote(ref, safe=safe) if ref else None))
         except UriError as e:
@@ -486,7 +541,7 @@ class TemplateResolver(Resolver):
             # still fix another commit, but a branch or a time would move it.
             raise ResolveError(f"{uri}: the entry {entry.key} is fixed to {own}, so it takes only commit:, "
                                f"not {sel.kind}:")
-        if sel and sel.kind in _REF_KINDS and not entry.has_ref:
+        if sel and (fixed or (sel.kind in _REF_KINDS and not entry.has_ref)):
             physical = physical.with_selector(sel)
         elif sel and sel.kind == "ts":
             physical = physical.with_selector(sel)

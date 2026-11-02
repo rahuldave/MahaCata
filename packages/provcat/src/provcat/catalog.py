@@ -90,7 +90,7 @@ class Catalog:
         stores = {**DEFAULT_STORES, **cfg.get("stores", {})}
         self.stores: dict[str, Store] = {n: make_store(n, s or {}, offline=offline) for n, s in stores.items()}
         self.resolver = resolver or TemplateResolver(cfg.get("schemes"), cfg.get("stages"), tenant,
-                                                     cfg.get("entries"))
+                                                     cfg.get("entries"), self._refs_in_path)
         for entry in getattr(self.resolver, "entries", {}).values():
             if entry.store not in self.stores and self.resolver.serves(entry.key):
                 raise ConfigError(f"entries.{entry.key}: there is no store named {entry.store!r}")
@@ -106,6 +106,11 @@ class Catalog:
         self.hooks = proxy.hooks
         self.context = _hooks.context(proxy.app, tenant, principal)
         self._run("session", None, None, lambda r: None, event="open")
+
+    def _refs_in_path(self, name: str) -> bool | None:
+        """Whether store name keeps refs in its path; None for no such store."""
+        store = self.stores.get(name)
+        return None if store is None else getattr(store, "refs_in_path", True)
 
     def close(self) -> None:
         """End the session: the hooks at the session spot see event close."""

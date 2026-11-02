@@ -75,6 +75,22 @@ In the example configuration, the org is the tenant and the first part of every 
 | `stage:NAME` | Look up NAME in the `stages` section and use the selector stored there. |
 | `ts:TIME` | Use the newest commit of the branch made at or before TIME. TIME is a date, a date and time, or Unix seconds. The `lakefs`, `github` and `hf` drivers resolve it. A GitHub or Hugging Face URI names a branch other than the default as `ts:BRANCH@TIME`. |
 
+A bucket keeps only branches in its path, and a fixed version goes in `?at=`. A bucket is a store of the `s3`, `gcs` or `azure` driver. A bucket scheme is a logical scheme whose target is a bucket, such as `files` in the example. On a bucket scheme, the selectors work like this:
+
+| Selector | On a bucket scheme |
+|---|---|
+| `branch:X` | Fills `{ref}`, so X is the first folder in the bucket. |
+| `commit:ID` | Keeps `{ref}` at the default branch of the scheme, and goes on to the physical URI as `?at=commit:ID`, a provcat commit. |
+| `version:ID` | Fills `{version}` if the target has one. Otherwise it keeps `{ref}` at the default branch, and goes on as `?at=version:ID`, the version of one file. |
+| `tag:X` | Refused, because a bucket has no tags. |
+| `ts:TIME` | Goes on to the bucket, which refuses it. |
+
+For example, `files://acme/sales/t?at=commit:ID` resolves to `s3-acme://acme-sales/main/t?at=commit:ID`.
+
+A logical URI reads a commit on the default branch of its scheme. A commit records its folder, and the folder holds its branch. If you commit a folder on another branch, such as `dev`, a read of the commit through the logical URI fails. The error names the physical URI that reads it. The physical URI is also what `provc commit` prints.
+
+On any scheme, a selector that nothing uses is refused, so a read never gets the live files in place of a fixed version. `version:` needs `{version}` in the target, and `branch:`, `tag:` and `commit:` need `{ref}`. A target with `{at}`, a scheme with `pass_selector`, or a bucket that takes the selector in `?at=` also uses it.
+
 ## Stores
 
 A store is a named instance of a driver. Every driver reads. All but `github` and `hf` also write, as [the design](design.md#writes) explains. The stores `file`, `s3`, `github`, `gs`, `az` and `hf` exist without configuration. So a logical scheme cannot use one of those six names. The configuration can add more, for example a store `lakefs` that uses the `lakefs` driver with the lakeFS endpoint.
@@ -139,7 +155,8 @@ With these entries, `code://acme/tokenizer/prod/src/a.py` reads GitHub, and `cod
 | `{path}` is the rest of the URI. | It holds the parts after the key, each one encoded, so a name cannot add a `?at=` or climb with `..`. A target without `{path}` serves only the URI that is its key. |
 | A selector on the URI wins. | `?at=branch:`, `tag:` or `commit:` takes the place of the `?at=` of the target. So a run can fix the version of any name. |
 | `{ref}` is for a branch in the path. | lakeFS keeps the branch in the path. A target with `{ref}` needs a `ref`, its default branch, and the selector of the URI fills `{ref}`. Such a target has no `?at=`. |
-| `ts:` keeps the branch. | `?at=ts:TIME` asks for the commit that the branch of the target had at TIME. `version:` is refused. |
+| `ts:` keeps the branch. | `?at=ts:TIME` asks for the commit that the branch of the target had at TIME. |
+| A bucket keeps a fixed version in `?at=`. | For a target in a bucket, `commit:` and `version:` keep `{ref}` at the `ref` of the entry, and go on to the physical URI as `?at=`. `tag:` is refused. Any other store refuses `version:`. |
 | A fixed target stays fixed. | A target whose `?at=` names a tag or a commit takes only `commit:` from the URI. It refuses `branch:`, `tag:` and `ts:`, which would move it. |
 | A stage comes first. | `?at=stage:NAME` looks up the stage of the URI, and its selector then applies as above. |
 | A key fits its scheme. | A key is a URI of a logical scheme, with no `?at=`. Its parts must match the `parts` and `match` of the scheme, as far as the key goes. A URI under the key must still fit the scheme. |

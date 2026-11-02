@@ -180,12 +180,12 @@ lakefs-acme://acme-data-sales/66e31b0b4f4106b90daacf5a46a349884414697fc9ef3f190b
 
 | Selector | Picks |
 |---|---|
-| `branch:X`, `tag:X`, `commit:X` | That git or lakeFS ref. On a physical URI of a bucket, `commit:ID` is a provcat commit. |
-| `version:N` | On a logical URI, version N of a model, through the template. On a physical URI of a bucket, the version ID of a file. |
+| `branch:X`, `tag:X`, `commit:X` | That git or lakeFS ref. On a bucket, `commit:ID` is a provcat commit. |
+| `version:N` | On a logical URI, version N of a model, through the template. On a bucket, the version ID of a file. |
 | `stage:NAME` | The version that the stage names in the configuration. |
 | `ts:TIME` | The commit that the branch had at TIME, on lakeFS, GitHub and Hugging Face. |
 
-On a bucket scheme, such as `files`, read a fixed version through the physical URI that `provc pin` prints. A logical URI of a bucket scheme works only with `branch:`. provcat does not refuse the other selectors there, and gives a wrong address. It drops `version:`, and it puts the ID of `commit:` or `tag:` in the path, as if it were a branch. It passes `ts:` on to the bucket, which refuses it.
+On a bucket scheme, such as `files`, a logical URI takes `branch:`, `commit:` and `version:`. A branch goes in the path. A commit or a version goes on to the physical URI as `?at=`, on the default branch of the scheme. provcat refuses `tag:`, because a bucket has no tags. It passes `ts:` on to the bucket, which refuses it. A commit made on another branch reads only through its physical URI, which `provc commit` prints.
 
 ## Write, commit, branch and merge
 
