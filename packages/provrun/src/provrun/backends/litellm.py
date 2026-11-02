@@ -26,6 +26,7 @@ import os
 import warnings
 from typing import TYPE_CHECKING, Any
 
+from .. import telemetry
 from . import InProcessBackend, RunResult
 
 if TYPE_CHECKING:
@@ -130,9 +131,13 @@ class LiteLLMBackend(InProcessBackend):
                           data={"messages": len(messages)})
         call = self._acompletion()
         guard_otel_span()
+        telemetry.recheck()  # LiteLLM may have been loaded just now, with callbacks set
         with ctx.recorder.step("model_called", self.__class__.__name__,
                                data={"model": agent.model, "settings": agent.settings}) as step:
-            response = await call(model=agent.model, messages=messages, **agent.settings)
+            try:
+                response = await call(model=agent.model, messages=messages, **agent.settings)
+            finally:
+                telemetry.recheck()  # a call can leave a callback in the global lists
             text = response.choices[0].message.content or ""
             usage = getattr(response, "usage", None)
             tokens = {"input_tokens": getattr(usage, "prompt_tokens", 0) or 0,

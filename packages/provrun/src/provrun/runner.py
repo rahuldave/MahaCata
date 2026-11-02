@@ -33,7 +33,8 @@ from provevi.telemetry import TelemetryPolicy
 
 from .access import Broker, StubBroker
 from .backends import Backend, RunResult, load_backend
-from .context import Bundle, RunContext, evidence_mode
+from . import otel
+from .context import Bundle, RunContext, evidence_mode, new_run_id
 from .errors import RunSettingError
 from .outputs import Artifact, Outputter
 from .resolve import ProvcatResolver, Resolver
@@ -107,12 +108,30 @@ async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org:
     if broker is None:
         allow = list(allow or []) + [i.uri for i in agent.inputs]
         broker = StubBroker(allow, physical_schemes=catalog.stores.keys())
-    ctx = RunContext.open(org=org, domain=domain, env=env, actor=actor, broker=broker,
-                          resolver=resolver or ProvcatResolver(catalog), catalog=catalog,
-                          runs_root=runs_root, mode=mode, bundle_scheme=bundle_scheme, store=store,
-                          data={"agent": agent.name, "backend": agent.backend, "spec": agent.to_dict(),
-                                "telemetry": tel.record()})
-    tel.recorder = ctx.recorder
+    run_id = new_run_id()
+    # The root span of the run: each top-level step is its child, so the run is
+    # one trace. run_created and the event that ends the run record its IDs.
+    with otel.run(run_id, agent.name) as root:
+        ids = otel.ids(root)
+        trace = {k: ids[k] for k in ("trace_id", "span_id") if k in ids}
+        ctx = RunContext.open(org=org, domain=domain, env=env, actor=actor, broker=broker,
+                              resolver=resolver or ProvcatResolver(catalog), catalog=catalog,
+                              runs_root=runs_root, mode=mode, bundle_scheme=bundle_scheme, store=store,
+                              run_id=run_id, trace=trace,
+                              data={"agent": agent.name, "backend": agent.backend, "spec": agent.to_dict(),
+                                    "telemetry": tel.record()})
+        ctx.telemetry = tel
+        tel.attach(ctx.recorder)
+        outcome, error = await _steps(ctx, agent, stager, backend)
+        if error is not None:
+            root.set_status(otel.ERROR, f"{error.__class__.__name__}: {error}")
+    if error is not None and not isinstance(error, Exception):
+        raise error  # a cancel or an interrupt goes on after the run is recorded
+    return outcome
+
+
+async def _steps(ctx: RunContext, agent: AgentSpec, stager: Stager | None,
+                 backend: Backend) -> tuple[RunOutcome, BaseException | None]:
     stager = stager or InProcessStager()
     outcome = RunOutcome(ctx.run_id, "failed", ctx.folder, Bundle(ctx.folder))
     error = None
@@ -137,9 +156,7 @@ async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org:
     outcome.bundle = ctx.finish(error)
     outcome.status = ctx.status
     outcome.error = error
-    if error is not None and not isinstance(error, Exception):
-        raise error  # a cancel or an interrupt goes on after the run is recorded
-    return outcome
+    return outcome, error
 
 
 async def run_file(rf: RunFile, *, catalog: Catalog, runs_root: Path | None = None, mode: str | None = None,

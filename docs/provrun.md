@@ -198,13 +198,17 @@ The runs root is `~/.local/share/provrun/runs`, or `$XDG_DATA_HOME/provrun/runs`
 provrun also opens an OpenTelemetry span for each step, with the names of the GenAI semantic conventions. Each step's event holds two kinds of value in its data:
 
 - `started_at`, the time the step began, in the same form as the event's `time`, which is the time it ended. It is there with or without tracing, and in `step_failed` too.
-- `trace_id`, `span_id` and `parent_span_id`. provrun's spans come from its own tracer provider, which "Control of library telemetry" below describes, so a run's events hold them. `parent_span_id` names the span of the step that holds this one, and is `null` at the root. A recorder used outside a run, with no tracer provider, gives none of the three. So does a span that a provider's sampler drops. The recorder sets these four keys, and drops any value a step gives for them.
+- `trace_id`, `span_id` and `parent_span_id`. provrun's spans come from its own tracer provider, which "Control of library telemetry" below describes, so a run's events hold them. `parent_span_id` names the span of the step that holds this one. A recorder used outside a run, with no tracer provider, gives none of the three. So does a span that a provider's sampler drops. The recorder sets these four keys, and drops any value a step gives for them.
+
+Each run is one trace. `run_agent` opens a root span named `run` before it writes `run_created`, and ends it after the event that ends the run. Its attributes name the run and the agent. Its status is an error when the run fails.
+
+Each top-level step is the root span's child, so its `parent_span_id` is the root span's ID. `run_created`, and `run_completed` or `run_failed`, hold the root span's `trace_id` and `span_id`, so a reader finds the root without a guess. Their times are the run's start and end. The root span starts a new trace even when the program that calls `run_agent` has a span open.
 
 A tool that the provider ran gets a span too, as a child of the `model_called` span whose response reported it. provrun did not see the tool run, so the span marks only where the call sits, and the event has no `started_at`. Its event still comes after that `model_called`.
 
 The names are those of release 1.37.0 of the semantic conventions. The GenAI conventions have since moved to their own repository, `open-telemetry/semantic-conventions-genai`, which has no release and no schema URL yet. So provrun claims no schema URL. `provrun/otel.py` keeps every name in one place.
 
-LiteLLM's OpenTelemetry loggers, such as `otel`, `logfire` and `arize`, make no span of their own when a span is active. They write onto the active span, which is provrun's `model_called` span, often after that span ended. So the LiteLLM backend sets `USE_OTEL_LITELLM_REQUEST_SPAN=true` before each call, and those loggers make their own span. The setting stays for the rest of the process. If you set that variable yourself to another value, provrun keeps it and warns.
+LiteLLM's OpenTelemetry loggers, such as `otel`, `logfire` and `arize`, make no span of their own when a span is active. They write onto the active span, which is provrun's `model_called` span, often after that span ended. So the LiteLLM backend sets `USE_OTEL_LITELLM_REQUEST_SPAN=true` before each call, and those loggers make their own span. The setting stays for the rest of the process. If you set that variable yourself to another value, provrun keeps it and warns. A run empties LiteLLM's callback lists, as "Control of library telemetry" below says, so this matters only for a logger added during a call.
 
 The evidence has two modes. In the strict mode, a lost event stops the run. provrun still closes the evidence, writes the manifest and the bundle, and then raises the error. In the lenient mode, provrun warns and goes on. In both modes, the manifest marks the evidence as incomplete and names each lost event.
 
@@ -212,7 +216,7 @@ A run in the `dev` environment is lenient by default, and a run in any other env
 
 ## Control of library telemetry
 
-The libraries that a run loads can record or send data by themselves, such as LiteLLM's callbacks or MLflow's autolog. In a controlled run, the evidence must be the only record, unless the operator approves another. The operator writes a telemetry policy, which [provevi's page](provevi.md#check-a-telemetry-policy) describes. Phase 3 of [provevi's plan](provevi-plan.md) gives all the steps. provrun does two of them so far.
+The libraries that a run loads can record or send data by themselves, such as LiteLLM's callbacks or MLflow's autolog. In a controlled run, the evidence must be the only record, unless the operator approves another. The operator writes a telemetry policy, which [provevi's page](provevi.md#check-a-telemetry-policy) describes. Phase 3 of [provevi's plan](provevi-plan.md) gives all the steps. So far provrun does steps 2 to 7. They set the environment and the providers, and turn off MLflow, LiteLLM's callbacks, PydanticAI's instrumentation and the loggers' debug levels.
 
 **Where the policy comes from.** In order:
 
@@ -241,6 +245,19 @@ A library that the program imported before the run read the environment before p
 **The providers.** OpenTelemetry has one global tracer provider, meter provider and logger provider in a process, and each can be set once. The first run sets all three to provrun's own. provrun's spans come from its own provider, so the step events of a run hold span IDs. A step event is one that a step writes when it ends, such as `model_called`; `run_created` is not one.
 
 provrun's tracer and logger providers refuse a processor that provrun did not add through their `add_span_processor` and `add_log_record_processor`. MLflow does this when `MLFLOW_USE_DEFAULT_TRACER_PROVIDER` is false. Code that reaches into a provider's private parts can still add one; the checks of step 10 of the plan are to find that. Each refusal is written to each open run's evidence as `telemetry_blocked`. Outside a run, it is a warning. `prove telemetry RUN` lists a run's refusals.
+
+**The libraries.** As each run starts, and again before and after each model call, provrun turns off what a library has switched on. It writes a `telemetry_blocked` event for each thing it turns off.
+
+The event's `library` is the distribution that installed the code, the name pip knows it by, such as `opentelemetry-sdk` or `pydantic-ai-slim`. Code that no distribution installed, such as a program's own package, is named by its top module. The name takes the form that pip uses, so `my_tools` becomes `my-tools`. A program's own script, `__main__`, gets no library.
+
+- **MLflow.** Only when the program has loaded MLflow, because the calls would load it. provrun calls `mlflow.autolog(disable=True)`. Then it calls `autolog(disable=True)` for each MLflow flavor that is on. It does so for the flavors of LiteLLM, PydanticAI, OpenAI and Anthropic too, when their library is loaded. The general call does not undo a flavor's own call, so each goes by name. Then it calls `mlflow.tracing.disable()`. As each run starts, it also calls `set_telemetry_client()`, so that an MLflow loaded before the run reads `MLFLOW_DISABLE_TELEMETRY`. The event names each flavor that was on.
+- **LiteLLM's callbacks.** provrun empties all nine of LiteLLM's callback lists, such as `success_callback` and `_async_success_callback`, and the logger that a call's `logger_fn` argument leaves behind. A call's `callbacks=` argument stays in the global lists, so provrun empties them after each call too. A policy cannot keep a LiteLLM logger yet. Each sends to its own service, past the policy's levels. The one that writes to provrun's tracer provider, `otel`, does not start without LiteLLM's proxy package.
+- **PydanticAI's instrumentation.** provrun sets `instrument` on the agent it builds. The agent's own value wins over `Agent.instrument_all`, so provrun leaves that class setting alone. The value is `False`, unless the policy gives PydanticAI a destination, as `pydantic-ai` or `pydantic-ai-slim`. Then it is `InstrumentationSettings` with provrun's tracer and meter providers, so PydanticAI's spans go to provrun's providers. The spans hold no binary content. They hold prompts and replies only when every one of its destinations receives bodies.
+
+  A model passed in, wrapped in an `InstrumentedModel`, is taken out of the wrapper first, because the wrapper's settings would win. An `InstrumentedModel` deeper inside, such as in a `FallbackModel`, fails the run. PydanticAI looks only at the outer model, so the inner one would send spans to its own provider.
+- **The loggers.** provrun holds the loggers `LiteLLM`, `LiteLLM Router`, `LiteLLM Proxy`, `anthropic`, `openai` and their `_base_client` children at `WARNING`, because some log request bodies at `DEBUG`. It holds `botocore` there too, which provcat uses for S3, because it logs request signatures and headers. A root logger at `DEBUG` then cannot turn them on. The event names a logger that would have logged below `WARNING`.
+
+When the last run that is going on ends, LiteLLM's lists get back what they held before the first run. The loggers get back their levels. A callback that was added during a run does not come back. MLflow's autolog and tracing stay off, because MLflow has no call that puts them back as they were.
 
 **What `run_created` records,** under `telemetry`:
 
@@ -293,5 +310,6 @@ If the store for bundles is `file`, which has no commits, provrun writes the bun
 | Snapshots are never deleted. | Delete old folders under `<cache>/.provcat/snapshots` when no run uses them. |
 | LiteLLM can print a warning that a logging coroutine was never awaited. | Ignore it. It comes from LiteLLM's logging, after the run ends. |
 | PydanticAI printed a banner about Logfire in a terminal if a program imported it before a run. | Set `PYDANTIC_AI_NO_BANNER=1`. A run sets it before the backend loads PydanticAI. |
-| Of the steps that keep libraries quiet, only the environment and the providers are built. provrun does not yet turn off MLflow's autolog, LiteLLM's callbacks or PydanticAI's instrumentation, and it does not guard the network. | See Phase 3 of [provevi's plan](provevi-plan.md). |
+| provrun does not yet guard the network, keep approved spans as evidence, or check for a patch that a library makes outside the paths above. | See steps 8 to 10 of Phase 3 in [provevi's plan](provevi-plan.md). |
+| After a run, MLflow's autolog and tracing stay off for the rest of the process. | Turn them on again after the run, if the program needs them. |
 | Only the in-process backends exist. | Docker and Foundry backends are planned. See [provrun-plan.md](provrun-plan.md). |

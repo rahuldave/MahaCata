@@ -448,7 +448,67 @@ provr: the run file: host 'paste.example' is not allowed by the policy
 
 The command exits with status 1, before it makes a run folder. Unset `PROVRUN_TELEMETRY_POLICY` before the next step.
 
-## Step 11: Call a real model (optional)
+## Step 11: See what a run turns off
+
+A program can switch on a library's own telemetry before it starts a run. This one adds a LiteLLM callback, and sets the root logger to `DEBUG`, writing to a file. Save it as `/tmp/provrun-tour/quiet.py`:
+
+```python
+import logging
+
+import litellm
+from provcat import Catalog
+from provrun import RunFile, run_file_sync
+
+logging.basicConfig(level=logging.DEBUG, filename="/tmp/provrun-tour/debug.log")
+litellm.success_callback.append(lambda *args, **kwargs: None)
+
+outcome = run_file_sync(RunFile.load("/tmp/provrun-tour/run.yaml"), catalog=Catalog.open())
+print(outcome.run_id, outcome.status)
+print("callbacks after the run:", len(litellm.success_callback))
+```
+
+Run it, and list what the run turned off with `prove telemetry`:
+
+```
+$ uv run python /tmp/provrun-tour/quiet.py
+run-20261102T151936Z-3217bc0f completed
+callbacks after the run: 1
+$ R5=run-20261102T151936Z-3217bc0f
+$ uv run prove telemetry /tmp/provrun-tour/runs/$R5
+   1 2026-11-02T15:19:36.418541Z litellm.callbacks   removed __main__.<lambda> from litellm.success_callback
+   2 2026-11-02T15:19:36.418598Z logging litellm  raised the logger 'LiteLLM' from DEBUG to WARNING
+   3 2026-11-02T15:19:36.418639Z logging litellm  raised the logger 'LiteLLM Router' from DEBUG to WARNING
+   4 2026-11-02T15:19:36.418673Z logging litellm  raised the logger 'LiteLLM Proxy' from DEBUG to WARNING
+   5 2026-11-02T15:19:36.418704Z logging anthropic  raised the logger 'anthropic' from DEBUG to WARNING
+   6 2026-11-02T15:19:36.418734Z logging openai  raised the logger 'openai' from DEBUG to WARNING
+   7 2026-11-02T15:19:36.418762Z logging botocore  raised the logger 'botocore' from DEBUG to WARNING
+```
+
+Your run ID and times differ. Each line gives the sequence number of a `telemetry_blocked` event, its time, what was blocked, the library, and the detail. The callback has no library, because it is the program's own.
+
+**What happened:**
+- As the run started, provrun emptied LiteLLM's callback lists, so the callback saw no model call. The loggers that can log request bodies stayed at `WARNING`. So the log file holds no prompt, and none of the request signatures that botocore, the S3 library, logs at `DEBUG`.
+- When the run ended, provrun put the callback and the logger levels back, so the program has its callback again.
+- After the run, LiteLLM printed a few `DEBUG` lines to the terminal as it shut down. Its logger follows the program's root logger again, and the program loaded LiteLLM before the run set `LITELLM_LOG`.
+
+The run is one trace. Print the span ID and the parent span ID of each event that has a span:
+
+```
+$ jq -c 'select(.data.span_id != null) | {type, span: .data.span_id, parent: .data.parent_span_id}' \
+    /tmp/provrun-tour/runs/$R5/evidence/events.jsonl
+{"type":"run_created","span":"3dfc5a6941847c92","parent":null}
+{"type":"context_resolved","span":"f5d8f3fb3b72d285","parent":"3dfc5a6941847c92"}
+{"type":"snapshot_materialized","span":"fb5d4bbf681f6016","parent":"3dfc5a6941847c92"}
+{"type":"input_staged","span":"30f946e660849d7e","parent":"3dfc5a6941847c92"}
+{"type":"model_called","span":"75028126e74020b1","parent":"3dfc5a6941847c92"}
+{"type":"input_verified","span":"5883f771f584348d","parent":"3dfc5a6941847c92"}
+{"type":"output_artifact_created","span":"d5b4f99a29baec8e","parent":"3dfc5a6941847c92"}
+{"type":"run_completed","span":"3dfc5a6941847c92","parent":null}
+```
+
+`run_created` and `run_completed` hold the span ID of the run's root span. Each step's parent is that span, and every event with a span holds the same `trace_id`.
+
+## Step 12: Call a real model (optional)
 
 This step needs `ANTHROPIC_API_KEY` in the environment, and it costs a few cents.
 
