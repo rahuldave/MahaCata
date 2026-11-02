@@ -108,7 +108,7 @@ Every error that provrun raises on purpose is a `ProvrunError`, so a program can
 
 These settings in provrun affect the whole process:
 
-- During a run, provrun sets and removes environment variables, as "Control of library telemetry" below says. It puts them back when the last run that is going on ends.
+- During a run, provrun sets a few environment variables, as "Control of library telemetry" below says. It puts them back when the last run that is going on ends.
 - The first run sets OpenTelemetry's global tracer, meter and logger providers to provrun's own. They stay for the rest of the process.
 - When the LiteLLM backend first calls LiteLLM, it sets `litellm.suppress_debug_info`, so LiteLLM prints nothing on stdout. This also applies to the program's own LiteLLM calls.
 - Before each LiteLLM call, the backend sets the environment variable `USE_OTEL_LITELLM_REQUEST_SPAN` to `true`, so that LiteLLM's tracing does not write onto provrun's span. A value that is already set is kept, with a warning if it is not `true`.
@@ -216,7 +216,9 @@ A run in the `dev` environment is lenient by default, and a run in any other env
 
 ## Control of library telemetry
 
-The libraries that a run loads can record or send data by themselves, such as LiteLLM's callbacks or MLflow's autolog. In a controlled run, the evidence must be the only record, unless the operator approves another. The operator writes a telemetry policy, which [provevi's page](provevi.md#check-a-telemetry-policy) describes. Phase 3 of [provevi's plan](provevi-plan.md) gives all the steps. So far provrun does steps 2 to 7. They set the environment and the providers, and turn off MLflow, LiteLLM's callbacks, PydanticAI's instrumentation and the loggers' debug levels.
+The libraries that a run loads can record or send data by themselves, such as LiteLLM's callbacks or MLflow's autolog. In a controlled run, the evidence must be the only record, unless the operator approves another. The operator writes a telemetry policy, which [provevi's page](provevi.md#check-a-telemetry-policy) describes. Phase 3 of [provevi's plan](provevi-plan.md) gives all the steps.
+
+So far provrun does steps 2 to 8 and step 10. They record the telemetry variables and own the providers. They turn off MLflow, LiteLLM's callbacks, PydanticAI's instrumentation and the loggers' debug levels. They find what cannot be turned off, and check again during the run. Step 9, which sends provrun's spans to the destinations the variables name, is not built yet.
 
 **Where the policy comes from.** In order:
 
@@ -226,25 +228,53 @@ The libraries that a run loads can record or send data by themselves, such as Li
 
 A run file cannot name the policy file, because the operator owns it. The run file's `telemetry` section can only narrow the policy. A section that would widen it fails the run before the run folder is made.
 
-**The environment.** Before the backend loads its library, provrun:
+**The environment.** The telemetry variables are the user's configuration. `OTEL_EXPORTER_OTLP_ENDPOINT` and its headers name a collector. `MLFLOW_TRACKING_URI` names a tracking server or a database. `LOGFIRE_TOKEN` names a Logfire project.
 
-- sets `LITELLM_LOCAL_MODEL_COST_MAP=True`, `LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS=True` and `LITELLM_MODE=PRODUCTION`. With these, LiteLLM fetches no price table and reads no `.env` file when it is imported;
-- sets `LITELLM_LOG=ERROR`, because with no value LiteLLM's log handler takes every level, and `PYDANTIC_AI_NO_BANNER=1`;
-- sets `MLFLOW_USE_DEFAULT_TRACER_PROVIDER=true`, `MLFLOW_DISABLE_TELEMETRY=true` and `MLFLOW_TRACE_SAMPLING_RATIO=0`, so that MLflow keeps off provrun's provider and samples no traces;
-- sets the off switches `OTEL_TRACES_EXPORTER=none`, `OTEL_METRICS_EXPORTER=none`, `OTEL_LOGS_EXPORTER=none`, `LOGFIRE_SEND_TO_LOGFIRE=false` and `LOGFIRE_CONSOLE=false`, for any provider or SDK that a library makes for itself;
-- removes each other `OTEL_*` and `LOGFIRE_*` variable, and `ANTHROPIC_LOG` and `OPENAI_LOG`. The anthropic SDK logs request bodies at its debug level.
+So a run leaves them as they are, credentials included. In step 9 of the plan, provrun will send its own spans where they point, when the policy approves. Libraries do not act on them, because the steps below turn the libraries' own telemetry off.
 
-provrun removes credentials too, such as `LOGFIRE_TOKEN` and `OTEL_EXPORTER_OTLP_HEADERS`, even for a destination that the policy approves. No library may use them. A library's exporter that had a credential but no endpoint would send the credential to a default address. When provrun sends spans to an approved destination, provrun itself will use the credential; that is step 9 of the plan, not built yet.
+Before the backend loads its library, provrun sets only these settings. None of them names a destination:
 
-provrun does not use `OTEL_SDK_DISABLED`, because it would stop provrun's own spans too. It removes the variable, and it makes its own providers live even when the variable is set.
+- `LITELLM_LOCAL_MODEL_COST_MAP=True`, `LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS=True` and `LITELLM_MODE=PRODUCTION`. With these, LiteLLM fetches no price table and reads no `.env` file when it is imported. A user who keeps keys in a `.env` file for LiteLLM must load it before the run.
+- `LITELLM_LOG=ERROR`, because with no value LiteLLM's log handler takes every level, and `PYDANTIC_AI_NO_BANNER=1`.
+- `MLFLOW_USE_DEFAULT_TRACER_PROVIDER=true` and `MLFLOW_DISABLE_TELEMETRY=true`, so that MLflow keeps off provrun's provider and sends no usage reports.
+- `LOGFIRE_SEND_TO_LOGFIRE=false` and `LOGFIRE_CONSOLE=false`, the off switches of a Logfire that a library configures for itself.
 
-provrun cleans the environment again as each run starts, so a variable that one run sets does not reach a run that starts later. It puts the environment back as it was when the last run that is going on ends. A variable that was first set during a run is removed then.
+provrun sets them again as each run starts, so a value changed during one run does not reach a run that starts later. It puts back what the user had when the last run that is going on ends.
+
+`OTEL_SDK_DISABLED` stays as the user set it. provrun makes its own providers live even when it is set, so that its spans still record.
+
+**What a run records about the variables.** `run_created` lists each variable of the `OTEL_*`, `LOGFIRE_*`, `MLFLOW_*` and `LITELLM_*` families that is set. A variable that names a place is recorded by where it points. Such a variable's name ends in `_ENDPOINT`, `_URI` or `_URL`, or is `OTEL_SERVICE_NAME` or `OTEL_EXPORTER_OTLP_PROTOCOL`.
+
+The value of `OTEL_SERVICE_NAME` or `OTEL_EXPORTER_OTLP_PROTOCOL`, such as `http/protobuf`, is kept if it holds only letters, digits and the marks `.`, `_`, `/` and `-`. Otherwise it is recorded as `<not recorded>`.
+
+The value of a name ending in `_ENDPOINT`, `_URI` or `_URL` is recorded in one of these forms:
+
+- A URL with a host gives its scheme, host and port only. The user, password, path, query and fragment are left out, because a token, a password or a local path can sit in each.
+- A URL without a host, such as `sqlite:///data/mlflow.db`, gives its scheme only, as `sqlite:<path not recorded>`.
+- A bare name of letters and hyphens, such as `databricks`, is kept.
+- A URL with a port that is not a number is recorded as `<not recorded: not a valid URL>`.
+- Any other value is recorded as `<not recorded: not a URL>`. This includes a value with an `@` outside its user part, and a value such as `localhost:5000`, which has no `//`.
+
+Every other variable, such as a token, a header or a key, is recorded by its name only. For example:
+
+```json
+"variables": {
+  "LOGFIRE_TOKEN": null,
+  "MLFLOW_TRACKING_URI": "postgresql://db.example:5432",
+  "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector.example:4318",
+  "OTEL_EXPORTER_OTLP_HEADERS": null
+}
+```
+
+`overridden` holds the user's own value of each setting above that the run changed, such as `"LITELLM_MODE": "DEV"`.
 
 A library that the program imported before the run read the environment before provrun set it. The run records such libraries; this is not a failure, because a program that passes in a model has imported its library already.
 
 **The providers.** OpenTelemetry has one global tracer provider, meter provider and logger provider in a process, and each can be set once. The first run sets all three to provrun's own. provrun's spans come from its own provider, so the step events of a run hold span IDs. A step event is one that a step writes when it ends, such as `model_called`; `run_created` is not one.
 
-provrun's tracer and logger providers refuse a processor that provrun did not add through their `add_span_processor` and `add_log_record_processor`. MLflow does this when `MLFLOW_USE_DEFAULT_TRACER_PROVIDER` is false. Code that reaches into a provider's private parts can still add one; the checks of step 10 of the plan are to find that. Each refusal is written to each open run's evidence as `telemetry_blocked`. Outside a run, it is a warning. `prove telemetry RUN` lists a run's refusals.
+provrun's tracer and logger providers refuse a processor that provrun did not add through their `add_span_processor` and `add_log_record_processor`. MLflow does this when `MLFLOW_USE_DEFAULT_TRACER_PROVIDER` is false. Code that reaches into a provider's private parts can still add one. The checks below find a global provider that was replaced.
+
+Each refusal is written to each open run's evidence as `telemetry_blocked`. Outside a run, it is a warning. `prove telemetry RUN` lists a run's refusals.
 
 **The libraries.** As each run starts, and again before and after each model call, provrun turns off what a library has switched on. It writes a `telemetry_blocked` event for each thing it turns off.
 
@@ -265,14 +295,33 @@ When the last run that is going on ends, LiteLLM's lists get back what they held
 |---|---|
 | `policy` | The SHA-256 of the policy the run ran under, after the run file narrowed it. |
 | `policy_source` | Where the policy came from. |
-| `removed` | The names of the variables that the run removed. The values are never recorded, because they can be credentials. |
+| `variables` | The telemetry variables that were set, as above. A credential is recorded by its name only. |
+| `overridden` | The user's value of each setting that the run changed. |
 | `problems` | The problems found, as below. |
 | `imported_before` | The libraries the program imported before the run. |
 
-**Problems.** In strict mode, each of these fails the run before the run folder is made. In lenient mode, the run warns and records it:
+**Problems.** A problem is something that sends past the policy, or may, and that provrun cannot turn off. As a run starts, a problem fails a strict run before the run folder is made. In lenient mode, the run warns, and `run_created` lists it under `problems`.
+
+A run looks for each of the following as it starts:
 
 - an approved library is installed at a version that the policy does not name;
-- someone else set a global provider before provrun did, such as `logfire.configure()`. provrun's spans still come from its own provider.
+- someone else set a global provider before provrun did. provrun's spans still come from its own provider;
+- `logfire.configure()` has run. Logfire's own exporters then send to Logfire, and to the `OTEL_EXPORTER_OTLP_*` endpoint, past the policy;
+- an OpenTelemetry auto-configuration is loaded, by `opentelemetry-instrument` or a distro. It sends by the environment, past the policy;
+- an MLflow patch is still on after MLflow's autolog was turned off;
+- MLflow cannot be turned off, such as an MLflow with no tracing module.
+
+**Checks during a run.** Before and after each model call, provrun turns off again what came back, as "The libraries" above says. It then looks for Logfire, an auto-configuration, and a global provider that was replaced. This check takes some tens of microseconds.
+
+At the run's end, provrun scans the modules of LiteLLM, PydanticAI, the OpenAI and Anthropic SDKs and the HTTP libraries for patches. It runs even when the run has failed with an error, but not when the run is cancelled or interrupted. A patch is a function that was there at the run's start and was replaced by a wrapper, or an MLflow patch. The scan also runs as the run starts, to note each function. A function first seen during the run, as a module loads, is not a patch.
+
+The scan reads each function without running any library code. It takes from 200 to 350 milliseconds, by how many of these libraries are loaded. So it adds up to about 0.7 seconds to a run. It holds up the other runs in the process while it runs.
+
+A problem found during a run is written as a `telemetry_problem` event, with the problem under `problem`. A strict run then fails at its next check. The model call or the end of the run raises the error, and the run ends with `run_failed`. A lenient run warns and goes on. Each problem is reported once to each run.
+
+The checks look at the whole process. A problem that one run causes, such as a `logfire.configure()`, is a problem for every open run. It fails each strict one.
+
+`prove telemetry RUN` lists only the `telemetry_blocked` events. Read the `telemetry_problem` events in the run's `evidence/events.jsonl`.
 
 ## The stub broker
 
@@ -311,7 +360,8 @@ If the store for bundles is `file`, which has no commits, provrun writes the bun
 | LiteLLM can print a warning that a logging coroutine was never awaited. | Ignore it. It comes from LiteLLM's logging, after the run ends. |
 | PydanticAI printed a banner about Logfire in a terminal if a program imported it before a run. | Set `PYDANTIC_AI_NO_BANNER=1`. A run sets it before the backend loads PydanticAI. |
 | provrun does not guard the network. A run can reach any host the machine can. | Control egress with the firewall or the container that runs provrun. |
-| provrun does not yet keep approved spans as evidence, send them to a destination, or check for a patch that a library makes outside the paths above. | See steps 9 and 10 of Phase 3 in [provevi's plan](provevi-plan.md). |
-| A run removes the user's `OTEL_*` and `LOGFIRE_*` variables while it runs, credentials included. The plan changes this: a run will keep and record them. | See step 2 of Phase 3 in [provevi's plan](provevi-plan.md). |
+| provrun does not yet keep its spans as evidence or send them to the destinations the variables name. | See step 9 of Phase 3 in [provevi's plan](provevi-plan.md). |
+| The scan for patches looks only in the libraries named above, and finds a function replaced by a wrapper. A library that changes a function in place, or patches another library, is not found. A Logfire configured with `local=True` is not found either. | The checks catch the known paths. A container is the boundary for the rest. |
+| The scan finds a patch only on a library that was loaded when the run started. `provr run` starts with no backend loaded. So a library that is loaded during the run, and patched by an import hook as it loads, is not found. Only MLflow's patches are found then, by their marks. | Load the backend's libraries before the run, in a program that calls provrun, or use a container. |
 | After a run, MLflow's autolog and tracing stay off for the rest of the process. | Turn them on again after the run, if the program needs them. |
 | Only the in-process backends exist. | Docker and Foundry backends are planned. See [provrun-plan.md](provrun-plan.md). |

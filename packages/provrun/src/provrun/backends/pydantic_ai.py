@@ -86,11 +86,13 @@ def evidence_capability(ctx: RunContext):
                                    data={"model": request_context.model.model_name,
                                          "streamed": bool(request_context.streaming)}) as step:
                 model_span = otel.current()
-                telemetry.recheck()
+                telemetry.recheck(getattr(ctx, "telemetry", None))
                 try:
                     response = await handler(request_context)
                 finally:
-                    telemetry.recheck()
+                    telemetry.recheck(getattr(ctx, "telemetry", None), fail=False)
+                if getattr(ctx, "telemetry", None) is not None:
+                    getattr(ctx, "telemetry", None).fail_if_found()
                 usage = response.usage
                 if response.model_name:
                     step.data["answered_by"] = response.model_name  # a FallbackModel names the one that answered
@@ -174,12 +176,12 @@ class PydanticAIBackend(InProcessBackend):
         if tools:
             toolsets.append(FunctionToolset([t.fn for t in tools]))
         model = telemetry.pydantic_ai_model(self._model if self._model is not None else infer_model(agent.model),
-                                            ctx.telemetry)
+                                            getattr(ctx, "telemetry", None))
         pa = Agent(model, instructions=agent.instructions or None, deps_type=RunDeps, toolsets=toolsets,
                    capabilities=[evidence_capability(ctx)], retries=agent.limits.get("retries", 2))
         # Set after the agent is made: MLflow's autolog patches Agent.__init__ to
         # turn instrumentation on. The agent's own value wins over instrument_all.
-        tel = ctx.telemetry
+        tel = getattr(ctx, "telemetry", None)
         pa.instrument = telemetry.pydantic_ai_instrument(tel.policy if tel is not None else
                                                          telemetry.TelemetryPolicy.deny_all())
         listing = ", ".join(i.agent_path for i in run.inputs) or "none"

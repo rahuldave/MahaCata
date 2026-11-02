@@ -27,10 +27,17 @@ POLICY = {
 }
 
 
+def watched():
+    """The variables the tests set or a run sets, as the environment holds
+    them now. Only these are copied, so that a failed test prints no other."""
+    names = {*NOISY, *telemetry.SETTINGS, *URLS}
+    return {k: os.environ[k] for k in sorted(names) if k in os.environ}
+
+
 def seeing(seen):
-    """A LiteLLM backend whose model call keeps a copy of the environment."""
+    """A LiteLLM backend whose model call keeps a copy of the watched variables."""
     async def acompletion(**kw):
-        seen.append(dict(os.environ))
+        seen.append(watched())
         choice = SimpleNamespace(message=SimpleNamespace(content="ok"), finish_reason="stop")
         return SimpleNamespace(choices=[choice], usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1))
 
@@ -59,38 +66,71 @@ NOISY = {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector.example:4318", "OTEL_S
          "LITELLM_MODE": "DEV", "ANTHROPIC_LOG": "debug"}
 
 
-def test_a_run_sets_the_environment_and_puts_it_back(catalog, runs, monkeypatch):
+URLS = {"MLFLOW_TRACKING_URI": "postgresql://mlflow:pa55word@db.example:5432/mlflow?sslkey=k3y",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://user:pw@collector.example/v1/traces?token=t0ken#frag",
+        "LITELLM_MASTER_KEY": "sk-m4ster"}
+
+
+def test_a_run_keeps_the_variables_and_records_them(catalog, runs, monkeypatch):
     for k, v in NOISY.items():
         monkeypatch.setenv(k, v)
-    monkeypatch.delenv("MLFLOW_TRACE_SAMPLING_RATIO", raising=False)
     seen = []
     out = run(catalog, runs, backend=seeing(seen))
     assert out.status == "completed", out.error
     [env] = seen
     for k, v in telemetry.SETTINGS.items():
         assert env[k] == v
-    assert not {"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_SDK_DISABLED",
-                "LOGFIRE_TOKEN", "ANTHROPIC_LOG"} & env.keys()
-    for k, v in NOISY.items():
-        assert os.environ[k] == v  # put back after the run
-    assert "MLFLOW_TRACE_SAMPLING_RATIO" not in os.environ
+    for k in ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_SDK_DISABLED",
+              "OTEL_TRACES_EXPORTER", "LOGFIRE_TOKEN", "ANTHROPIC_LOG"):
+        assert env[k] == NOISY[k]  # kept as the user set it
+    assert {k: os.environ.get(k) for k in NOISY} == NOISY  # the settings put back after the run
     record = created(out)
     assert record["policy"] == TelemetryPolicy.deny_all().digest()
-    assert record["removed"] == ["ANTHROPIC_LOG", "LOGFIRE_TOKEN", "OTEL_EXPORTER_OTLP_ENDPOINT",
-                                 "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_SDK_DISABLED"]
-    assert "s3cr3t-token" not in (out.folder / "evidence" / "events.jsonl").read_text()  # names, never values
+    assert record["variables"] == {
+        "LOGFIRE_TOKEN": None, "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector.example:4318",
+        "OTEL_EXPORTER_OTLP_HEADERS": None, "OTEL_SDK_DISABLED": None, "OTEL_TRACES_EXPORTER": None}
+    assert record["overridden"] == {"LITELLM_LOG": "DEBUG", "LITELLM_MODE": "DEV"}
+    text = (out.folder / "evidence" / "events.jsonl").read_text()
+    assert "s3cr3t" not in text  # a token or a header by its name only
 
 
-def test_credentials_go_even_for_an_approved_destination(catalog, runs, monkeypatch, tmp_path):
-    """No library may use a destination's credential: without its endpoint,
-    an exporter would send it to a default address."""
-    for k, v in NOISY.items():
+def test_a_place_is_recorded_without_its_credentials(catalog, runs, monkeypatch):
+    for k, v in URLS.items():
         monkeypatch.setenv(k, v)
-    seen = []
-    out = run(catalog, runs, backend=seeing(seen), policy=policy_file(tmp_path))
-    [env] = seen
-    assert not {"OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_ENDPOINT", "LOGFIRE_TOKEN"} & env.keys()
-    assert created(out)["policy"] == TelemetryPolicy.from_dict(POLICY).digest()
+    out = run(catalog, runs)
+    assert created(out)["variables"] == {
+        "LITELLM_MASTER_KEY": None,
+        "MLFLOW_TRACKING_URI": "postgresql://db.example:5432",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector.example"}
+    text = (out.folder / "evidence" / "events.jsonl").read_text()
+    assert not [secret for secret in ("pa55word", "k3y", "pw@", "t0ken", "frag", "m4ster") if secret in text]
+
+
+@pytest.mark.parametrize("value, recorded", [
+    ("sqlite:////var/data/mlflow.db", "sqlite:<path not recorded>"),
+    ("file:///home/someone/mlruns", "file:<path not recorded>"),
+    ("databricks", "databricks"),
+    ("databricks-uc", "databricks-uc"),
+    ("http://[::1]:4318/v1/traces", "http://[::1]:4318"),
+    ("http://h:notaport/x", "<not recorded: not a valid URL>"),
+    ("https://h.example?key=x", "https://h.example"),
+    # The review's forms: each would keep a secret.
+    ("user:secretpw@collector:4317", "<not recorded: not a URL>"),
+    ("tok123@collector:4317", "<not recorded: not a URL>"),
+    ("//u:pw@host:4317/x", "<not recorded: not a URL>"),
+    ("dns:///u:pw@h", "<not recorded: not a URL>"),
+    ("https://hooks.example/services/T00/B00/XXXXSECRET", "https://hooks.example"),
+    ("https://h.example/p;token=abc", "https://h.example"),
+    ("http://user:p/ss@host:4318", "<not recorded: not a valid URL>"),
+    ("sk-ant-abc123", "<not recorded: not a URL>"),
+    # The second review's forms.
+    ("http://alice:1234?@mlflow.internal", "<not recorded: not a URL>"),
+    ("http://alice:99#x@host/", "<not recorded: not a URL>"),
+    ("alice:hunter2", "<not recorded: not a URL>"),
+    ("localhost:5000", "<not recorded: not a URL>"),
+])
+def test_a_value_keeps_its_place_and_loses_its_secrets(value, recorded):
+    assert telemetry.variables({"MLFLOW_TRACKING_URI": value}) == {"MLFLOW_TRACKING_URI": recorded}
 
 
 def test_the_policy_comes_from_the_variable(catalog, runs, monkeypatch, tmp_path):
@@ -241,12 +281,12 @@ def test_overlapping_runs_under_two_policies(catalog, runs, tmp_path, monkeypatc
     gate = asyncio.Event()
 
     async def slow(**kw):
-        seen.append(dict(os.environ))
+        seen.append(watched())
         await gate.wait()
         return reply()
 
     async def quick(**kw):
-        seen.append(dict(os.environ))
+        seen.append(watched())
         gate.set()
         return reply()
 
@@ -272,22 +312,21 @@ def reply():
     return SimpleNamespace(choices=[choice], usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1))
 
 
-def test_a_variable_set_during_a_run_is_removed_for_the_next_and_undone(catalog, runs, monkeypatch):
-    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+def test_a_variable_set_during_a_run_is_the_program_s_and_stays(catalog, runs, monkeypatch):
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://before:4318")
     inner = []
 
     async def nested(**kw):
         os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://elsewhere:4318"
         inner.append(await run_agent(AGENT, catalog=catalog, runs_root=runs, org="acme", domain="benefits",
-                                     env="dev", actor="tester", backend=seeing(seen)))
+                                     env="dev", actor="tester", backend=seeing([])))
         return reply()
 
-    seen = []
     outer = run(catalog, runs, backend=LiteLLMBackend(nested))
     assert outer.status == "completed", outer.error
-    assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in seen[0]
-    assert created(inner[0])["removed"] == ["OTEL_EXPORTER_OTLP_ENDPOINT"]
-    assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in os.environ  # it was not there before the first run
+    assert created(outer)["variables"] == {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://before:4318"}
+    assert created(inner[0])["variables"] == {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://elsewhere:4318"}
+    assert os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") == "http://elsewhere:4318"
 
 
 def test_the_environment_comes_back_after_a_failed_run(catalog, runs, monkeypatch):
@@ -345,8 +384,8 @@ def test_a_refusal_that_cannot_be_recorded_warns(monkeypatch):
 
 
 def test_an_interrupt_while_the_environment_changes_puts_it_back(monkeypatch):
-    monkeypatch.setenv("LOGFIRE_TOKEN", "s3cr3t-token")
-    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.example:4318")
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "False")
+    monkeypatch.setenv("LITELLM_MODE", "DEV")
 
     class Interrupting(dict):
         """os.environ for the moment the run changes it: the second change is interrupted."""
@@ -385,24 +424,21 @@ def test_an_interrupt_while_the_environment_changes_puts_it_back(monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         telemetry._enter_environment(t)
     monkeypatch.setattr(telemetry.os, "environ", real)
-    assert "LOGFIRE_TOKEN" not in real  # the first change went through
+    assert real.get("LITELLM_LOCAL_MODEL_COST_MAP") == "True"  # the first change went through
     telemetry._leave_environment(t)
-    assert real["LOGFIRE_TOKEN"] == "s3cr3t-token"
-    assert real["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://collector.example:4318"
+    assert real.get("LITELLM_LOCAL_MODEL_COST_MAP") == "False" and real.get("LITELLM_MODE") == "DEV"
     assert telemetry._open == [] and telemetry._saved == {}
 
 
-def test_a_variable_one_run_sets_goes_when_it_ends(catalog, runs, monkeypatch):
-    for k in ("OTEL_EXPORTER_OTLP_ENDPOINT", "LOGFIRE_TOKEN"):
-        monkeypatch.delenv(k, raising=False)
+def test_a_setting_changed_during_a_run_is_put_back(catalog, runs, monkeypatch):
+    monkeypatch.setenv("LITELLM_LOG", "DEBUG")
 
-    async def sets(**kw):
-        os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://mid:4318"
-        os.environ["LOGFIRE_TOKEN"] = "midtok"
+    async def changes(**kw):
+        os.environ["LITELLM_LOG"] = "INFO"
         return reply()
 
-    assert run(catalog, runs, backend=LiteLLMBackend(sets)).status == "completed"
-    assert not {"OTEL_EXPORTER_OTLP_ENDPOINT", "LOGFIRE_TOKEN"} & os.environ.keys()
+    assert run(catalog, runs, backend=LiteLLMBackend(changes)).status == "completed"
+    assert os.environ.get("LITELLM_LOG") == "DEBUG"
 
 
 # ---- the root span ------------------------------------------------------------
@@ -748,3 +784,328 @@ def test_a_broken_install_still_names_the_module(monkeypatch):
         assert telemetry._distribution("somepkg.mod") == "somepkg"
     finally:
         telemetry._distribution.cache_clear()
+
+
+# ---- what cannot be turned off: Logfire, an auto-configuration, patches -------
+
+def problems_in(out):
+    return [e.data["problem"] for e in read_events(out.folder / "evidence") if e.type == "telemetry_problem"]
+
+
+@pytest.fixture
+def logfire_config(monkeypatch):
+    """Logfire's global configuration, as logfire.configure() leaves it, set
+    by the test and put back after it."""
+    config = pytest.importorskip("logfire._internal.config").GLOBAL_CONFIG
+
+    def configure():
+        monkeypatch.setattr(config, "_initialized", True)
+
+    return configure
+
+
+def test_a_configured_logfire_fails_a_strict_run_and_is_recorded_in_a_lenient_one(catalog, runs, logfire_config):
+    logfire_config()
+    with pytest.raises(RunSettingError, match="logfire.configure"):
+        run(catalog, runs, env="prod")
+    with pytest.warns(UserWarning, match="logfire.configure"):
+        out = run(catalog, runs, env="dev")
+    assert any("logfire.configure" in p for p in created(out)["problems"])
+
+
+def test_an_auto_configuration_is_a_problem(catalog, runs, monkeypatch):
+    import sys
+    import types
+
+    monkeypatch.setitem(sys.modules, "opentelemetry.distro", types.ModuleType("opentelemetry.distro"))
+    with pytest.raises(RunSettingError, match="opentelemetry.distro is loaded"):
+        run(catalog, runs, env="prod")
+
+
+def test_logfire_configured_during_a_run(catalog, runs, logfire_config):
+    async def configures(**kw):
+        logfire_config()
+        return reply()
+
+    with pytest.warns(UserWarning, match="logfire.configure"):
+        out = run(catalog, runs, env="dev", backend=LiteLLMBackend(configures))
+    assert out.status == "completed"
+    assert len(problems_in(out)) == 1 and "logfire.configure" in problems_in(out)[0]  # once, not at each check
+    assert verify(out.folder / "evidence") == []
+
+
+def test_a_strict_run_fails_at_the_check_after_the_call(catalog, runs, logfire_config):
+    async def configures(**kw):
+        logfire_config()
+        return reply()
+
+    out = run(catalog, runs, env="prod", backend=LiteLLMBackend(configures))
+    assert out.status == "failed" and "logfire.configure" in str(out.error)
+    types = [e.type for e in read_events(out.folder / "evidence")]
+    assert "step_failed" in types and types[-1] == "run_failed"
+    assert [p for p in problems_in(out) if "logfire.configure" in p]
+
+
+def test_a_global_provider_replaced_during_a_run(catalog, runs, monkeypatch):
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+
+    telemetry.providers()
+
+    async def replaces(**kw):
+        monkeypatch.setattr(trace, "_TRACER_PROVIDER", TracerProvider())
+        return reply()
+
+    with pytest.warns(UserWarning, match="tracer provider was replaced"):
+        out = run(catalog, runs, env="dev", backend=LiteLLMBackend(replaces))
+    assert problems_in(out) == ["the global tracer provider was replaced during the run"]
+
+
+def test_a_function_wrapped_during_a_run_is_found_at_its_end(catalog, runs, monkeypatch):
+    import functools
+
+    import httpx
+
+    original = httpx.Client.send
+
+    async def patches(**kw):
+        @functools.wraps(original)
+        def send(*a, **k):
+            return original(*a, **k)
+
+        monkeypatch.setattr(httpx.Client, "send", send)
+        return reply()
+
+    with pytest.warns(UserWarning, match="replaced by a wrapper"):
+        out = run(catalog, runs, env="dev", backend=LiteLLMBackend(patches))
+    assert problems_in(out) == ["httpx.Client.send was replaced by a wrapper during the run"]
+    monkeypatch.setattr(httpx.Client, "send", original)
+    strict = run(catalog, runs, env="prod", backend=LiteLLMBackend(patches))
+    assert strict.status == "failed" and "replaced by a wrapper" in str(strict.error)
+
+
+def test_a_module_loaded_during_a_run_is_not_a_patch(catalog, runs, monkeypatch):
+    import sys
+
+    monkeypatch.delitem(sys.modules, "httpx._transports.mock", raising=False)
+
+    async def loads(**kw):
+        import httpx._transports.mock  # noqa: F401
+        return reply()
+
+    out = run(catalog, runs, env="prod", backend=LiteLLMBackend(loads))
+    assert out.status == "completed", out.error
+
+
+def test_an_mlflow_patch_left_on_is_found_as_the_run_starts(catalog, runs, monkeypatch):
+    import httpx
+
+    monkeypatch.setattr(httpx.Client, "_gorilla_active_patch_send", object(), raising=False)
+    with pytest.raises(RunSettingError, match="MLflow.s patch on httpx.Client.send is still on"):
+        run(catalog, runs, env="prod")
+
+
+# ---- the adversarial review's findings ---------------------------------------
+
+def test_a_strict_problem_is_recorded_when_the_call_fails(catalog, runs, logfire_config):
+    async def configures_then_fails(**kw):
+        logfire_config()
+        raise RuntimeError("model down")
+
+    out = run(catalog, runs, env="prod", backend=LiteLLMBackend(configures_then_fails))
+    assert out.status == "failed" and "model down" in str(out.error)
+    assert [p for p in problems_in(out) if "logfire.configure" in p]
+    assert verify(out.folder / "evidence") == []
+
+
+def test_a_wrapper_is_found_when_the_call_fails(catalog, runs, monkeypatch):
+    import functools
+
+    import httpx
+
+    original = httpx.Client.send
+
+    async def patches_then_fails(**kw):
+        @functools.wraps(original)
+        def send(*a, **k):
+            return original(*a, **k)
+
+        monkeypatch.setattr(httpx.Client, "send", send)
+        raise RuntimeError("model down")
+
+    with pytest.warns(UserWarning, match="replaced by a wrapper"):
+        out = run(catalog, runs, env="dev", backend=LiteLLMBackend(patches_then_fails))
+    assert out.status == "failed" and "model down" in str(out.error)
+    assert problems_in(out) == ["httpx.Client.send was replaced by a wrapper during the run"]
+
+
+def test_a_value_left_by_an_interrupted_end_is_still_the_user_s(catalog, runs, monkeypatch):
+    monkeypatch.setenv("LITELLM_MODE", "DEV")
+    t = telemetry.Telemetry(TelemetryPolicy.deny_all(), "lenient")
+    telemetry._enter_environment(t)
+    with telemetry._lock:  # an end interrupted after it put back all but LITELLM_MODE
+        telemetry._open.clear()
+        for k in [k for k in telemetry._saved if k != "LITELLM_MODE"]:
+            v = telemetry._saved.pop(k)
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    assert os.environ["LITELLM_MODE"] == "PRODUCTION"
+    run(catalog, runs)
+    assert os.environ["LITELLM_MODE"] == "DEV"
+
+
+def test_the_scan_reads_no_member_s_code(monkeypatch):
+    import sys
+    import types
+
+    calls = []
+
+    class Lazy:
+        @property
+        def __class__(self):
+            calls.append("__class__")
+            raise RuntimeError("a lazy load")
+
+        def __getattr__(self, name):
+            calls.append(name)
+            raise RuntimeError("a lazy load")
+
+    for name in ("httpx._lazy_test", "httpx_plugin"):
+        module = types.ModuleType(name)
+        module.x = Lazy()
+        monkeypatch.setitem(sys.modules, name, module)
+    telemetry._scan()
+    assert calls == []
+
+
+@pytest.mark.parametrize("name, watched", [
+    ("httpx", True), ("httpx._client", True), ("openai.types", False), ("openai.types.chat", False),
+    ("openai.lib.typesafe", True), ("httpx_plugin", False), ("requests_toolbelt", False),
+])
+def test_the_scan_watches_whole_package_names(name, watched):
+    assert telemetry._watched(name) is watched
+
+
+def test_the_baseline_holds_the_functions_themselves():
+    import httpx
+
+    _, found = telemetry._scan()
+    assert found["httpx.Client.send"][0] is vars(httpx.Client)["send"]
+
+
+def test_a_problem_found_after_the_record_is_written_when_the_run_opens():
+    class Recorder:
+        closed = False
+
+        def __init__(self):
+            self.events = []
+
+        def emit(self, type_, step, data):
+            self.events.append((type_, data))
+
+    for mode in ("lenient", "strict"):
+        t = telemetry.Telemetry(TelemetryPolicy.deny_all(), mode)
+        t.found("before")
+        t.checked = True  # the start's check, which applied does
+        assert t.record()["problems"] == ["before"]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            t.found("between")
+            recorder = Recorder()
+            t.attach(recorder)
+        assert recorder.events == [("telemetry_problem", {"problem": "between"})]
+        assert t.failed == (["between"] if mode == "strict" else [])
+
+
+def test_a_problem_never_raises_when_warnings_are_errors():
+    class Recorder:
+        closed = False
+        events = []
+
+        def emit(self, type_, step, data):
+            self.events.append(data)
+
+    t = telemetry.Telemetry(TelemetryPolicy.deny_all(), "lenient")
+    t.attach(Recorder())
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        t.found("a problem")
+    assert Recorder.events == [{"problem": "a problem"}]
+
+
+@pytest.mark.parametrize("key, value, recorded", [
+    ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf", "http/protobuf"),
+    ("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc", "grpc"),
+    ("OTEL_SERVICE_NAME", "billing_api.v2", "billing_api.v2"),
+    ("OTEL_SERVICE_NAME", "a b=c", "<not recorded>"),
+])
+def test_a_protocol_and_a_service_name_keep_their_value(key, value, recorded):
+    assert telemetry.variables({key: value}) == {key: recorded}
+
+
+def test_a_problem_found_after_the_start_check_still_fails_a_strict_run(catalog, runs, logfire_config, monkeypatch):
+    from provrun import runner
+
+    new_run_id = runner.new_run_id
+
+    def racing():  # what another thread's run can do between the start's check and run_created
+        logfire_config()
+        telemetry.recheck()
+        return new_run_id()
+
+    monkeypatch.setattr(runner, "new_run_id", racing)
+    out = run(catalog, runs, env="prod")
+    assert out.status == "failed" and "logfire.configure" in str(out.error)
+    assert [p for p in created(out)["problems"] if "logfire.configure" in p]
+    assert verify(out.folder / "evidence") == []
+
+
+def test_the_scan_goes_past_a_module_s_and_a_metaclass_s_own_lookup(monkeypatch):
+    import sys
+    import types
+
+    calls = []
+
+    class Module(types.ModuleType):
+        def __getattribute__(self, name):
+            calls.append(("module", name))
+            return super().__getattribute__(name)
+
+    class Meta(type):
+        def __getattribute__(cls, name):
+            calls.append(("class", name))
+            return super().__getattribute__(name)
+
+    module = Module("httpx._probe_test")
+    module.Probe = Meta("Probe", (), {"__module__": "httpx._probe_test", "f": lambda self: None})
+    monkeypatch.setitem(sys.modules, "httpx._probe_test", module)
+    monkeypatch.setitem(sys.modules, 7, module)  # a key that is not a name
+    calls.clear()
+    _, found = telemetry._scan()
+    assert "httpx._probe_test.Probe.f" in found
+    assert calls == []
+
+
+def test_a_failed_end_check_on_a_failed_run_warns(catalog, runs, monkeypatch):
+    async def fails(**kw):
+        raise RuntimeError("model down")
+
+    def broken(self, *, fail=True):
+        raise ValueError("scan broke")
+
+    monkeypatch.setattr(telemetry.Telemetry, "end", broken)
+    with pytest.warns(UserWarning, match="the end check failed: scan broke"):
+        out = run(catalog, runs, env="dev", backend=LiteLLMBackend(fails))
+    assert "model down" in str(out.error)
+
+
+def test_a_problem_after_the_evidence_closed_warns_in_strict_mode():
+    class Closed:
+        closed = True
+
+    t = telemetry.Telemetry(TelemetryPolicy.deny_all(), "strict")
+    t.attach(Closed())
+    with pytest.warns(UserWarning, match="evidence is closed"):
+        t.found("late")

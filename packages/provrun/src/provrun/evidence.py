@@ -50,6 +50,7 @@ EVENT_TYPES = frozenset({
     "sandbox_started", "sandbox_completed",
     "prompt_rendered", "model_called", "tool_called",
     "output_artifact_created", "note_added", "trace_imported", "step_failed", "telemetry_blocked",
+    "telemetry_problem",
 })
 MODES = ("strict", "lenient")
 

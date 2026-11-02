@@ -23,6 +23,7 @@ and backend can be passed in.
 from __future__ import annotations
 
 import asyncio
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -143,10 +144,20 @@ async def _steps(ctx: RunContext, agent: AgentSpec, stager: Stager | None,
             snapshots.append((input_name(i.uri, i.name), ctx.resolver.snapshot(ctx, grant)))
         run = stager.stage(ctx, snapshots)
         outcome.result = await backend.run(ctx, agent, run)
+        if ctx.telemetry is not None:
+            ctx.telemetry.end()  # the full scan; a strict run with a problem fails here
         stager.verify_inputs(ctx, run)
         outcome.artifacts = Outputter().collect(ctx, run)
     except BaseException as e:  # the run failed; its evidence says why
         error = e
+        if ctx.telemetry is not None and isinstance(e, Exception):
+            try:  # the end scan still runs, but the run keeps its own error
+                ctx.telemetry.end(fail=False)
+            except Exception as end_error:
+                try:
+                    warnings.warn(f"provrun: telemetry: the end check failed: {end_error}", stacklevel=2)
+                except Exception:
+                    pass
         if run is not None and outcome.artifacts is None:
             # Record what a failed run left in output/, so the bundle holds no file the evidence lacks.
             try:
