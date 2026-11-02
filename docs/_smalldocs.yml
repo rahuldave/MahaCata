@@ -15,7 +15,7 @@ website:
         text: Home
       - href: provcat-features.md
         text: provcat
-      - href: provrun.md
+      - href: provrun-features.md
         text: provrun
       - href: provevi.md
         text: provevi
@@ -40,8 +40,9 @@ website:
           - access-notes.md
       - section: provrun
         contents:
-          - provrun.md
+          - provrun-features.md
           - provrun-tour.md
+          - provrun.md
           - provrun-plan.md
       - section: provevi
         contents:

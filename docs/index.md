@@ -16,8 +16,9 @@ provrun depends on provevi and provcat, and provevi depends on provcat. provcat 
 |---|---|
 | See what provcat does, with examples | [What provcat does](provcat-features.md) |
 | Run provcat on your own machine, step by step | [A runnable tour of provcat](tour.md) |
-| Follow one file from a store into a run and its evidence | [A guided tour of provrun](provrun-tour.md) |
-| Run agents with provrun | [provrun](provrun.md) |
+| See what provrun does, with examples | [What provrun does](provrun-features.md) |
+| Run provrun on your own machine, from one file in a store to the evidence of its runs | [A runnable tour of provrun](provrun-tour.md) |
+| Look up provrun's run file, library, telemetry policy and limits | [provrun](provrun.md) |
 | List, show and check the evidence of runs | [provevi](provevi.md) |
 | Install lakeFS, etcd and the tools that the tests need, and run the tests | [Setup](setup.md) |
 | Learn how the parts of provcat fit together | [Design](design.md) |
