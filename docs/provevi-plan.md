@@ -74,6 +74,8 @@ In a controlled environment, the evidence must be the only record of a run, unle
 
 The code goes into provrun, in a new module, because it acts on the process that runs the agent. provevi checks the policy and records what the module blocked.
 
+**Status: provevi's part is built.** [provevi's page](provevi.md) describes the policy, `prove policy` and `prove telemetry`. The steps in provrun are not built.
+
 1. **Write the telemetry policy.** The operator owns a policy file. It lists the approved libraries, with the versions that were tested and the telemetry that each may use. It lists the approved destinations, such as Logfire, an OpenTelemetry endpoint or the copy in MLflow. For each destination, it says what the destination may receive. The levels are names and times, also token counts, or also bodies. It lists the network hosts that a run may reach. A run file's `telemetry` section can narrow the policy, but never widen it.
 2. **Set the environment before any import.** Set `LITELLM_LOCAL_MODEL_COST_MAP=True`, `LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS=True`, `LITELLM_MODE=PRODUCTION`, `PYDANTIC_AI_NO_BANNER=1`, `MLFLOW_USE_DEFAULT_TRACER_PROVIDER=true`, `MLFLOW_DISABLE_TELEMETRY=true` and `MLFLOW_TRACE_SAMPLING_RATIO=0`. Remove each `OTEL_*`, `LOGFIRE_*` and debug variable that the policy does not approve. Do not use `OTEL_SDK_DISABLED`, because it also stops provrun's own spans.
 3. **Own the providers.** provrun sets the global tracer, meter and logger providers first. Its tracer provider refuses a span processor that it did not add, and records the attempt.

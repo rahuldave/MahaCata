@@ -10,6 +10,9 @@ A program checks a run as ``prove verify`` does::
 provrun writes runs through a store: ``FileStore``, or ``SqliteStore``, which
 also answers queries across runs. ``open_store`` opens one from a URI. Every
 error that provevi raises on purpose is a ``ProveviError``.
+
+``TelemetryPolicy`` reads the operator's telemetry policy, which says what
+may record or send data from a run besides the evidence.
 """
 from .checks import (ENDINGS, RunCheck, bundle_pin, read_events, verify, verify_against, verify_bundle,
                      verify_outputs, verify_run, verify_store_copy)
@@ -17,6 +20,8 @@ from .errors import CannotReadBack, EvidenceError, ProveviError, RunNotFound
 from .events import CONFIDENCE, EvidenceEvent, canonical, now, sha256_bytes
 from .runs import default_runs_root, find_run, list_runs
 from .sqlite import SCHEMA_VERSION, SqliteRecord, SqliteRunWriter, SqliteStore
+from .telemetry import (BLOCKED, LEVELS, Destination, Library, TelemetryPolicy, attributes_for, blocked_data,
+                        split_body)
 from .store import (EvidenceStore, FileRunWriter, FileStore, FolderRecord, JsonlSink, PayloadStore, RunRecord,
                     RunWriter, Sink, check_store_uri, open_store)
 
@@ -26,4 +31,5 @@ __all__ = [
     "RunWriter", "Sink", "SqliteRecord", "SqliteRunWriter", "SqliteStore", "bundle_pin", "canonical", "check_store_uri",
     "default_runs_root", "find_run", "list_runs", "now", "open_store", "read_events", "sha256_bytes", "verify",
     "verify_against", "verify_bundle", "verify_outputs", "verify_run", "verify_store_copy",
+    "BLOCKED", "LEVELS", "Destination", "Library", "TelemetryPolicy", "attributes_for", "blocked_data", "split_body",
 ]

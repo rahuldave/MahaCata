@@ -1,0 +1,17 @@
+# An example telemetry policy, as an operator writes one.
+version: 1
+libraries:
+  pydantic-ai:
+    versions: ">=2.64,<2.65"
+    telemetry: [logfire]
+  litellm:
+    versions: "==1.83.0"
+destinations:
+  logfire:
+    kind: logfire
+    receives: usage
+    endpoint: https://logfire-us.pydantic.dev
+hosts:
+  - api.anthropic.com
+  - .amazonaws.com
+  - logfire-us.pydantic.dev

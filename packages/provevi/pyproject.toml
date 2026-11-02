@@ -5,7 +5,9 @@ description = "Store, read and check the evidence of provrun's runs"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "packaging>=24",
     "provcat",
+    "pyyaml>=6.0.3",
 ]
 
 [project.scripts]

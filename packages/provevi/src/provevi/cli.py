@@ -1,4 +1,4 @@
-"""prove: list, show, query and verify the evidence of runs.
+"""prove: list, show, query and verify the evidence of runs, and check a telemetry policy.
 
 prove only reads and checks. Runs are written by provrun, through a provevi
 store. Each command calls a library function and prints what it returns.
@@ -71,21 +71,52 @@ def cmd_access(args) -> int:
 
 
 def cmd_show(args) -> int:
-    store = store_of(args)
-    in_store = not isinstance(store, FileStore) and store.run(str(args.run)) is not None
-    if not in_store:
-        events = read_events(run_folder(args, store) / "evidence")
-    else:
-        events = []
-        for n, line in enumerate(store.read_run(str(args.run)).lines()):
-            try:
-                events.append(EvidenceEvent.from_line(line))
-            except (ValueError, TypeError) as e:
-                raise EvidenceError(f"line {n}: not an event: {e}") from e
-    for e in events:
+    for e in _events(args):
         refs = " ".join(e.refs)
         data = json.dumps(e.data, ensure_ascii=False, default=str)
         print(f"{e.seq:4} {e.time} {e.type:24} {e.component:24} {refs} {data}")
+    return 0
+
+
+def _events(args) -> list[EvidenceEvent]:
+    """The events of args.run, from the store if it holds the run, else from its folder."""
+    store = store_of(args)
+    if isinstance(store, FileStore) or store.run(str(args.run)) is None:
+        return read_events(run_folder(args, store) / "evidence")
+    events = []
+    for n, line in enumerate(store.read_run(str(args.run)).lines()):
+        try:
+            events.append(EvidenceEvent.from_line(line))
+        except (ValueError, TypeError) as e:
+            raise EvidenceError(f"line {n}: not an event: {e}") from e
+    return events
+
+
+def cmd_policy(args) -> int:
+    from .telemetry import TelemetryPolicy
+
+    policy = TelemetryPolicy.load(args.file)
+    print(f"{policy.source}: sha256 {policy.digest()}")
+    for name, lib in sorted(policy.libraries.items()):
+        print(f"  library {name} {lib.versions} feeds {', '.join(lib.telemetry) or 'nothing'}")
+    for name, d in sorted(policy.destinations.items()):
+        print(f"  destination {name} ({d.kind}) receives {d.receives}" + (f" at {d.endpoint}" if d.endpoint else ""))
+    print(f"  hosts: {', '.join(policy.hosts) or 'none'}")
+    problems = policy.check_installed()
+    for p in problems:
+        print(f"prove: {p}", file=sys.stderr)
+    return 1 if problems else 0
+
+
+def cmd_telemetry(args) -> int:
+    from .telemetry import BLOCKED
+
+    blocked = [e for e in _events(args) if e.type == BLOCKED]
+    for e in blocked:
+        lib = e.data.get("library") or ""
+        print(f"{e.seq:4} {e.time} {e.data.get('path', '')} {lib}  {e.data.get('detail', '')}".rstrip())
+    if not blocked:
+        print(f"{args.run}: no blocked attempts")
     return 0
 
 
@@ -136,6 +167,12 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("show", help="print the events of a run")
     s.add_argument("run")
     s.set_defaults(fn=cmd_show)
+    t = sub.add_parser("telemetry", help="print the telemetry that the policy blocked in a run")
+    t.add_argument("run")
+    t.set_defaults(fn=cmd_telemetry)
+    p = sub.add_parser("policy", help="check a telemetry policy file, and the installed versions of its libraries")
+    p.add_argument("file")
+    p.set_defaults(fn=cmd_policy)
     v = sub.add_parser("verify", help="check the evidence, the outputs and the committed bundle of a run")
     add_verify_arguments(v)
     v.set_defaults(fn=lambda a: verify_command(a, "prove"))
