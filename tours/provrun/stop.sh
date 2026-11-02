@@ -27,3 +27,4 @@ _tour_stop() {
   fi
 }
 _tour_stop
+unset -f _tour_stop
