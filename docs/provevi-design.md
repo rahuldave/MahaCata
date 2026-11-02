@@ -80,7 +80,7 @@ Reasons for MLflow first:
 
 Rules for the MLflow driver:
 
-1. **Never read or write MLflow's tables directly, with one exception.** Use its client API or OTLP. The exception is the one `runs` row that gives a run provrun's ID, in the section "IDs" below. There were ten trace-related migrations in about 18 months.
+1. **Never read or write MLflow's tables directly.** Use its client API or OTLP. There were ten trace-related migrations in about 18 months. Changed on 2026-11-02: the one exception, a `runs` row with provrun's ID, is gone, as the section "IDs" below says. The copy uses two calls that MLflow does not make public. They are its store's `log_spans` and its tracing client's `log_assessment`, and the test of each minor release covers them.
 2. **Pin one minor version**, and test the driver against each new minor release.
 3. **Load `mlflow` only inside the driver**, as an optional extra. With its dependencies it takes about 509 MB.
 4. **Flush before reading back**, with `mlflow.flush_trace_async_logging()`. Trace writes are asynchronous.
@@ -150,7 +150,7 @@ The decisions, agreed on 2026-10-31, are these:
 3. **The OTLP receiver is provevi's code, and a run owns its lifetime.** provrun starts a provevi receiver at the start of a run, on `localhost` at a free port, and stops it when the run is sealed. Changed on 2026-11-02: a run in process needs no receiver, because provrun writes its spans to the store through the store's span exporter. The receiver is for agents in another process, in Phase 6.
 
 4. **provevi's own tables are the record of runs and experiments,** and MLflow holds a copy. The section "The run record" gives the tables.
-5. **MLflow uses provrun's run IDs.** provevi writes MLflow's `runs` row with provrun's ID, and finds an MLflow experiment by its unique name.
+5. **MLflow uses provrun's run IDs.** provevi writes MLflow's `runs` row with provrun's ID, and finds an MLflow experiment by its unique name. Changed on 2026-11-02: MLflow picks its own run ID, and provevi tags the run with provrun's ID, as the section "IDs" says.
 6. **The command is `prove`.**
 7. **Claude Code's full model requests and responses are kept when a run asks for them.** They are off by default, and are stored once each by hash, as payloads.
 8. **The first build stores content as it is, with no redaction,** but only in payloads named by hash, never in span attributes. Redaction rules come later, behind provrun's redaction hook.
@@ -194,7 +194,7 @@ Grants, refusals, inputs and outputs are views over `provevi_events`, so the rec
 | `experiments` | One per provevi experiment. Its name is the experiment's logical name, for example `acme/demo/dev/revenue-agent`. |
 | `runs` | One per run, with provrun's own run ID. |
 | `params`, `tags`, `metrics` | The settings, the organisation, domain and environment, and the token counts, costs and call counts. |
-| `datasets`, `inputs` | Each staged input. The source is the pinned URI with its full SHA-256, and the digest is the first 32 characters of the SHA-256. |
+| `datasets`, `inputs` | Each staged input. The source is a JSON object with the full SHA-256, and with `bodies` the URI and the pinned URI. The digest is 32 characters of the SHA-256 of the name and the source. |
 | traces and spans | The spans of the run. Each trace names the run in `mlflow.sourceRun`. |
 | `assessments` | Judgements on a trace or a span. |
 
@@ -204,12 +204,12 @@ The copy can be rebuilt from provevi's tables, the bundle and the stored spans. 
 
 MLflow's API cannot create a run with a given ID. Its store makes the ID itself (`run_id = uuid.uuid4().hex` in `create_run`), and `start_run(run_id=...)` only resumes a run that exists. Experiment numbers come from the database's counter.
 
-So provevi does two things:
+The first plan wrote the one `runs` row with provrun's ID straight into MLflow's tables. A tracking server takes no such row through its REST API, so the plan changed on 2026-11-02. provevi now does these things:
 
-- **It writes the one `runs` row itself, with provrun's run ID,** using MLflow's own row model, `SqlRun`, as `create_run` does. Then `start_run(run_id=...)` resumes that run, and everything after goes through the public API. MLflow accepts run IDs that match `^[a-zA-Z0-9][\w\-]{0,255}$`, and provrun's IDs, such as `run-20261031T164032Z-451450d6`, match. They are 29 characters long, so they also fit the 32-character column on stricter databases.
-- **It finds an experiment by its unique name,** with `get_experiment_by_name`, and keeps MLflow's number in `provevi_experiments`.
-
-The `runs` row is the one place where provevi writes MLflow's tables without its API. The driver test must check it against each MLflow minor release.
+- **It lets MLflow pick the run ID,** and tags the run `provrun.run_id` with provrun's ID. The run's name is provrun's ID too. provevi finds the copy by the tag, and records MLflow's ID in no table of its own.
+- **It keeps provrun's trace ID.** MLflow names the trace `tr-` and provrun's trace ID, both in a database and on a tracking server, and keeps each span ID.
+- **It writes spans and assessments through private parts of MLflow's client,** `client._tracking_client.store.log_spans` and `client._tracing_client.log_assessment`. The public tracing calls add the user name and the git commit, and `log_assessment` has no public call. provevi pins MLflow to 3.17 for this reason.
+- **It finds an experiment by its unique name,** with `get_experiment_by_name`. The experiment's number differs from place to place, so `provevi_experiments` does not keep it.
 
 ### What a test showed
 
@@ -218,7 +218,7 @@ A test with MLflow 3.17.2 checked these:
 - provevi's tables, made first in the same SQLite file, did not stop MLflow from making its own tables. A new client opened the file afterwards.
 - A run row with provrun's ID, resumed with `start_run(run_id=...)`, took settings, metrics, an input, a trace and a judgement.
 - `get_run`, `search_runs` by tag, `search_traces` by run and `get_trace` all returned provrun's ID. The trace's `mlflow.sourceRun` was provrun's ID.
-- MLflow refused a 64-character SHA-256 as a dataset digest, with "'digest' exceeds the maximum length of 36 characters". A 32-character digest worked, with the full SHA-256 in the source URI.
+- MLflow refused a 64-character SHA-256 as a dataset digest, with "'digest' exceeds the maximum length of 36 characters". A 32-character digest worked, with the full SHA-256 in the source.
 - `mlflow server` on the file served the run and its input, and its web page loaded.
 
 ## Libraries first, with a command line on top

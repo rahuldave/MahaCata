@@ -139,6 +139,38 @@ def attributes_for(attributes: Mapping[str, Any], level: str) -> dict[str, Any]:
     return {k: v for k, v in attributes.items() if LEVELS.index(level_of(k, v)) <= top}
 
 
+def distribution_of(module: str) -> str | None:
+    """The distribution that installed module, the name pip knows it by, such
+    as opentelemetry-sdk for opentelemetry.sdk.trace. A module that no
+    distribution installed gives its own top name, as a program may name its
+    own; an empty name gives None."""
+    top = module.split(".")[0]
+    if not top:
+        return None
+    try:
+        names = metadata.packages_distributions().get(top, [])
+    except Exception:  # a broken install elsewhere; the module still has a name
+        return top
+    if len(names) == 1:
+        return names[0]
+    # A namespace package, such as opentelemetry, comes from many
+    # distributions. The one whose files hold the longest part of the module's
+    # path installed it, so mlflow.sklearn goes to the one that ships it.
+    parts = module.split(".")
+    held = {}
+    for name in names:
+        try:
+            held[name] = {str(f).replace("\\", "/") for f in metadata.files(name) or ()}
+        except Exception:  # a broken install names no files
+            held[name] = set()
+    for n in range(len(parts), 0, -1):
+        stem = "/".join(parts[:n])
+        for name in names:
+            if f"{stem}.py" in held[name] or f"{stem}/__init__.py" in held[name]:
+                return name
+    return names[0] if names else top
+
+
 def split_body(attributes: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     """The attributes in two parts: those an event may keep, which are names
     and usage, and the bodies, which the evidence keeps as a payload."""
@@ -518,21 +550,46 @@ def _scheme(url: str) -> str:
 _BAD_CHARS = re.compile(r"[\\\s\x00-\x1f\x7f#]")
 _HOST = re.compile(r"[a-z0-9.-]+|\[[0-9a-f:.]+\]")
 _PROTOCOLS = ("grpc", "http/protobuf", "http/json")
+# The settings that a database URL may carry, each with the values it takes.
+# None of them names a server, a socket or a file, so the URL's place stays
+# its host. The normal form drops them.
+_SAFE_QUERY = {
+    "postgresql": {"sslmode": re.compile(r"disable|allow|prefer|require|verify-ca|verify-full"),
+                   "connect_timeout": re.compile(r"[0-9]{1,4}"),
+                   "application_name": re.compile(r"[A-Za-z0-9_.-]{1,64}")},
+    "mysql": {"charset": re.compile(r"[a-z0-9_]{1,32}"), "connect_timeout": re.compile(r"[0-9]{1,4}")},
+}
+
+
+_KEPT_QUERY = ("sslmode=",)
+
+
+def _safe_query(scheme: str, query: str) -> bool:
+    allowed = _SAFE_QUERY.get(scheme, {})
+    seen = set()
+    for item in query.split("&"):
+        key, eq, value = item.partition("=")
+        if not eq or key in seen or key not in allowed or not allowed[key].fullmatch(value):
+            return False
+        seen.add(key)
+    return True
 
 
 def normal_endpoint(url: str) -> str:
     """url in one regular form, so that two ways of writing one address are
     equal. The scheme and the host are lowercased, and the default port is
-    added. A trailing / is dropped, except from a sqlite path, and so are a
-    database driver such as +psycopg and the user and password of a database
-    URL. A sqlite URL keeps only its path.
+    added. A trailing / is dropped, except from a sqlite path. So are a
+    database driver such as +psycopg, the user and password of a database
+    URL, and the allowed settings of its query but sslmode, which stays, so
+    that a policy can ask for TLS. A sqlite URL keeps only its path.
 
     Raises ProveviError for anything that two URL parsers could read as two
     different places: a backslash, a space, a control character or a #; a
     host that is not ASCII, because two standards of international names
     read some hosts differently; a user in an http or https URL; a % in the
     host; a port of 0 or an empty port; a path with . or .. segments or //;
-    a query, which can name another server, as ?host= does; a host list; a
+    a query, which can name another server, as ?host= does, except the
+    settings in _SAFE_QUERY, such as sslmode=require; a host list; a
     relative sqlite path; an mssql URL with no port or no database, which
     ODBC can read as the name of a data source. Also for a URL that is not
     http, https or a database."""
@@ -556,8 +613,10 @@ def normal_endpoint(url: str) -> str:
         raise ProveviError(f"{url!r} is not an http, https or database URL with a host")
     if "@" in parts.netloc and not database:
         raise ProveviError(f"{url!r}: an http or https endpoint names no user or password")
-    if parts.query or url.endswith("?"):
-        raise ProveviError(f"{url!r}: an endpoint has no query, because a query can name another server")
+    if url.endswith("?") or (parts.query and not _safe_query(scheme, parts.query)):
+        allowed = ", ".join(_SAFE_QUERY.get(scheme, ())) or "none"
+        raise ProveviError(f"{url!r}: an endpoint has no query, because a query can name another server; "
+                           f"the settings allowed for {scheme} are {allowed}")
     if scheme == "mssql" and (port is None or parts.path.strip("/") == ""):
         raise ProveviError(f"{url!r}: write an mssql URL with a port and a database, so ODBC cannot read it as a data source")
     hostport = parts.netloc.rpartition("@")[2]
@@ -568,7 +627,11 @@ def normal_endpoint(url: str) -> str:
         host = f"[{host}]"  # an IPv6 address
     if not _HOST.fullmatch(host):
         raise ProveviError(f"{url!r}: {host!r} is not a host name")
-    return f"{scheme}://{host}:{port if port is not None else _DEFAULT_PORTS[scheme]}{_path(url, parts.path)}"
+    # sslmode stays, so that a policy can ask for TLS; the other settings name
+    # no place and change nothing that a policy decides.
+    kept = sorted(item for item in parts.query.split("&") if item.startswith(_KEPT_QUERY)) if parts.query else []
+    query = "?" + "&".join(kept) if kept else ""
+    return f"{scheme}://{host}:{port if port is not None else _DEFAULT_PORTS[scheme]}{_path(url, parts.path)}{query}"
 
 
 def _path(url: str, path: str, keep_slash: bool = False) -> str:

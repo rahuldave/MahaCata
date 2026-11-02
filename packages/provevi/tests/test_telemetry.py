@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import re
+
 import pytest
 
 from provevi import EvidenceEvent, FileStore, ProveviError, sha256_bytes
@@ -386,6 +388,44 @@ def test_different_endpoints_stay_different(a, b):
 ])
 def test_normal_endpoint_refuses_what_is_not_one_clear_place(url, words):
     with pytest.raises(ProveviError, match=words):
+        normal_endpoint(url)
+
+
+@pytest.mark.parametrize("url", [
+    "postgresql://db.example.com/mlflow?sslmode=require",
+    "postgresql://u:pw@db.example.com/mlflow?sslmode=verify-full&connect_timeout=10&application_name=provrun",
+    "mysql://db.example.com/mlflow?charset=utf8mb4",
+])
+def test_a_database_url_may_carry_safe_settings(url):
+    base = url.split("?")[0].replace("u:pw@", "")
+    sslmode = re.search(r"sslmode=[a-z-]+", url)
+    assert normal_endpoint(url) == normal_endpoint(base) + (f"?{sslmode[0]}" if sslmode else "")
+
+
+def test_a_policy_can_ask_for_tls():
+    # Review finding: sslmode was dropped, so a URL with sslmode=disable
+    # matched a policy that names sslmode=require.
+    doc = {"version": 1, "hosts": ["db.example.com"], "destinations": {"pg": {
+        "kind": "mlflow", "receives": "names", "endpoint": "postgresql://db.example.com/m?sslmode=verify-full"}}}
+    p = TelemetryPolicy.from_dict(doc)
+    assert p.match_destination("mlflow", "postgresql://u:pw@db.example.com/m?sslmode=verify-full").name == "pg"
+    assert p.match_destination("mlflow", "postgresql://db.example.com/m?sslmode=disable") is None
+    assert p.match_destination("mlflow", "postgresql://db.example.com/m") is None
+
+
+@pytest.mark.parametrize("url", [
+    "postgresql://db.example.com/m?sslmode=require&host=evil.example",
+    "postgresql://db.example.com/m?sslmode=require&sslmode=disable",
+    "postgresql://db.example.com/m?sslmode=bogus",
+    "postgresql://db.example.com/m?sslmode",
+    "postgresql://db.example.com/m?service=evil",
+    "postgresql://db.example.com/m?sslrootcert=/tmp/x",
+    "mysql://db.example.com/m?unix_socket=/tmp/x",
+    "sqlite:////srv/m.db?mode=ro",
+    "https://otel.example.com/v1?sslmode=require",
+])
+def test_any_other_query_is_refused(url):
+    with pytest.raises(ProveviError):
         normal_endpoint(url)
 
 

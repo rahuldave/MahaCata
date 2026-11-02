@@ -1,0 +1,18 @@
+# The run file of the tour. start.sh writes it into the tour's folder, with
+# TOUR_DIR replaced by the folder. The model's answer is mocked, so the run
+# needs no key and no network.
+run:
+  org: acme
+  domain: demo
+  env: dev
+  actor: you@example.com
+agent:
+  name: revenue-question
+  backend: litellm
+  model: openai/gpt-4o-mini
+  instructions: Answer from the document only.
+  prompt: What was revenue in 2025?
+  inputs:
+    - file://TOUR_DIR/report.txt
+  settings:
+    mock_response: Revenue in 2025 was 42 million.

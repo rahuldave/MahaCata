@@ -5,7 +5,7 @@ description = "Workspace root for provcat, provrun and provevi"
 requires-python = ">=3.13"
 dependencies = [
     "provcat",
-    "provevi",
+    "provevi[mlflow]",
     "provrun[litellm,otlp,pydantic-ai]",
 ]
 
@@ -37,6 +37,7 @@ dev = [
     "google-cloud-storage>=3.17.1",
     "huggingface_hub>=2.4.0",
     "moto[server]>=5.2.4",
+    "psycopg[binary]>=3.2",
     "pytest>=9.1.1",
 ]
 docs = [
