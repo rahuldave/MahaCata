@@ -1,0 +1,9 @@
+# A telemetry policy that approves LiteLLM at the tested version, sends spans
+# nowhere, and lets a run reach only OpenAI.
+version: 1
+libraries:
+  litellm:
+    versions: "==1.83.0"
+destinations: {}
+hosts:
+  - api.openai.com

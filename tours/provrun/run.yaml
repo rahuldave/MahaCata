@@ -1,0 +1,18 @@
+# One question about one input. mock_response fixes the answer, so the tour
+# needs no model and no key. The bundle is committed through the scheme run.
+run:
+  org: acme
+  domain: demo
+  env: dev
+  actor: you@example.com
+  bundle_scheme: run
+agent:
+  name: revenue-question
+  backend: litellm
+  model: openai/gpt-4o-mini
+  instructions: Answer from the document only.
+  prompt: What was revenue in 2025?
+  inputs:
+    - data://acme/demo/dev/reports/report.txt
+  settings:
+    mock_response: Revenue in 2025 was 42 million.

@@ -1,0 +1,24 @@
+# The provcat configuration of the provrun tour. start.sh sets TOUR_DIR and
+# starts moto, a local S3 server, on TOUR_S3_PORT.
+cache:
+  root: ${oc.env:TOUR_DIR}/cache
+
+stores:
+  # moto, which speaks the S3 protocol.
+  local-s3:
+    driver: s3
+    endpoint_url: http://localhost:${oc.env:TOUR_S3_PORT,5055}
+
+schemes:
+  # data://org/domain/env/path -> the bucket data, on the branch main
+  data:
+    parts: [org, domain, env]
+    rest: path
+    target: "local-s3://data/{ref}/{org}/{domain}/{env}/{path}"
+    ref: main
+  # run://org/domain/env/path -> the bucket runs, which holds the bundles
+  run:
+    parts: [org, domain, env]
+    rest: path
+    target: "local-s3://runs/{ref}/{org}/{domain}/{env}/{path}"
+    ref: main

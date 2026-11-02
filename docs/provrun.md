@@ -1,6 +1,6 @@
 # provrun
 
-provrun runs agents and model calls on data that provcat resolves, and records the evidence of each run. provrun is the caller of record. It makes the run ID, asks the broker for each input, makes read-only snapshots of the inputs through provcat and runs the agent. Then it writes the evidence and the outputs as one bundle. [provrun-plan.md](provrun-plan.md) has the design and the reasons for it. [provrun-tour.md](provrun-tour.md) is a guided tour that follows one file from a store into a run and its evidence.
+provrun runs agents and model calls on data that provcat resolves, and records the evidence of each run. provrun is the caller of record. It makes the run ID, asks the broker for each input, makes read-only snapshots of the inputs through provcat and runs the agent. Then it writes the evidence and the outputs as one bundle. [provrun-plan.md](provrun-plan.md) has the design and the reasons for it. [What provrun does](provrun-features.md) shows each feature with real output, and [the tour](provrun-tour.md) runs the same commands from a script, `tours/provrun/run.sh`.
 
 ## Terms
 

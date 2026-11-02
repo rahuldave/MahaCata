@@ -1,100 +1,114 @@
-# A guided tour of provrun
+---
+title: A runnable tour of provrun
+---
 
-This tour follows one file from a store, through the provcat cache, into a run of an agent, and into the evidence of that run. Each step gives commands to run and the output that they print. After each command, the tour says what happened inside. [provrun.md](provrun.md) is the reference for provrun, and [tour.md](tour.md) is the tour of provcat alone.
+This tour follows one file from a store, through the provcat cache, into a run of an agent, and into the evidence of that run. It needs no model, no key and no network, except in the last step, which is optional. The agent answers with the LiteLLM setting `mock_response`. The store is moto, a local server that speaks the S3 protocol, which the tests also use.
 
-The tour needs no model and no key. The agent answers with the LiteLLM setting `mock_response`. The store is moto, a local S3 server that the tests also use. The last step calls a real model, and it is optional.
+A script, `tours/provrun/run.sh`, runs every step and prints each command before its output. The output below is from that script. The run IDs, times, version IDs and hashes differ on each run. [What provrun does](provrun-features.md) shows the features first, and [provrun.md](provrun.md) is the reference. [The provcat tour](tour.md) shows provcat alone.
 
 ## Terms
 
 | Term | Meaning |
 |---|---|
 | cache | The folder where provcat keeps the files that it fetched. |
-| pinned URI | A URI with a fixed version, for example `?at=version:235061e9-...`. |
+| pinned URI | A URI with a fixed version, for example `?at=version:d3ae2233-...`. |
 | snapshot | A read-only copy of one pinned version, in a folder named by the SHA-256 of its content. |
 | run folder | The folder of one run. It holds `input/`, `output/`, `scratch/` and `evidence/`. |
+| evidence | The events of a run, each holding the SHA-256 of the one before, and the payloads they name. |
 | bundle | The evidence and the outputs of a run. If the run sets `bundle_scheme`, provrun commits the bundle to a store. Otherwise it stays in the run folder. |
+| telemetry policy | The operator's file that says which libraries may record a run, and where a run's spans may go. |
+| span | One timed step of a run, in the OpenTelemetry format that collectors read. |
 
 ## Before you start
 
-You need Python 3.13 and [uv](https://docs.astral.sh/uv/). Run every command from the top folder of the repository.
+You need Python 3.13, [uv](https://docs.astral.sh/uv/), `curl` and `bash`.
 
-1. Install the packages.
+1. Clone the repository, and go into its top folder. Run every command of the tour from there.
+
+   ```
+   git clone https://github.com/rahuldave/MahaCata
+   cd MahaCata
+   ```
+
+2. Install the packages.
 
    ```
    uv sync
    ```
 
-2. Start moto in a second terminal.
+## Run the whole tour
+
+Run the script. It takes about 45 seconds.
+
+```
+bash tours/provrun/run.sh
+```
+
+Add `--online` to run Step 13 too, which calls a real model. The script starts moto and a small collector, runs the steps, stops both and deletes its scratch folder.
+
+## Or run it step by step
+
+1. Start the tour in your shell.
 
    ```
-   uv run moto_server -p 5055
+   source tours/provrun/start.sh
    ```
 
-3. Point everything at a scratch folder, so the tour does not touch your real cache or your real runs. Give moto any keys, because it does not check them.
+   The script does these things:
+
+   - It makes the scratch folder `/tmp/provrun-tour`, or the folder in `TOUR_DIR`. It refuses a folder that is already there, unless an earlier tour made it, and a second start in the same shell.
+   - It points `PROVCAT_CONFIG`, `PROVCAT_CACHE` and `PROVRUN_RUNS` at that folder, so the tour does not touch your own cache or runs.
+   - It sets fake AWS keys for moto. It unsets `AWS_PROFILE`, `AWS_SESSION_TOKEN`, the provcat hook variables, the proxy and Postgres variables, and every `OTEL_`, `LOGFIRE_`, `MLFLOW_` and `LITELLM_` variable. These variables would change what a run records.
+   - It keeps the old values in a shell variable that it does not export, so that `stop.sh` can put them back. It never prints them.
+   - It hides one LiteLLM warning, that a logging coroutine was never awaited, through `PYTHONWARNINGS`.
+   - It starts moto on port 5055, or the port in `TOUR_S3_PORT`. It starts the collector on port 4318, or the port in `TOUR_OTLP_PORT`. It refuses a port that is in use.
+   - It makes the buckets `data` and `runs`, with versioning on, and copies the tour's files into the folder.
+
+2. Copy each command of the steps below into the same shell, in order. Copy only the text after `$ `.
+
+3. Stop the tour when you finish, in the same shell.
 
    ```
-   mkdir -p /tmp/provrun-tour
-   export PROVCAT_CACHE=/tmp/provrun-tour/cache
-   export PROVRUN_RUNS=/tmp/provrun-tour/runs
-   export PROVCAT_CONFIG=/tmp/provrun-tour/provcat.yaml
-   export AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_DEFAULT_REGION=us-east-1
+   source tours/provrun/stop.sh
    ```
 
-4. Make two versioned buckets. The bucket `data` holds the data, and the bucket `runs` holds the bundles.
+   It stops moto and the collector, deletes the scratch folder, and gives each variable that `start.sh` changed its old value.
 
-   ```
-   uv run python -c "
-   import boto3
-   s = boto3.client('s3', endpoint_url='http://localhost:5055')
-   for b in ('data', 'runs'):
-       s.create_bucket(Bucket=b)
-       s.put_bucket_versioning(Bucket=b, VersioningConfiguration={'Status': 'Enabled'})"
-   ```
+## The tour's files
 
-5. Write the provcat configuration to `/tmp/provrun-tour/provcat.yaml`. It has one store and two logical schemes. A URI `data://acme/demo/dev/reports/report.txt` names the org `acme`, the domain `demo` and the environment `dev`.
+| File | What it is |
+|---|---|
+| `tours/provrun/provcat.yaml` | The provcat configuration. It has one store, `local-s3`, which is moto, and two logical schemes. `data://acme/demo/dev/reports/report.txt` names the org `acme`, the domain `demo` and the environment `dev`, in the bucket `data`. `run://` names the bucket `runs`, which holds the bundles. |
+| `tours/provrun/run.yaml` | The run file. It asks one question about one input, and commits the bundle through the scheme `run`. |
+| `tours/provrun/policy.yaml` | The telemetry policy of Step 10. |
+| `tours/provrun/quiet.py` | The program of Step 11. |
+| `tours/provrun/collector.py` | The collector of Step 12. |
+| `tours/provrun/field.py`, `event.py`, `spans.py`, `modes.py`, `drop_event.py` | Small helpers that print one field of a run's output or evidence, or change the evidence. |
 
-   ```yaml
-   stores:
-     local-s3:
-       driver: s3
-       endpoint_url: http://localhost:5055
-   schemes:
-     data:
-       parts: [org, domain, env]
-       rest: path
-       target: "local-s3://data/{ref}/{org}/{domain}/{env}/{path}"
-       ref: main
-     run:
-       parts: [org, domain, env]
-       rest: path
-       target: "local-s3://runs/{ref}/{org}/{domain}/{env}/{path}"
-       ref: main
-   ```
+The run file holds this:
 
-6. Write the run file to `/tmp/provrun-tour/run.yaml`. It asks one question about one input, and commits the bundle through the scheme `run`.
-
-   ```yaml
-   run:
-     org: acme
-     domain: demo
-     env: dev
-     actor: you@example.com
-     bundle_scheme: run
-   agent:
-     name: revenue-question
-     backend: litellm
-     model: openai/gpt-4o-mini
-     instructions: Answer from the document only.
-     prompt: What was revenue in 2025?
-     inputs:
-       - data://acme/demo/dev/reports/report.txt
-     settings:
-       mock_response: Revenue in 2025 was 42 million.
-   ```
+```yaml
+run:
+  org: acme
+  domain: demo
+  env: dev
+  actor: you@example.com
+  bundle_scheme: run
+agent:
+  name: revenue-question
+  backend: litellm
+  model: openai/gpt-4o-mini
+  instructions: Answer from the document only.
+  prompt: What was revenue in 2025?
+  inputs:
+    - data://acme/demo/dev/reports/report.txt
+  settings:
+    mock_response: Revenue in 2025 was 42 million.
+```
 
 ## The path of one input
 
-```
+```text
 data://acme/demo/dev/reports/report.txt            the logical URI in the run file
   | StubBroker: may this run read it?              access_requested, access_granted
   | provcat: resolve to the store                  context_resolved
@@ -114,8 +128,9 @@ runs/<run ID>/input/report.txt                     the agent sees /input/report.
 Write the report, put it in the bucket and commit the folder.
 
 ```
-$ echo "Revenue in 2025 was 42 million." > /tmp/provrun-tour/report.txt
-$ uv run provc put data://acme/demo/dev/reports/report.txt /tmp/provrun-tour/report.txt
+$ echo "Revenue in 2025 was 42 million." > $TOUR_DIR/report.txt
+
+$ uv run provc put data://acme/demo/dev/reports/report.txt $TOUR_DIR/report.txt
 [
   {
     "uri": "local-s3://data/main/acme/demo/dev/reports/report.txt",
@@ -124,8 +139,9 @@ $ uv run provc put data://acme/demo/dev/reports/report.txt /tmp/provrun-tour/rep
     "version": "de5877cfcc0dfd578914982c36e261dc"
   }
 ]
-$ uv run provc commit data://acme/demo/dev/reports -m "first report"
-local-s3://data/main/acme/demo/dev/reports?at=commit:5b1233df...
+
+$ uv run provc commit data://acme/demo/dev/reports -m 'first report'
+local-s3://data/main/acme/demo/dev/reports?at=commit:97a34a15217876c6b5f14a2be09f07178921398374a7a0769f1c4001a68a5615
 ```
 
 The `version` that `put` prints is the ETag of the object, a hash that S3 gives its content. The pin below shows the version ID instead, which a versioned bucket gives each write.
@@ -134,7 +150,7 @@ Pin the file, and fetch it.
 
 ```
 $ uv run provc pin data://acme/demo/dev/reports/report.txt
-local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:235061e9-dc18-437b-a887-db80a7e82ef2
+local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:331f10c3-64f3-43f3-966a-75fb58398960
 
 $ uv run provc fetch data://acme/demo/dev/reports/report.txt
 /tmp/provrun-tour/cache/local-s3/data/main/acme/demo/dev/reports/report.txt
@@ -147,45 +163,38 @@ $ uv run provc fetch data://acme/demo/dev/reports/report.txt
 
 ## Step 2: Run the agent
 
+`provr run` reads the provcat configuration from `PROVCAT_CONFIG`, and writes the run folder under `PROVRUN_RUNS`. It prints a summary of the run. The tour keeps the summary in a file, and the run ID in `$R1`.
+
 ```
-$ uv run provr run /tmp/provrun-tour/run.yaml --config $PROVCAT_CONFIG
+$ uv run provr run $TOUR_DIR/run.yaml | tee $TOUR_DIR/r1.json
 {
-  "run_id": "run-20261030T204319Z-e7abedc6",
+  "run_id": "run-20261102T195556Z-88d8d7ec",
   "status": "completed",
-  "folder": "/tmp/provrun-tour/runs/run-20261030T204319Z-e7abedc6",
-  "bundle": "run://acme/demo/dev/run-20261030T204319Z-e7abedc6",
-  "pinned": "local-s3://runs/main/acme/demo/dev/run-20261030T204319Z-e7abedc6?at=commit:62e12bdf...",
+  "folder": "/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec",
+  "bundle": "run://acme/demo/dev/run-20261102T195556Z-88d8d7ec",
+  "pinned": "local-s3://runs/main/acme/demo/dev/run-20261102T195556Z-88d8d7ec?at=commit:8f206c3924a18eaa16044cc1c55f55b9d3f595ace09b1d8cae242974cd4e7df9",
   "note": "",
   "error": null
 }
+
+$ R1=$(uv run python tours/provrun/field.py $TOUR_DIR/r1.json run_id)
 ```
 
-LiteLLM may also print `RuntimeWarning: coroutine 'Logging.async_success_handler' was never awaited`. The warning comes from its logging after the run, and you can ignore it.
-
-Keep the run ID in a variable.
-
-```
-$ R1=run-20261030T204319Z-e7abedc6
-```
-
-Your run ID differs. Each later command uses `$R1`.
-
-**What happened:** provrun asked the broker for the input, made a snapshot, staged it, ran the agent, and committed the bundle to the bucket `runs`. The next steps look at each part.
+**What happened:** provrun asked the broker for the input, made a snapshot, staged it, ran the agent, and committed the bundle to the bucket `runs`. `pinned` is the URI of that commit. The next steps look at each part.
 
 ## Step 3: Look at the cache
 
 ```
-$ find /tmp/provrun-tour/cache -type f | sort
-/tmp/provrun-tour/cache/.provcat/locks/94c319e2....lock
-/tmp/provrun-tour/cache/.provcat/meta/7bd49ca9....json
-/tmp/provrun-tour/cache/.provcat/meta/f56a44fe....json
-/tmp/provrun-tour/cache/.provcat/snapshots/file/205cfa28c510eeba.../report.txt
+$ find $TOUR_DIR/cache -type f | sort
+/tmp/provrun-tour/cache/.provcat/locks/94c319e2d0007faa0c7404ce262c520d461c24246cfb26e7a16df72ee7cfe5a7.lock
+/tmp/provrun-tour/cache/.provcat/meta/3d5694fed14124677ab233153f65622540d70ee046e7bfcd0e5f52dc5fde2678.json
+/tmp/provrun-tour/cache/.provcat/meta/f56a44fe7fcc5f807321f25b306828115c7bc7f388faeda61dc5dba8ed2c0694.json
+/tmp/provrun-tour/cache/.provcat/snapshots/file/205cfa28c510eeba46bd4bc49acc2fb13f7645f66bab5ff5f0c3bda90d26f0b2/report.txt
 /tmp/provrun-tour/cache/local-s3/data/main/acme/demo/dev/reports/report.txt
-/tmp/provrun-tour/cache/local-s3@version-235061e9-.../data/main/acme/demo/dev/reports/report.txt
+/tmp/provrun-tour/cache/local-s3@version-331f10c3-64f3-43f3-966a-75fb58398960/data/main/acme/demo/dev/reports/report.txt
 
-$ ls -l /tmp/provrun-tour/cache/.provcat/snapshots/file/*/
-total 8
--r--r--r--  1 you  wheel  32 Oct 30 16:43 report.txt
+$ uv run python tours/provrun/modes.py $TOUR_DIR/cache/.provcat/snapshots/file/*/report.txt
+-r--r--r-- /tmp/provrun-tour/cache/.provcat/snapshots/file/205cfa28c510eeba46bd4bc49acc2fb13f7645f66bab5ff5f0c3bda90d26f0b2/report.txt
 ```
 
 The cache now holds the file three times:
@@ -193,7 +202,7 @@ The cache now holds the file three times:
 | Path | Made by | Can it change? |
 |---|---|---|
 | `local-s3/.../report.txt` | `provc fetch` in Step 1, without a version | Yes. The next fetch of a new version rewrites it. |
-| `local-s3@version-235061e9-.../report.txt` | the run, which fetched the pinned URI | No fetch rewrites it, because the path names the version. But it is writable. |
+| `local-s3@version-.../report.txt` | the run, which fetched the pinned URI | No fetch rewrites it, because the path names the version. But it is writable. |
 | `.provcat/snapshots/file/205cfa28.../report.txt` | the run, which made a snapshot of the pinned copy | Not without notice. The file is read-only, and provcat checks its SHA-256 before it uses it again. A snapshot that someone changed is replaced. |
 
 The folder name of the snapshot is the SHA-256 of the content. Two runs that read the same content under the same name share one snapshot. On macOS and on Linux disks that can clone, the snapshot is a copy-on-write clone, so it costs almost no space.
@@ -203,23 +212,21 @@ The records under `.provcat/meta` hold the version, the size and the SHA-256 of 
 ## Step 4: Look at the run folder
 
 ```
-$ find /tmp/provrun-tour/runs/$R1 -type f | sort
-/tmp/provrun-tour/runs/run-.../bundle.json
-/tmp/provrun-tour/runs/run-.../evidence/events.jsonl
-/tmp/provrun-tour/runs/run-.../evidence/manifest.json
-/tmp/provrun-tour/runs/run-.../evidence/payloads/169a2eac...
-/tmp/provrun-tour/runs/run-.../evidence/payloads/f4503948...
-/tmp/provrun-tour/runs/run-.../input/report.txt
-/tmp/provrun-tour/runs/run-.../output/response.txt
+$ find $TOUR_DIR/runs/$R1 -type f | sort
+/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/bundle.json
+/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/evidence/events.jsonl
+/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/evidence/manifest.json
+/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/evidence/payloads/169a2eac7d7f094a88744ea5c1500e3a7ccb706952cdd6d5fa67eef58ff6c601
+/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/evidence/payloads/f4503948841cb1db460bbdec8f9b4178f81cc3254f1c17a27487d62495373fcd
+/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/input/report.txt
+/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/output/response.txt
 
-$ ls -ld /tmp/provrun-tour/runs/$R1/input
-dr-xr-xr-x  3 you  wheel  96 Oct 30 16:43 /tmp/provrun-tour/runs/run-.../input
-
-$ echo x >> /tmp/provrun-tour/runs/$R1/input/report.txt
-zsh: permission denied: /tmp/provrun-tour/runs/run-.../input/report.txt
+$ uv run python tours/provrun/modes.py $TOUR_DIR/runs/$R1/input $TOUR_DIR/runs/$R1/input/report.txt
+dr-xr-xr-x /tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/input
+-r--r--r-- /tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/input/report.txt
 ```
 
-bash words the error as `Permission denied`. The root user ignores read-only bits, so as root, for example in a container, the write succeeds. Then `input_verified` is what catches a change.
+The input and its folder are read-only, so a write to the file fails with `Permission denied`. The root user ignores read-only bits, so as root, for example in a container, the write succeeds. Then `input_verified` is what catches a change.
 
 **What happened:**
 - The stager cloned the snapshot into `input/` and made the folder and the file read-only. The agent knows the file as `/input/report.txt`. The LiteLLM backend has no file system, so it puts the text of the file into the prompt under that name. The PydanticAI backend mounts the folder at `/input`.
@@ -229,152 +236,169 @@ bash words the error as `Permission denied`. The root user ignores read-only bit
 
 ## Step 5: Read the evidence
 
-```
-$ uv run provr show $R1
-   0 ... run_created              RunContext       run://acme/demo/dev/run-... {"agent": "revenue-question", ...}
-   1 ... access_requested         StubBroker       data://acme/demo/dev/reports/report.txt {"mode": "mounted_snapshot", ...}
-   2 ... access_granted           StubBroker       data://acme/demo/dev/reports/report.txt {"reason": "in the allow list; org and environment match", ...}
-   3 ... context_resolved         ProvcatResolver  data://... {"physical": "local-s3://data/main/acme/demo/dev/reports/report.txt", ...}
-   4 ... snapshot_materialized    ProvcatResolver  data://... {"kind": "file", "pinned": "local-s3://...report.txt?at=version:235061e9-...", "sha256": "205cfa28..."}
-   5 ... input_staged             InProcessStager  data://... {"agent_path": "/input/report.txt", "sha256": "205cfa28...", ...}
-   6 ... sandbox_started          LiteLLMBackend   run://... {"inputs": ["/input/report.txt"], ...}
-   7 ... prompt_rendered          LiteLLMBackend   data://... {"messages": 2}
-   8 ... model_called             LiteLLMBackend   {"finish_reason": "stop", "input_tokens": 10, "output_tokens": 20, ...}
-   9 ... sandbox_completed        LiteLLMBackend   run://... {"status": "completed", ...}
-  10 ... input_verified           InProcessStager  data://... {"sha256": "205cfa28...", "unchanged": true}
-  11 ... output_artifact_created  Outputter        run://.../output/response.txt {"sha256": "297c05b2...", "size": 31}
-  12 ... run_completed            RunContext       run://acme/demo/dev/run-... {}
-```
+`provr show` prints each event of a run on one line. The line holds its number, time and type, the part of provrun that wrote it, its URI and its data. The `awk` keeps the number, the type and the part. `event.py` prints the data of one event.
 
-The output above is shortened.
+```
+$ uv run provr show $R1 | awk '{print $1, $3, $4}'
+0 run_created RunContext
+1 access_requested StubBroker
+2 access_granted StubBroker
+3 context_resolved ProvcatResolver
+4 snapshot_materialized ProvcatResolver
+5 input_staged InProcessStager
+6 sandbox_started LiteLLMBackend
+7 prompt_rendered LiteLLMBackend
+8 model_called LiteLLMBackend
+9 sandbox_completed LiteLLMBackend
+10 input_verified InProcessStager
+11 output_artifact_created Outputter
+12 run_completed RunContext
+
+$ uv run python tours/provrun/event.py $R1 snapshot_materialized
+{
+  "kind": "file",
+  "parent_span_id": "c9fca02628b8d4aa",
+  "pinned": "local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:331f10c3-64f3-43f3-966a-75fb58398960",
+  "sha256": "205cfa28c510eeba46bd4bc49acc2fb13f7645f66bab5ff5f0c3bda90d26f0b2",
+  "span_id": "ce0da8a7d4e73d5c",
+  "started_at": "2026-11-02T19:55:56.301512Z",
+  "trace_id": "13a2ee8f025050d4cb2cefd70147b8cd"
+}
+```
 
 **What happened:** each part of provrun wrote one or more events. Each event holds the SHA-256 of the line before it, so the events form a chain. Event 4 ties the logical URI to the exact version and to the SHA-256 of its content. The payloads are in `evidence/payloads`, each in a file named by its SHA-256. One holds the rendered prompt. The other holds the request and the response of the model call.
 
 ## Step 6: Change the file, and run again
 
-Restate the report in the store.
+Restate the report in the store, run the agent again, and print the version and the SHA-256 that the second run pinned.
 
 ```
-$ echo "Revenue in 2025 was 45 million, after a restatement." > /tmp/provrun-tour/report.txt
-$ uv run provc put data://acme/demo/dev/reports/report.txt /tmp/provrun-tour/report.txt
-$ uv run provc commit data://acme/demo/dev/reports -m "restated report"
-local-s3://data/main/acme/demo/dev/reports?at=commit:eb847483...
-```
+$ echo "Revenue in 2025 was 45 million, after a restatement." > $TOUR_DIR/report.txt
 
-Run the agent again, and keep the new run ID in `R2`.
+$ uv run provc put data://acme/demo/dev/reports/report.txt $TOUR_DIR/report.txt
+[
+  {
+    "uri": "local-s3://data/main/acme/demo/dev/reports/report.txt",
+    "kind": "file",
+    "size": 53,
+    "version": "978a4eeb4c507d40a87a3346b012b44f"
+  }
+]
 
-```
-$ uv run provr run /tmp/provrun-tour/run.yaml --config $PROVCAT_CONFIG
-$ R2=run-20261030T204334Z-5ec7a594
-$ uv run provr show $R2 | grep snapshot_materialized
-   4 ... snapshot_materialized    ProvcatResolver  ... {"kind": "file", "pinned": "local-s3://...report.txt?at=version:baeae1e9-...", "sha256": "106b090a..."}
+$ uv run provc commit data://acme/demo/dev/reports -m 'restated report'
+local-s3://data/main/acme/demo/dev/reports?at=commit:a46dda60a0b8359ec27e84ee6924cbf2b2b139b0d97364450a546df08804325e
+
+$ uv run provr run $TOUR_DIR/run.yaml > $TOUR_DIR/r2.json
+
+$ R2=$(uv run python tours/provrun/field.py $TOUR_DIR/r2.json run_id)
+
+$ uv run python tours/provrun/event.py $R2 snapshot_materialized pinned sha256
+local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:7974237a-bb0d-49cc-b585-71afe646f008
+106b090a711c049ade3f3601e56d787f023438b672af9d36aa6112a7f123dc75
 ```
 
 Look at the snapshots.
 
 ```
-$ for f in /tmp/provrun-tour/cache/.provcat/snapshots/file/*/report.txt; do echo "$f: $(cat $f)"; done
-/tmp/provrun-tour/cache/.provcat/snapshots/file/106b090a.../report.txt: Revenue in 2025 was 45 million, after a restatement.
-/tmp/provrun-tour/cache/.provcat/snapshots/file/205cfa28.../report.txt: Revenue in 2025 was 42 million.
+$ for f in $TOUR_DIR/cache/.provcat/snapshots/file/*/report.txt; do echo "$f: $(cat $f)"; done
+/tmp/provrun-tour/cache/.provcat/snapshots/file/106b090a711c049ade3f3601e56d787f023438b672af9d36aa6112a7f123dc75/report.txt: Revenue in 2025 was 45 million, after a restatement.
+/tmp/provrun-tour/cache/.provcat/snapshots/file/205cfa28c510eeba46bd4bc49acc2fb13f7645f66bab5ff5f0c3bda90d26f0b2/report.txt: Revenue in 2025 was 42 million.
 ```
 
 **What happened:**
-- The second run pinned the new version, `baeae1e9`, and made a new snapshot with a new SHA-256.
-- The snapshot of the first run did not change. The evidence of the first run still names version `235061e9` and SHA-256 `205cfa28`, and that snapshot still holds those bytes.
+- The second run pinned the new version and made a new snapshot with a new SHA-256.
+- The snapshot of the first run did not change. The evidence of the first run still names its version and the SHA-256 `205cfa28...`, and that snapshot still holds those bytes.
 - A third run on the same version makes no new snapshot. provcat checks the SHA-256 of the existing snapshot and reuses it.
 - The agent gave the same answer twice, because `mock_response` fixes it. A real model would read the restated figure.
 
 ## Step 7: Run again on the first version
 
-The store now holds the restated report. To repeat the first run exactly, give the agent the pinned URI from the evidence of the first run.
+The store now holds the restated report. To repeat the first run exactly, give the agent the pinned URI from the evidence of the first run. `sed` writes a copy of the run file with that URI as its input.
 
-1. Copy the run file to `/tmp/provrun-tour/rerun.yaml`.
-2. In the copy, replace the input with the pinned URI from event 4 of the first run, in Step 5.
+```
+$ PINNED=$(uv run python tours/provrun/event.py $R1 snapshot_materialized pinned)
 
-   ```yaml
-     inputs:
-       - "local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:235061e9-dc18-437b-a887-db80a7e82ef2"
-   ```
+$ echo "$PINNED"
+local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:331f10c3-64f3-43f3-966a-75fb58398960
 
-3. Run it, and look at the input that the agent saw.
+$ sed "s|- data://acme/demo/dev/reports/report.txt|- \"$PINNED\"|" $TOUR_DIR/run.yaml > $TOUR_DIR/rerun.yaml
 
-   ```
-   $ uv run provr run /tmp/provrun-tour/rerun.yaml --config $PROVCAT_CONFIG
-   $ R3=<the new run ID>
-   $ uv run provr show $R3 | grep access_granted
-      2 ... access_granted           StubBroker  local-s3://...report.txt?at=version:235061e9-... {"reason": "in the allow list; physical URI in dev", ...}
-   $ cat /tmp/provrun-tour/runs/$R3/input/report.txt
-   Revenue in 2025 was 42 million.
-   ```
+$ uv run provr run $TOUR_DIR/rerun.yaml > $TOUR_DIR/r3.json
+
+$ R3=$(uv run python tours/provrun/field.py $TOUR_DIR/r3.json run_id)
+
+$ uv run python tours/provrun/event.py $R3 access_granted reason
+in the allow list; physical URI in dev
+
+$ cat $TOUR_DIR/runs/$R3/input/report.txt
+Revenue in 2025 was 42 million.
+```
 
 **What happened:**
 - `local-s3` is a store in the configuration, so the broker treats the URI as physical. A physical URI names no environment, so the stub broker grants one only in `dev`.
-- provcat fetched version `235061e9`, not the newest version, and found the snapshot `205cfa28` from the first run. The agent saw the report as it was before the restatement.
+- provcat fetched the first version, not the newest one, and found the snapshot from the first run. The agent saw the report as it was before the restatement.
 - So the evidence of a run is enough to run it again on the same bytes, as long as the store keeps the old version.
 
 ## Step 8: Verify the runs, and break one
 
 ```
-$ uv run provr verify $R1 --config $PROVCAT_CONFIG
-run-20261030T204319Z-e7abedc6: the evidence and the outputs verify, and match the committed bundle
+$ uv run provr verify $R1
+run-20261102T195556Z-88d8d7ec: the evidence and the outputs verify, and match the committed bundle
 
-$ uv run provr verify $R2 --config $PROVCAT_CONFIG
-run-20261030T204334Z-5ec7a594: the evidence and the outputs verify, and match the committed bundle
+$ uv run provr verify $R2
+run-20261102T195605Z-d482c7ba: the evidence and the outputs verify, and match the committed bundle
 ```
 
-**What happened:** `provr verify` checked the chain of events, the payloads and the outputs. Then it read the events and the manifest from the commit that `bundle.json` names, and compared them with the run folder. To reach that commit, it needs the provcat configuration, from `--config` or from `PROVCAT_CONFIG`.
+**What happened:** `provr verify` checked the chain of events, the payloads and the outputs. Then it read the events and the manifest from the commit that `bundle.json` names, and compared them with the run folder. To reach that commit, it needs the provcat configuration, from `PROVCAT_CONFIG` or `--config`.
 
 Now change an output of the second run.
 
 ```
-$ echo "Revenue was 99 million." > /tmp/provrun-tour/runs/$R2/output/response.txt
-$ uv run provr verify $R2 --config $PROVCAT_CONFIG
+$ echo "Revenue was 99 million." > $TOUR_DIR/runs/$R2/output/response.txt
+
+$ uv run provr verify $R2 || echo "exit status $?"
 provr: output response.txt was changed
+exit status 1
 ```
 
 The command exits with status 1. The event `output_artifact_created` holds the SHA-256 of the output, and the new bytes do not match it.
 
 Someone who can change the run folder can also write a new chain that agrees with itself. The committed bundle is a copy in another store, so the check against the commit catches that chain. But `bundle.json` is in the run folder too, and that person can delete it. Then `provr verify` finds no commit, and it says only `no committed bundle to compare with`.
 
-So a checker who does not trust the folder passes the commit with `--bundle`. The commit comes from outside the folder, for example from the output of `provr run`. `--require-bundle` fails a run that has no commit to compare with.
+So a checker who does not trust the folder passes the commit with `--bundle`. The commit comes from outside the folder, here from the summary that `provr run` printed. `--require-bundle` fails a run that has no commit to compare with.
 
 ```
-$ uv run provr verify $R1 --bundle "local-s3://runs/main/acme/demo/dev/run-20261030T204319Z-e7abedc6?at=commit:62e12bdf..." --require-bundle
-run-20261030T204319Z-e7abedc6: the evidence and the outputs verify, and match the committed bundle
-```
+$ BUNDLE=$(uv run python tours/provrun/field.py $TOUR_DIR/r1.json pinned)
 
-Quote a URI that holds `?` on the command line. zsh reads an unquoted `?` as a wildcard, and fails with `no matches found`.
+$ uv run provr verify $R1 --bundle "$BUNDLE" --require-bundle
+run-20261102T195556Z-88d8d7ec: the evidence and the outputs verify, and match the committed bundle
+```
 
 ## Step 9: Keep the evidence in SQLite
 
-The runs so far wrote their evidence only as files in each run folder. A `sqlite` store also keeps every run in one SQLite file, so you can ask questions across runs. Run the same file twice with `--store`. Four slashes make the path absolute.
+The runs so far wrote their evidence only as files in each run folder. A `sqlite` store also keeps every run in one SQLite file, so you can ask questions across runs. Run the same file twice with `--store`. The path after `sqlite:///` is absolute, because `$TOUR_DIR` starts with a slash.
 
 ```
-$ export S=sqlite:////tmp/provrun-tour/evidence.db
-$ uv run provr --store $S run /tmp/provrun-tour/run.yaml --config $PROVCAT_CONFIG
-{
-  "run_id": "run-20261101T131105Z-57ed54db",
-  "status": "completed",
-  ...
-}
-$ uv run provr --store $S run /tmp/provrun-tour/run.yaml --config $PROVCAT_CONFIG
-{
-  "run_id": "run-20261101T131120Z-c36d10ec",
-  ...
-}
+$ S=sqlite:///$TOUR_DIR/evidence.db
+
+$ uv run provr --store $S run $TOUR_DIR/run.yaml > $TOUR_DIR/r4.json
+
+$ uv run provr --store $S run $TOUR_DIR/run.yaml > /dev/null
+
+$ Q=$(uv run python tours/provrun/field.py $TOUR_DIR/r4.json run_id)
 ```
 
-Ask which runs read the report, which experiments there are, and what the first run was allowed to read.
+Ask which runs read the report, and which experiments there are. Then ask what the first of these runs could read.
 
 ```
 $ uv run prove --store $S runs --reading data://acme/demo/dev/reports/report.txt
-run-20261101T131105Z-57ed54db
-run-20261101T131120Z-c36d10ec
+run-20261102T195619Z-143ab2e0
+run-20261102T195624Z-4f8fba83
 
 $ uv run prove --store $S experiments
-acme/demo/dev/revenue-question  created by you@example.com at 2026-11-01T13:11:05.894033Z
+acme/demo/dev/revenue-question  created by you@example.com at 2026-11-02T19:56:19.325242Z
 
-$ uv run prove --store $S access run-20261101T131105Z-57ed54db
+$ uv run prove --store $S access $Q
    2 granted  mounted_snapshot   data://acme/demo/dev/reports/report.txt  in the allow list; org and environment match
 ```
 
@@ -386,21 +410,28 @@ $ uv run prove --store $S access run-20261101T131105Z-57ed54db
 Now delete one row, and check the run.
 
 ```
-$ sqlite3 /tmp/provrun-tour/evidence.db "DELETE FROM provevi_events WHERE run_id = 'run-20261101T131105Z-57ed54db' AND seq = 3"
-$ uv run prove --store $S verify run-20261101T131105Z-57ed54db --config $PROVCAT_CONFIG
+$ uv run python tours/provrun/drop_event.py $TOUR_DIR/evidence.db $Q 3
+
+$ uv run prove --store $S verify $Q || echo "exit status $?"
 prove: in the store: line 3: seq is 4, not 3
 prove: in the store: line 3: the chain is broken
 prove: in the store: refs of row 3 have no event
 prove: in the store: the manifest counts 13 events, and there are 12
+exit status 1
 ```
 
 The command exits with status 1. Without `--store`, `prove verify` checks only the run folder, which still verifies.
 
 ## Step 10: Run under a telemetry policy
 
-The operator's telemetry policy says what may record or send data from a run, besides the evidence. Write one to `/tmp/provrun-tour/policy.yaml`. It approves LiteLLM at the tested version, sends spans nowhere, and lets a run reach only OpenAI.
+The operator's telemetry policy says what may record or send data from a run, besides the evidence. This one approves LiteLLM at the tested version, sends spans nowhere, and lets a run reach only OpenAI.
 
-```yaml
+Run the file under it, with four variables set. Two name a collector for spans and its token. One names an MLflow database with its password. The last is a LiteLLM setting that provrun changes for the run. Then print the `telemetry` part of the run's first event, `run_created`.
+
+```
+$ cat $TOUR_DIR/policy.yaml
+# A telemetry policy that approves LiteLLM at the tested version, sends spans
+# nowhere, and lets a run reach only OpenAI.
 version: 1
 libraries:
   litellm:
@@ -408,19 +439,18 @@ libraries:
 destinations: {}
 hosts:
   - api.openai.com
-```
 
-Run the file under it, with four variables set. Two name a collector for spans and its token. One names an MLflow database with its password. The last is a LiteLLM setting that provrun changes for the run.
+$ export PROVRUN_TELEMETRY_POLICY=$TOUR_DIR/policy.yaml
 
-```
-$ export PROVRUN_TELEMETRY_POLICY=/tmp/provrun-tour/policy.yaml
 $ OTEL_EXPORTER_OTLP_ENDPOINT=http://collector.example:4318 \
   OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer example-token" \
   MLFLOW_TRACKING_URI="postgresql://mlflow:example-password@db.example:5432/mlflow" \
   LITELLM_MODE=DEV \
-    uv run provr run /tmp/provrun-tour/run.yaml --config $PROVCAT_CONFIG
-$ R4=run-20261102T190517Z-62fc81a4
-$ head -1 /tmp/provrun-tour/runs/$R4/evidence/events.jsonl | jq .data.telemetry
+  uv run provr run $TOUR_DIR/run.yaml > $TOUR_DIR/r5.json
+
+$ R4=$(uv run python tours/provrun/field.py $TOUR_DIR/r5.json run_id)
+
+$ uv run python tours/provrun/event.py $R4 run_created telemetry
 {
   "destinations": [
     {
@@ -449,97 +479,100 @@ $ head -1 /tmp/provrun-tour/runs/$R4/evidence/events.jsonl | jq .data.telemetry
 }
 ```
 
-`provr` prints its summary, as in step 2. Your run ID differs. The first line of the events is `run_created`.
-
 **What happened:**
 - `run_created` names the policy by its SHA-256, so the run says which policy it ran under.
 - provrun left the variables as you set them. They are your configuration. `variables` records where each one points. The database URI keeps only its scheme, host and port, so the password is not recorded. The header, which holds a token, is recorded by its name only.
 - provrun set `LITELLM_MODE=PRODUCTION` for the run, so that LiteLLM read no `.env` file, and put `DEV` back after it. `overridden` records your value.
 - The policy approves no destination, so provrun sent the run's spans nowhere. `destinations` records the collector that the variable names, and that nothing went to it. A `telemetry_blocked` event says so too:
 
-  ```
-  $ uv run prove telemetry /tmp/provrun-tour/runs/$R4
-     1 2026-11-02T19:05:17.609555Z blocked destination   OTEL_EXPORTER_OTLP_ENDPOINT: matches no otlp destination of the policy; nothing is sent
-  ```
+```
+$ uv run prove telemetry $PROVRUN_RUNS/$R4
+   1 2026-11-02T19:56:33.087145Z blocked destination   OTEL_EXPORTER_OTLP_ENDPOINT: matches no otlp destination of the policy; nothing is sent
+```
 
-- provrun sends nothing to MLflow yet. That waits for Phase 4 of provevi's plan.
+- provrun sends nothing to MLflow yet. That waits for Phase 4 of [provevi's plan](provevi-plan.md).
 
 A run file can narrow the policy in a `telemetry` section, but never widen it. Add a host that the policy does not allow:
 
 ```
-$ cp /tmp/provrun-tour/run.yaml /tmp/provrun-tour/wide.yaml
-$ printf 'telemetry:\n  hosts: [api.openai.com, paste.example]\n' >> /tmp/provrun-tour/wide.yaml
-$ uv run provr run /tmp/provrun-tour/wide.yaml --config $PROVCAT_CONFIG
+$ cp $TOUR_DIR/run.yaml $TOUR_DIR/wide.yaml
+
+$ printf 'telemetry:\n  hosts: [api.openai.com, paste.example]\n' >> $TOUR_DIR/wide.yaml
+
+$ uv run provr run $TOUR_DIR/wide.yaml || echo "exit status $?"
 provr: the run file: host 'paste.example' is not allowed by the policy
+exit status 1
+
+$ unset PROVRUN_TELEMETRY_POLICY
 ```
 
-The command exits with status 1, before it makes a run folder. Unset `PROVRUN_TELEMETRY_POLICY` before the next step.
+The command exits with status 1, before it makes a run folder.
 
 ## Step 11: See what a run turns off
 
-A program can switch on a library's own telemetry before it starts a run. This one adds a LiteLLM callback, and sets the root logger to `DEBUG`, writing to a file. Save it as `/tmp/provrun-tour/quiet.py`:
+A program can switch on a library's own telemetry before it starts a run. `tours/provrun/quiet.py` adds a LiteLLM callback, and sets the root logger to `DEBUG`, writing to a file:
 
 ```python
-import logging
-
-import litellm
-from provcat import Catalog
-from provrun import RunFile, run_file_sync
-
-logging.basicConfig(level=logging.DEBUG, filename="/tmp/provrun-tour/debug.log")
+logging.basicConfig(level=logging.DEBUG, filename=f"{tour}/debug.log")
 litellm.success_callback.append(lambda *args, **kwargs: None)
 
-outcome = run_file_sync(RunFile.load("/tmp/provrun-tour/run.yaml"), catalog=Catalog.open())
+outcome = run_file_sync(RunFile.load(f"{tour}/run.yaml"), catalog=Catalog.open())
 print(outcome.run_id, outcome.status)
 print("callbacks after the run:", len(litellm.success_callback))
 ```
 
-Run it, and list what the run turned off with `prove telemetry`:
+Run it, and list what the run turned off with `prove telemetry`.
 
 ```
-$ uv run python /tmp/provrun-tour/quiet.py
-run-20261102T190536Z-e165d5c6 completed
+$ uv run python tours/provrun/quiet.py > $TOUR_DIR/quiet.out 2> $TOUR_DIR/quiet.err
+
+$ cat $TOUR_DIR/quiet.out
+run-20261102T195647Z-e039d455 completed
 callbacks after the run: 1
-$ R5=run-20261102T190536Z-e165d5c6
-$ uv run prove telemetry /tmp/provrun-tour/runs/$R5
-   1 2026-11-02T19:05:36.498805Z blocked litellm.callbacks   removed __main__.<lambda> from litellm.success_callback
-   2 2026-11-02T19:05:36.498904Z blocked logging litellm  raised the logger 'LiteLLM' from DEBUG to WARNING
-   3 2026-11-02T19:05:36.498966Z blocked logging litellm  raised the logger 'LiteLLM Router' from DEBUG to WARNING
-   4 2026-11-02T19:05:36.499012Z blocked logging litellm  raised the logger 'LiteLLM Proxy' from DEBUG to WARNING
-   5 2026-11-02T19:05:36.499055Z blocked logging anthropic  raised the logger 'anthropic' from DEBUG to WARNING
-   6 2026-11-02T19:05:36.499096Z blocked logging openai  raised the logger 'openai' from DEBUG to WARNING
-   7 2026-11-02T19:05:36.499134Z blocked logging botocore  raised the logger 'botocore' from DEBUG to WARNING
+the LiteLLM logger logs at: DEBUG
+
+$ R5=$(head -1 $TOUR_DIR/quiet.out | cut -d" " -f1)
+
+$ uv run prove telemetry $PROVRUN_RUNS/$R5
+   1 2026-11-02T19:56:47.740780Z blocked litellm.callbacks   removed __main__.<lambda> from litellm.success_callback
+   2 2026-11-02T19:56:47.740872Z blocked logging litellm  raised the logger 'LiteLLM' from DEBUG to WARNING
+   3 2026-11-02T19:56:47.740940Z blocked logging litellm  raised the logger 'LiteLLM Router' from DEBUG to WARNING
+   4 2026-11-02T19:56:47.740991Z blocked logging litellm  raised the logger 'LiteLLM Proxy' from DEBUG to WARNING
+   5 2026-11-02T19:56:47.741041Z blocked logging anthropic  raised the logger 'anthropic' from DEBUG to WARNING
+   6 2026-11-02T19:56:47.741089Z blocked logging openai  raised the logger 'openai' from DEBUG to WARNING
+   7 2026-11-02T19:56:47.741133Z blocked logging botocore  raised the logger 'botocore' from DEBUG to WARNING
 ```
 
-Your run ID and times differ. Each line gives the sequence number of a `telemetry_blocked` event, its time, the word `blocked`, what was blocked, the library, and the detail. The callback has no library, because it is the program's own.
+Each line gives the sequence number of a `telemetry_blocked` event, its time, the word `blocked`, what was blocked, the library, and the detail. The callback has no library, because it is the program's own.
 
 **What happened:**
 - As the run started, provrun emptied LiteLLM's callback lists, so the callback saw no model call. The loggers that can log request bodies stayed at `WARNING`. So the log file holds no prompt, and none of the request signatures that botocore, the S3 library, logs at `DEBUG`.
-- When the run ended, provrun put the callback and the logger levels back, so the program has its callback again.
-- After the run, LiteLLM printed a few `DEBUG` lines to the terminal as it shut down. Its logger follows the program's root logger again, and the program loaded LiteLLM before the run set `LITELLM_LOG`.
+- When the run ended, provrun put the callback and the logger levels back. So the program has its callback again, and the LiteLLM logger logs at `DEBUG` again.
+- After the run, LiteLLM printed a few `DEBUG` lines as it shut down, which the tour keeps in `quiet.err`. Its logger follows the program's root logger again, and the program loaded LiteLLM before the run set `LITELLM_LOG`.
 
-The run is one trace. Print the span ID and the parent span ID of each event that has a span:
+The run is one trace. Print the type, the span ID and the parent span ID of each event with a span. Then print their trace IDs:
 
 ```
-$ jq -c 'select(.data.span_id != null) | {type, span: .data.span_id, parent: .data.parent_span_id}' \
-    /tmp/provrun-tour/runs/$R5/evidence/events.jsonl
-{"type":"run_created","span":"0fc6c5f3f64b4e94","parent":null}
-{"type":"context_resolved","span":"80d0d8b2a4b62a7d","parent":"0fc6c5f3f64b4e94"}
-{"type":"snapshot_materialized","span":"bec264b01294f253","parent":"0fc6c5f3f64b4e94"}
-{"type":"input_staged","span":"139c79c376b94f73","parent":"0fc6c5f3f64b4e94"}
-{"type":"model_called","span":"601f57cf62dac11c","parent":"0fc6c5f3f64b4e94"}
-{"type":"input_verified","span":"e750d19c545a2358","parent":"0fc6c5f3f64b4e94"}
-{"type":"output_artifact_created","span":"19c9907af0543c91","parent":"0fc6c5f3f64b4e94"}
-{"type":"run_completed","span":"0fc6c5f3f64b4e94","parent":null}
+$ uv run python tours/provrun/spans.py $R5
+run_created b7f61521ecc50c64 None
+context_resolved 3e5f95e9dabbbf4a b7f61521ecc50c64
+snapshot_materialized cf528e13564aad23 b7f61521ecc50c64
+input_staged 7092a4bd3a0866e1 b7f61521ecc50c64
+model_called 7cf767d323943ceb b7f61521ecc50c64
+input_verified 1c3aaa34f1381a21 b7f61521ecc50c64
+output_artifact_created 569f28ce62873d66 b7f61521ecc50c64
+run_completed b7f61521ecc50c64 None
+trace IDs: e9ab5d23aaebcf22dcc30930a0726ec2
 ```
 
-`run_created` and `run_completed` hold the span ID of the run's root span. Each step's parent is that span, and every event with a span holds the same `trace_id`.
+`run_created` and `run_completed` hold the span ID of the run's root span. Each step's parent is that span, and every event with a span holds the same trace ID.
 
 ## Step 12: Send the spans to a collector
 
-A policy can approve a place for the run's spans. Write one to `/tmp/provrun-tour/send.yaml`. It approves a collector on this machine, which receives names only:
+A policy can approve a place for the run's spans. `start.sh` wrote this one, with the collector's port. It approves the collector on this machine, which receives names only.
 
-```yaml
+```
+$ cat $TOUR_DIR/send.yaml
 version: 1
 libraries:
   litellm:
@@ -554,64 +587,39 @@ hosts:
   - 127.0.0.1
 ```
 
-Save this small collector as `/tmp/provrun-tour/collector.py`. It prints the name and the attribute names of each span it gets:
-
-```python
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
-
-
-class Collector(BaseHTTPRequestHandler):
-    def do_POST(self):
-        body = self.rfile.read(int(self.headers["Content-Length"]))
-        for rs in ExportTraceServiceRequest.FromString(body).resource_spans:
-            for ss in rs.scope_spans:
-                for span in ss.spans:
-                    keys = sorted(kv.key for kv in span.attributes)
-                    print(self.path, span.name, keys, flush=True)
-        self.send_response(200)
-        self.end_headers()
-
-    def log_message(self, *args):
-        pass
-
-
-HTTPServer(("127.0.0.1", 4318), Collector).serve_forever()
-```
-
-Start it in a third terminal with `uv run python /tmp/provrun-tour/collector.py`. Then run the file under the new policy, with a proxy set that does not exist. `NO_PROXY=localhost` lets the run still reach moto:
+The collector, `tours/provrun/collector.py`, prints the name and the attribute names of each span it gets, to `collector.log`. Run the file under the new policy, with a proxy set that does not exist. `NO_PROXY=localhost` lets the run still reach moto.
 
 ```
-$ PROVRUN_TELEMETRY_POLICY=/tmp/provrun-tour/send.yaml \
-  OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 \
+$ PROVRUN_TELEMETRY_POLICY=$TOUR_DIR/send.yaml \
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$TOUR_OTLP_PORT \
   HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 NO_PROXY=localhost \
-    uv run provr run /tmp/provrun-tour/run.yaml --config $PROVCAT_CONFIG
-$ R6=run-20261102T190611Z-c91775b3
-$ head -1 /tmp/provrun-tour/runs/$R6/evidence/events.jsonl | jq '.data.telemetry | {destinations, redirects}'
-{
-  "destinations": [
-    {
-      "destination": "collector",
-      "kind": "otlp",
-      "note": "",
-      "receives": "names",
-      "sending": true,
-      "url": "http://127.0.0.1:4318",
-      "variable": "OTEL_EXPORTER_OTLP_ENDPOINT"
-    }
-  ],
-  "redirects": [
-    "HTTPS_PROXY",
-    "HTTP_PROXY",
-    "NO_PROXY"
-  ]
-}
+  uv run provr run $TOUR_DIR/run.yaml > $TOUR_DIR/r6.json
+
+$ R6=$(uv run python tours/provrun/field.py $TOUR_DIR/r6.json run_id)
+
+$ uv run python tours/provrun/event.py $R6 run_created telemetry.destinations telemetry.redirects
+[
+  {
+    "destination": "collector",
+    "kind": "otlp",
+    "note": "",
+    "receives": "names",
+    "sending": true,
+    "url": "http://127.0.0.1:4318",
+    "variable": "OTEL_EXPORTER_OTLP_ENDPOINT"
+  }
+]
+[
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "NO_PROXY"
+]
 ```
 
-The collector's terminal shows the run's spans:
+The collector's log shows the run's spans:
 
 ```
+$ cat $TOUR_DIR/collector.log
 /v1/traces context_resolved ['provrun.component', 'provrun.run_id', 'provrun.step']
 /v1/traces snapshot_materialized ['provrun.component', 'provrun.run_id', 'provrun.step']
 /v1/traces input_staged ['provrun.component', 'provrun.run_id', 'provrun.step']
@@ -626,30 +634,19 @@ The collector's terminal shows the run's spans:
 - The collector receives names only, so `model_called` came without its token counts. Its `gen_ai.usage.*` attributes stayed in the evidence.
 - provrun's sender ignored the proxy, which does not exist, and went straight to the collector. `redirects` records which proxy variables were set, by name only.
 
-Stop the collector with Ctrl+C.
+## Step 13: Call a real model (needs ANTHROPIC_API_KEY)
 
-## Step 13: Call a real model (optional)
+This step runs only with `--online`. It needs `ANTHROPIC_API_KEY` in the environment, and it costs a few cents. It writes a copy of the run file with a real model and no `settings`, runs it, and prints the answer.
 
-This step needs `ANTHROPIC_API_KEY` in the environment, and it costs a few cents.
+```
+$ sed -e "s|openai/gpt-4o-mini|anthropic/claude-haiku-5-5|" -e "/settings:/,\$d" $TOUR_DIR/run.yaml > $TOUR_DIR/real.yaml
 
-1. Copy the run file to `/tmp/provrun-tour/real.yaml`.
-2. In the copy, set `model` to `anthropic/claude-haiku-5-5`, and remove the `settings` section.
-3. Run it, and read the answer.
+$ uv run provr run $TOUR_DIR/real.yaml > $TOUR_DIR/r7.json
 
-   ```
-   uv run provr run /tmp/provrun-tour/real.yaml --config $PROVCAT_CONFIG
-   cat /tmp/provrun-tour/runs/<run ID>/output/response.txt
-   ```
+$ cat $PROVRUN_RUNS/$(uv run python tours/provrun/field.py $TOUR_DIR/r7.json run_id)/output/response.txt
+```
 
 The model reads the restated report, so it should answer 45 million. The event `model_called` records the real token counts. The examples `claude-run.yaml` and `claude-agent.yaml` in `packages/provrun/examples` do the same with a local file, and the second runs an agent with tools.
-
-## Clean up
-
-The snapshots and the staged inputs are read-only, so give write permission before you delete them. Stop moto with Ctrl+C in its terminal.
-
-```
-chmod -R u+w /tmp/provrun-tour && rm -rf /tmp/provrun-tour
-```
 
 ## Where each step lives in the code
 
@@ -668,3 +665,4 @@ chmod -R u+w /tmp/provrun-tour && rm -rf /tmp/provrun-tour
 | Apply the telemetry policy | `packages/provrun/src/provrun/telemetry.py`, with the policy in `packages/provevi/src/provevi/telemetry.py` |
 | Send the spans to approved places | `packages/provrun/src/provrun/destinations.py` |
 | The commands | `packages/provrun/src/provrun/cli.py`; `provr verify` calls `packages/provevi/src/provevi/cli.py` |
+| The tour | `tours/provrun/run.sh`, `start.sh` and `stop.sh`, checked by `packages/provrun/tests/test_tour.py` |
