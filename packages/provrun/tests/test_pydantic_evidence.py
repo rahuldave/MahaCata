@@ -97,6 +97,30 @@ def test_a_tool_the_provider_ran_is_recorded_as_parsed(tmp_path):
     assert '"hits": 3' in (tmp_path / "evidence" / "payloads" / tool.payload).read_text()
     model = next(e for e in evs if e.type == "model_called")
     assert model.data["tool_calls"] == [{"tool": "web_search", "id": "n1"}]
+    assert not {"trace_id", "span_id", "parent_span_id", "started_at"} & tool.data.keys()  # no tracing here
+
+
+def test_a_tool_the_provider_ran_is_a_child_of_its_model_call(tmp_path, spans):
+    def fn(messages, info):
+        return ModelResponse(parts=[
+            NativeToolCallPart("web_search", {"query": "q"}, tool_call_id="n1", provider_name="test"),
+            NativeToolReturnPart("web_search", {"hits": 3}, tool_call_id="n1", provider_name="test"),
+            TextPart("found 3"),
+        ])
+
+    ctx = recorder(tmp_path)
+    Agent(FunctionModel(fn), capabilities=[evidence_capability(ctx)]).run_sync("go")
+    evs = events(tmp_path, ctx)
+    model = next(e for e in evs if e.type == "model_called")
+    [tool] = [e for e in evs if e.type == "tool_called"]
+    assert evs.index(model) < evs.index(tool)  # the order of the events is kept
+    assert tool.data["parent_span_id"] == model.data["span_id"]
+    assert tool.data["trace_id"] == model.data["trace_id"]
+    assert tool.data["span_id"] not in (model.data["span_id"], None)
+    assert "started_at" not in tool.data  # provrun did not see when the provider ran it
+    [span] = [s for s in spans.get_finished_spans() if s.name == "tool_called"]
+    assert span.attributes["gen_ai.tool.name"] == "web_search"
+    assert span.attributes["provrun.component"] == "provider:web_search"
 
 
 def test_a_deferred_call_is_not_a_failure(tmp_path):

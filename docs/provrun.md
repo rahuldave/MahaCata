@@ -190,7 +190,12 @@ Someone who can write the folder can delete that file. So a checker who does not
 
 The runs root is `~/.local/share/provrun/runs`, or `$XDG_DATA_HOME/provrun/runs` if that variable is set. The environment variable `PROVRUN_RUNS` or the option `--runs` changes it. The option `--store` chooses the evidence store, as in `provr --store sqlite:///evidence.db run run.yaml`. For `provr run`, it takes the place of the run file's store. `provr show` reads the events from it, and `provr verify` also checks the run as the store holds it.
 
-provrun also opens an OpenTelemetry span for each step, with the names of the GenAI semantic conventions. Each event holds the trace ID and the span ID of its span, if a tracer provider is set.
+provrun also opens an OpenTelemetry span for each step, with the names of the GenAI semantic conventions. Each step's event holds two kinds of value in its data:
+
+- `started_at`, the time the step began, in the same form as the event's `time`, which is the time it ended. It is there with or without tracing, and in `step_failed` too.
+- `trace_id`, `span_id` and `parent_span_id`, if a tracer provider is set. `parent_span_id` names the span of the step that holds this one, and is `null` at the root. With no tracer provider, or when the provider's sampler drops the span, the event has none of the three. The recorder sets these four keys, and drops any value a step gives for them. Nothing in provrun sets a provider yet; Phase 3 of [provevi's plan](provevi-plan.md) makes provrun set one.
+
+A tool that the provider ran gets a span too, as a child of the `model_called` span whose response reported it. provrun did not see the tool run, so the span marks only where the call sits, and the event has no `started_at`. Its event still comes after that `model_called`.
 
 The names are those of release 1.37.0 of the semantic conventions. The GenAI conventions have since moved to their own repository, `open-telemetry/semantic-conventions-genai`, which has no release and no schema URL yet. So provrun claims no schema URL. `provrun/otel.py` keeps every name in one place.
 

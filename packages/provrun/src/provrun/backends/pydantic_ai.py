@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from .. import otel
 from . import InProcessBackend, RunResult
 
 if TYPE_CHECKING:
@@ -61,15 +62,21 @@ def evidence_capability(ctx: RunContext):
                                       NativeToolReturnPart)
     from pydantic_ai_filesystem_sandbox import SandboxError
 
-    def provider_tools(response) -> None:
+    def provider_tools(response, model_span) -> None:
         results = {p.tool_call_id: p for p in response.parts if isinstance(p, NativeToolReturnPart)}
         for part in response.parts:
             if not isinstance(part, NativeToolCallPart):
                 continue
             result = results.get(part.tool_call_id)
-            ctx.recorder.emit("tool_called", f"provider:{part.tool_name}", confidence="parsed",
-                              data={"tool": part.tool_name, "id": part.tool_call_id, "provider_run": True,
-                                    "provider": part.provider_name},
+            component = f"provider:{part.tool_name}"
+            data = {"tool": part.tool_name, "id": part.tool_call_id, "provider_run": True,
+                    "provider": part.provider_name}
+            # provrun did not see the call run, so its span marks only where the
+            # call sits: a child of the model call whose response reported it.
+            with otel.span("tool_called", ctx.recorder.run_id, component, parent=model_span) as s:
+                otel.annotate(s, data)
+                data.update(otel.ids(s))
+            ctx.recorder.emit("tool_called", component, confidence="parsed", data=data,
                               payload=_dump({"args": part.args,
                                              "result": result.content if result is not None else None}))
 
@@ -78,6 +85,7 @@ def evidence_capability(ctx: RunContext):
             with ctx.recorder.step("model_called", "PydanticAIBackend",
                                    data={"model": request_context.model.model_name,
                                          "streamed": bool(request_context.streaming)}) as step:
+                model_span = otel.current()
                 response = await handler(request_context)
                 usage = response.usage
                 if response.model_name:
@@ -92,7 +100,7 @@ def evidence_capability(ctx: RunContext):
                     "request": json.loads(ModelMessagesTypeAdapter.dump_json(request_context.messages)),
                     "response": json.loads(ModelMessagesTypeAdapter.dump_json([response])),
                 }, ensure_ascii=False)
-            provider_tools(response)
+            provider_tools(response, model_span)
             return response
 
         async def wrap_tool_execute(self, run_ctx, *, call, tool_def, args, handler):
