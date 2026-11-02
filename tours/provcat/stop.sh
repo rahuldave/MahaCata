@@ -3,7 +3,7 @@
 #   source tours/provcat/stop.sh
 
 _tour_stop() {
-  local dir="${TOUR_DIR:-/tmp/provcat-tour}"
+  local dir="${_PROVCAT_TOUR_DIR:-${TOUR_DIR:-/tmp/provcat-tour}}"
   if [ ! -f "$dir/.provcat-tour" ]; then
     echo "stop.sh: no tour in $dir" >&2
   else
@@ -21,6 +21,8 @@ _tour_stop() {
   if [ -n "${_PROVCAT_TOUR_SAVED:-}" ]; then
     eval "$_PROVCAT_TOUR_SAVED"
     unset _PROVCAT_TOUR_SAVED
+    unset _PROVCAT_TOUR_DIR
   fi
 }
 _tour_stop
+unset -f _tour_stop

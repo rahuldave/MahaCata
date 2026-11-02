@@ -7,6 +7,14 @@
 # variables that this file changed.
 
 _tour_start() {
+  if [ ! -f tours/provcat/start.sh ]; then
+    echo "start.sh: run it from the top folder of the repository" >&2
+    return 1
+  fi
+  if [ -n "${_PROVCAT_TOUR_SAVED:-}" ]; then
+    echo "start.sh: a tour already runs in this shell; run 'source tours/provcat/stop.sh' first" >&2
+    return 1
+  fi
   local dir="${TOUR_DIR:-/tmp/provcat-tour}" port="${TOUR_S3_PORT:-5055}"
   case "$port" in
     ''|*[!0-9]*) echo "start.sh: TOUR_S3_PORT must be a number, not '$port'" >&2; return 1 ;;
@@ -32,17 +40,19 @@ _tour_start() {
     if printenv "$name" > /dev/null; then
       saved="$saved$(printf 'export %s=%q;' "$name" "$(printenv "$name")")"
     elif eval "[ -n \"\${$name+x}\" ]"; then
-      saved="$saved$(printf '%s=%q;' "$name" "$(eval "printf '%s' \"\$$name\"")")"
+      saved="$saved$(printf 'unset %s; %s=%q;' "$name" "$name" "$(eval "printf '%s' \"\$$name\"")")"
     else
       saved="${saved}unset $name;"
     fi
   done
   _PROVCAT_TOUR_SAVED="$saved"
+  _provcat_tour_mine=1  # from here on, a failed start is stopped
+  _PROVCAT_TOUR_DIR="$dir"  # stop.sh stops this tour, whatever TOUR_DIR says then
 
-  mkdir -p "$dir/files/sales" "$dir/files/shared"
-  touch "$dir/.provcat-tour"
+  mkdir -p "$dir/files/sales" "$dir/files/shared" || return 1
+  touch "$dir/.provcat-tour" || return 1
   export TOUR_DIR="$dir" TOUR_S3_PORT="$port"
-  cp tours/provcat/provcat.yaml "$TOUR_DIR/provcat.yaml"
+  cp tours/provcat/provcat.yaml "$TOUR_DIR/provcat.yaml" || return 1
   export PROVCAT_CONFIG="$TOUR_DIR/provcat.yaml" PROVCAT_CACHE="$TOUR_DIR/cache"
   unset PROVCAT_HOOKS PROVCAT_APP PROVCAT_TENANT AWS_PROFILE AWS_SESSION_TOKEN
   # moto takes any keys.
@@ -59,10 +69,19 @@ _tour_start() {
     sleep 0.2
   done
   if [ -z "$up" ]; then
-    echo "start.sh: moto did not start; its log is in $TOUR_DIR/moto.log" >&2
+    echo "start.sh: moto did not start; the end of its log, which stop.sh deletes:" >&2
+    tail -n 5 "$TOUR_DIR/moto.log" >&2
     return 1
   fi
   uv run python tours/provcat/make_bucket.py tour-sales
 }
-# If the start fails halfway, stop what it started and give the shell back.
-_tour_start || { _tour_rc=$?; [ -n "${_PROVCAT_TOUR_SAVED:-}" ] && source tours/provcat/stop.sh; (exit $_tour_rc); }
+# If the start fails after its checks, stop what it started and give the
+# shell back. A start that fails its checks leaves a running tour alone.
+_provcat_tour_mine=""
+# The || keeps a shell with set -e from exiting before the clean-up.
+_tour_rc=0
+_tour_start || _tour_rc=$?
+if [ "$_tour_rc" -ne 0 ] && [ -n "$_provcat_tour_mine" ]; then source tours/provcat/stop.sh; fi
+unset _provcat_tour_mine
+unset -f _tour_start
+eval "unset _tour_rc; (exit $_tour_rc)"

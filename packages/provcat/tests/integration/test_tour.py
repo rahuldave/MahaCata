@@ -57,8 +57,9 @@ def _script_steps(out: str) -> dict[str, str]:
 def _page_steps(page: str) -> dict[str, str]:
     steps = {}
     for title, body in re.findall(r"^## (Step \d+:[^\n]*)\n(.*?)(?=^## |\Z)", page, flags=re.M | re.S):
-        blocks = re.findall(r"^```\n(.*?)^```$", body, flags=re.M | re.S)
-        steps[title] = "\n".join(b.rstrip("\n") for b in blocks)
+        # Only the plain blocks hold output; a python or yaml block shows a file.
+        blocks = re.findall(r"^```(\w*)\n(.*?)^```$", body, flags=re.M | re.S)
+        steps[title] = "\n".join(b.rstrip("\n") for lang, b in blocks if not lang)
     return steps
 
 
@@ -117,7 +118,13 @@ def test_start_and_stop_give_back_the_shell(tmp_path, shell):
     if shutil.which(shell) is None:
         pytest.skip(f"no {shell}")
     tour_dir = tmp_path / "t"
-    script = "PROVCAT_TENANT='a b $x'; " + ROUND_TRIP
+    # PROVCAT_TENANT is unset by start.sh, and PROVCAT_CACHE is exported by it;
+    # each must come back as it was, a variable of the shell only.
+    script = "PROVCAT_TENANT='a b $x'; PROVCAT_CACHE='/my cache'; " + ROUND_TRIP.replace(
+        'set | grep "^PROVCAT_TENANT="', 'set | grep "^PROVCAT_\\(TENANT\\|CACHE\\)="').replace(
+        'printenv PROVCAT_TENANT && echo "PROVCAT_TENANT was exported"; ',
+        'printenv PROVCAT_TENANT && echo "PROVCAT_TENANT was exported"; '
+        'printenv PROVCAT_CACHE && echo "PROVCAT_CACHE was exported"; ')
     done = subprocess.run([shell, "-c", script], cwd=ROOT,
                           env=_env(tour_dir, AWS_PROFILE="keep it", PROVCAT_CONFIG="/my.yaml"),
                           capture_output=True, text=True, timeout=300)
@@ -176,3 +183,54 @@ def test_start_refuses_a_port_in_use(tmp_path):
     assert done.returncode == 1
     assert f"port {port} is in use" in done.stderr
     assert not (tmp_path / "t").exists()
+
+
+@pytest.mark.parametrize("second", ["", 'TOUR_DIR="$TOUR_DIR-2"; '])
+def test_a_second_start_leaves_the_running_tour_alone(tmp_path, second):
+    # A second start in the same folder, or in another, once stopped the first.
+    tour_dir = tmp_path / "t"
+    script = ('source tours/provcat/start.sh > /dev/null; moto=$(pgrep -P "$(cat "$TOUR_DIR/moto.pid")"); '
+              f'first="$TOUR_DIR"; {second}source tours/provcat/start.sh; echo "rc=$?"; '
+              'TOUR_DIR="$first"; test -f "$TOUR_DIR/.provcat-tour" && echo "folder kept"; '
+              'kill -0 $moto && echo "moto runs"; echo "config=$PROVCAT_CONFIG"; '
+              'source tours/provcat/stop.sh; kill -0 $moto 2> /dev/null && echo "moto still runs"; '
+              'type _tour_start _tour_stop > /dev/null 2>&1 && echo "functions left"; true')
+    done = _shell(script, tour_dir)
+    assert "a tour already runs in this shell" in done.stderr
+    assert done.stdout.splitlines() == ["rc=1", "folder kept", "moto runs", f"config={tour_dir}/provcat.yaml"]
+    assert not tour_dir.exists() and not (tmp_path / "t-2").exists()
+
+
+@pytest.mark.parametrize("shell", ["bash", "zsh"])
+def test_a_failed_start_cleans_up_in_a_shell_with_set_e(tmp_path, shell):
+    if shutil.which(shell) is None:
+        pytest.skip(f"no {shell}")
+    # A cp that fails makes the start fail after it saved the shell.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "cp").write_text("#!/bin/sh\nexit 4\n")
+    (bin_dir / "cp").chmod(0o755)
+    tour_dir = tmp_path / "t"
+    env = {**_env(tour_dir), "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    done = subprocess.run([shell, "-c", "set -e; source tours/provcat/start.sh"], cwd=ROOT, env=env,
+                          capture_output=True, text=True, timeout=60)
+    assert done.returncode != 0
+    assert not tour_dir.exists()
+
+
+def test_start_refuses_to_run_from_another_folder(tmp_path):
+    done = subprocess.run(["bash", "-c", f"source {ROOT}/tours/provcat/start.sh; echo rc=$?"], cwd=tmp_path,
+                          env=_env(tmp_path / "t"), capture_output=True, text=True, timeout=60)
+    assert "run it from the top folder" in done.stderr
+    assert done.stdout.strip() == "rc=1"
+    assert not (tmp_path / "t").exists()
+
+
+def test_stop_stops_the_tour_that_started_after_tour_dir_changes(tmp_path):
+    tour_dir = tmp_path / "t"
+    done = _shell('source tours/provcat/start.sh > /dev/null; moto=$(pgrep -P "$(cat "$TOUR_DIR/moto.pid")"); '
+                  'TOUR_DIR=/elsewhere; source tours/provcat/stop.sh; '
+                  'kill -0 $moto 2> /dev/null && echo "moto still runs"; true', tour_dir)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == ""
+    assert not tour_dir.exists()
