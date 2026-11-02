@@ -81,7 +81,7 @@ lakeFS is a server that keeps git-like branches and commits over object storage.
 Use lakeFS 1.86.0, and no later version. It is the last release under the Apache 2.0 license, and the last with pluggable access control:
 
 - **The license.** lakeFS 1.87.0 moved to the Business Source License 1.1, which is not an open-source license.
-- **Access control.** lakeFS 1.87.0 removed the external authorization server and its reference server, the access-list server. With them, one lakeFS can keep each org to its own repositories. Since 1.77.0, a user who lists repositories sees only the ones their policies let them list. The filter works only with an external authorization server, not with the built-in one.
+- **Access control.** lakeFS 1.87.0 removed the external authorization server and its access-list server. With them, one lakeFS can keep each org to its own repositories. Since 1.77.0, a user who lists repositories sees only the ones their policies let them list. The filter works only with an external authorization server, not with the built-in one.
 
 Build it from source, from the fork [rahuldave/lakeFS](https://github.com/rahuldave/lakeFS), branch `provcat`. The branch is v1.86.0 with our changes, which `PROVCAT.md` at the root of the fork lists. Without them, access control does not keep orgs apart, as the design document explains. You need Git, Node.js and Go 1.23 or later. Go downloads the Go 1.26.4 that lakeFS needs.
 
@@ -264,7 +264,7 @@ Install etcd, for example with `brew install etcd` on macOS. Then run it with a 
 etcd --data-dir ~/etcd-data
 ```
 
-It listens on `localhost:2379`. Step 6 of the [tour](tour.md) shows how to copy a configuration into it.
+It listens on `localhost:2379`. "Share one configuration through etcd" in [What provcat does](provcat-features.md#share-one-configuration-through-etcd) shows how to copy a configuration into it.
 
 ## Pull the emulator images
 

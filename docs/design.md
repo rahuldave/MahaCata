@@ -1,6 +1,6 @@
 # Design of provcat
 
-This page records what the original provcat did, what this version keeps, and how the interfaces fit together. Read [the reference](reference.md) first for the commands.
+This page explains how the parts of provcat fit together. Read [What provcat does](provcat-features.md) first for the features, and [the reference](reference.md) for the commands.
 
 ## Terms
 
@@ -14,32 +14,6 @@ This page records what the original provcat did, what this version keeps, and ho
 | Driver | A class that reads and writes one kind of storage, for example S3. The `github` and `hf` drivers only read. |
 | Pin | Replace a moving name, such as a branch, with a fixed one, such as a commit. |
 | ETag | The fingerprint that S3 gives each version of an object. |
-
-## The original provcat
-
-The first commit holds provcat as it was found in `~/Catalog/provcat`. The files date from 29 September to 3 October 2025. It had no commits.
-
-It was a command, `provc`, for a catalog of datasets, experiments, runs, models and artifacts. Each thing had a logical URI, for example `model://org/team/env/project/name?at=version:3`. The data lived in lakeFS, which is a store with git-like branches over S3. Experiments and model versions went to MLflow. Tables went to Lance files.
-
-The resolver worked in principle. It split a URI into parts, filled a repository name and a path from YAML templates, and returned `s3://repo/branch/path`. A second resolver read the same templates from etcd.
-
-The rest was a draft:
-
-- `provc.py` did not parse, because of bad indentation. It also used `os` but did not import it.
-- The lakeFS branch commands returned fixed fake answers.
-- The S3 writer fell back to `/mnt/data` without a word when S3 failed.
-- Stage pointers lived in a JSON file under `/mnt/data`.
-- The tests imported `provenance_resolver`, an older name of the package, and expected fields that the code no longer returned.
-- The selectors `stage:`, `version:`, `commit:` and `ts:` were in the docs, but only `branch:` changed the result.
-
-## What changed
-
-This version keeps the URI shapes and the template idea, and drops the rest:
-
-- **Kept:** the logical schemes, the YAML and etcd configuration, and stage pointers. Stage pointers now live in the configuration.
-- **Added:** seven store drivers: local files, S3, Google Cloud Storage, Azure Blob Storage, lakeFS, GitHub and Hugging Face. Also a local cache, and writes to every store but GitHub and Hugging Face. Also commits and branches in lakeFS and in versioned buckets, merges in lakeFS, and read-only snapshots.
-- **Replaced:** the original lakeFS write commands. The `lakefs` driver now writes, commits, branches and merges. See "The lakeFS driver" and "Writes" below.
-- **Removed:** Lance tables, MLflow runs and the Jinja cards. They are in the first commit for later use.
 
 ## The interfaces
 
@@ -213,7 +187,7 @@ A shared cache is not a boundary either. Its folders, such as `<cache>/lakefs-gl
 The keys keep tenants apart only if the server checks them. lakeFS with its default settings has no access control. It answers 501 to the group and policy APIs, and every user can read every repository. With one open-source lakeFS, the stores for each org route the requests. They do not stop one org's keys from reading another org's repositories. To enforce the separation, use one of these:
 
 - **A lakeFS for each org.** Point each org's store at its own lakeFS server, with `endpoint_url`. The system test `packages/provcat/tests/system/test_lakefs_isolation.py` checks this with two real servers. Each org reads its own data, and its store finds no repository of the other org. Each server refuses the other server's keys, at the S3 gateway and at the API.
-- **One patched lakeFS 1.86.0 with the access-list server.** lakeFS 1.86.0 can ask an external server who may do what. Its reference server, the access-list server, keeps users, groups and policies. `packages/provcat/scripts/lakefs_acl_local.py` runs both, and gives each org a policy for the repositories whose names start with the org and a `-`. The system test `packages/provcat/tests/system/test_lakefs_acl.py` checks this on one real server:
+- **One patched lakeFS 1.86.0 with the access-list server.** lakeFS 1.86.0 can ask an external server who may do what. Its access-list server keeps users, groups and policies. `packages/provcat/scripts/lakefs_acl_local.py` runs both, and gives each org a policy for the repositories whose names start with the org and a `-`. The system test `packages/provcat/tests/system/test_lakefs_acl.py` checks this on one real server:
   - Each org reads, pins and lists its own data.
   - Each org lists only its own repositories, through the API and the S3 gateway.
   - Each org is refused the other's repositories, and cannot make a repository under the other's name or on its storage.
@@ -459,6 +433,7 @@ What a bucket commit does not give:
 | A folder and a folder inside it can be fetched at the same time, under different locks. | Avoid it. If a fetch fails with an error, run it again. |
 | A `${oc.env:...}` value in etcd reads the environment of each reader. | Let only trusted people write to the etcd prefix. |
 | `ts:` works on lakeFS, GitHub and Hugging Face. Buckets refuse it. | Pin a bucket folder with a provcat commit. |
+| A logical URI of a bucket scheme, such as `files://`, drops `?at=version:ID`, and puts the ID of `?at=commit:ID` or the name of `?at=tag:X` in the path as a branch. A stage that names a commit fails the same way. | Read a fixed version of a bucket through the physical URI that `provc pin` prints. |
 | A GitHub `ts:` goes by committer dates, not push times. | Pin with `commit:` when the exact state matters. |
 | A bucket commit lists every version under its folder, twice, so it slows as history grows. | Commit small folders, or delete old versions that no commit names. |
 | A `ts:` search reads at most 100,000 commits on lakeFS, and 10,000 on GitHub and Hugging Face. | Use `commit:` or a stage for older versions. |
@@ -466,7 +441,6 @@ What a bucket commit does not give:
 | A GitHub file that is a valid Git LFS pointer, but whose object the LFS server does not have, fails the fetch. | Fetch the files around it one by one. |
 | A Git LFS pointer that names Git LFS extensions fails the fetch. | Fetch the file with the `git lfs` command. |
 | `provc ls` on GitHub gives the size of the pointer of a Git LFS file, because the contents API lists it so. `provc stat` and a fetch give the size of the content. | Use `provc stat` for the size of one file. |
-| Files that an older provcat cached from GitHub may be pointer files, so the driver fetches them again. Offline mode does not serve them. | Fetch them once online. |
 | A Hugging Face `ts:` counts commits that a merge commit brought in from another branch, because the Hub gives no parents. | Pin with `commit:` when the exact state matters. |
 | The Hugging Face driver fetches a folder file by file, so a folder of many files is slow. | Fetch the files that you need. |
 | The Hugging Face driver does not read pull request refs, such as `refs/pr/1`, or the refs that the Hub makes, such as `refs/convert/parquet`. | Pin the commit of the ref with `commit:`. |

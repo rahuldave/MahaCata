@@ -1,0 +1,4 @@
+# Hooks for an app named tour: log every request, and refuse physical URIs.
+apps:
+  tour:
+    "*": [provcat.log, provcat.logical_only]

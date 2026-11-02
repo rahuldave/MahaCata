@@ -13,7 +13,7 @@ website:
     left:
       - href: index.md
         text: Home
-      - href: tour.md
+      - href: provcat-features.md
         text: provcat
       - href: provrun.md
         text: provrun
@@ -30,12 +30,13 @@ website:
       - index.md
       - section: provcat
         contents:
+          - provcat-features.md
           - tour.md
           - reference.md
           - design.md
           - setup.md
           - transactions.md
-          - reference-server.md
+          - lakefs-target.md
           - access-notes.md
       - section: provrun
         contents:

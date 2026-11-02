@@ -1,8 +1,8 @@
-# The reference server
+# A reference lakeFS target
 
-The reference server is one lakeFS that keeps several orgs apart. Each org reads and writes only its own repositories. provcat uses it as the lakeFS behind the logical schemes, with one store and one set of keys for each org.
+provcat is a library. It reads and writes stores, and lakeFS is one kind of store that it can target. This page sets up one lakeFS that keeps several orgs apart, as a reference for that target. Each org reads and writes only its own repositories. provcat reaches it through one store and one set of keys for each org.
 
-It is a reference implementation. It shows that one lakeFS can keep orgs apart, and how. It runs on one machine, for development and tests.
+The setup runs on one machine, for development and tests. It shows that one lakeFS can keep orgs apart, and how.
 
 ## The parts
 
@@ -33,13 +33,13 @@ Two programs run side by side. Both are built from the fork [rahuldave/lakeFS](h
 
 lakeFS keeps the objects on local disk, in `<dir>/data`, with `blockstore.type: local`. It is not in front of S3. provcat reaches the data only through lakeFS. It uses the S3-compatible gateway for objects, and the REST API for commits and branches.
 
-lakeFS can keep the objects in S3, ADLS Gen2 or GCS instead. That takes a `blockstore` section with the bucket in `lakefs.yaml`, and the org policies' namespace rule then names that bucket, not `local://`. provcat would not change, because it talks only to lakeFS. The reference server does not do this yet.
+lakeFS can keep the objects in S3, ADLS Gen2 or GCS instead. That takes a `blockstore` section with the bucket in `lakefs.yaml`, and the org policies' namespace rule then names that bucket, not `local://`. provcat would not change, because it talks only to lakeFS. This setup keeps the objects on local disk.
 
 Without lakeFS, provcat reads and writes S3, GCS and Azure buckets directly. It branches in any bucket. In a bucket with versioning on, it also pins and commits, as "Commits in a bucket" in [the design](design.md#commits-in-a-bucket) explains. The cloud's own access control keeps orgs apart.
 
 ### Why lakeFS 1.86.0, patched
 
-lakeFS 1.87.0 removed the external authorization server and the access-list server. It also moved to the Business Source License 1.1, which is not an open-source license. So the reference server stays on 1.86.0, the last Apache 2.0 release, built from source so it can be changed.
+lakeFS 1.87.0 removed the external authorization server and the access-list server. It also moved to the Business Source License 1.1, which is not an open-source license. So this setup stays on 1.86.0, the last Apache 2.0 release, built from source so it can be changed.
 
 Stock 1.86.0 did not keep orgs apart. The fork fixes that. `PROVCAT.md` at the root of the fork lists every change, why we made it, and its test. In short:
 

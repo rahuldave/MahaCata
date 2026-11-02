@@ -1,520 +1,365 @@
-# A guided tour of provcat
+---
+title: A runnable tour of provcat
+---
 
-This tour follows catalog URIs through provcat, one step at a time. Each step gives commands to run and the output they print. After each command, the tour says what happened inside. The tour reads only. [The design](design.md#writes) explains how provcat writes, commits, branches and merges. [The reference](reference.md) lists the commands, and [design.md](design.md) is the reference for the parts.
+This tour runs provcat on your own machine. It needs no account, no key and no network, except in the last step, which is optional. It uses moto, a local server that speaks the S3 protocol, in place of a cloud bucket. [What provcat does](provcat-features.md) shows the features first. Read it before the tour if provcat is new to you.
+
+A script, `tours/provcat/run.sh`, runs every step and prints each command before its output. The output below is from that script. The commit IDs and version IDs differ on each run.
+
+## Terms
+
+| Term | Meaning |
+|---|---|
+| store | A named place that holds data, such as a bucket server or a folder. |
+| logical URI | A name that code uses, such as `files://sales/orders/day1.csv`. A scheme of the configuration turns it into a URI of a store. |
+| physical URI | An address in one store, such as `tour-s3://tour-sales/main/orders/day1.csv`. |
+| selector | The `?at=` part of a URI, which picks a version, such as `?at=branch:dev`. |
+| commit | A record of the version of every file in a folder, with an ID. |
+| pin | The same URI with a fixed version, such as a commit, in place of a branch. |
+| cache | The local folder where provcat keeps the files it fetched. |
 
 ## Before you start
 
-You need Python 3.13, [uv](https://docs.astral.sh/uv/) and a GitHub login for `gh`. Run every command from the top folder of a clone of [the repository](https://github.com/rahuldave/MahaCata).
+You need Python 3.13, [uv](https://docs.astral.sh/uv/), `curl` and `bash`.
 
-1. Install the package and its test tools.
+1. Clone the repository, and go into its top folder. Run every command of the tour from there.
+
+   ```
+   git clone https://github.com/rahuldave/MahaCata
+   cd MahaCata
+   ```
+
+2. Install the packages.
 
    ```
    uv sync
    ```
 
-2. Point the cache at a scratch folder, so the tour does not touch your real cache.
+## Run the whole tour
+
+Run the script. It takes about 15 seconds.
+
+```
+bash tours/provcat/run.sh
+```
+
+Add `--online` to run Step 11 too, which reads GitHub and Hugging Face. The script starts moto, runs the steps, stops moto and deletes its scratch folder.
+
+## Or run it step by step
+
+1. Start the tour in your shell.
 
    ```
-   export PROVCAT_CACHE=/tmp/provcat-tour
+   source tours/provcat/start.sh
    ```
 
-3. Keep the example configuration in a variable, because most steps use it.
+   The script does these things:
+
+   - It makes the scratch folder `/tmp/provcat-tour`, or the folder in `TOUR_DIR`. It refuses a folder that is already there, unless an earlier tour made it.
+   - It points `PROVCAT_CONFIG` and `PROVCAT_CACHE` at that folder, so the tour does not touch your own cache.
+   - It sets fake AWS keys for moto, and unsets `AWS_PROFILE`, `AWS_SESSION_TOKEN` and the provcat variables `PROVCAT_HOOKS`, `PROVCAT_APP` and `PROVCAT_TENANT`.
+   - It starts moto on port 5055, or the port in `TOUR_S3_PORT`. It refuses a port that is in use.
+   - It makes the bucket `tour-sales`, with versioning on, and two local files.
+
+2. Copy each command of the steps below into the same shell, in order. Copy only the text after `$ `.
+
+3. Stop the tour when you finish, in the same shell.
 
    ```
-   export C=packages/provcat/config/provcat.example.yaml
+   source tours/provcat/stop.sh
    ```
 
-## The path of one URI
+   It stops moto, deletes the scratch folder, and gives back each variable that `start.sh` changed its old value. In a new shell, it stops the tour in `/tmp/provcat-tour`, or in the folder that `TOUR_DIR` names.
 
-Every command takes a URI and sends it through the same parts, in the same order. The picture below shows the parts. The names in brackets are the files that hold them.
+## The tour's configuration
 
-```
-   "code://octocat/Hello-World/master/README"
-                     |
-                     v
-   +-------------------------------+
-   | parse        (uri.py)         |  text -> Uri(scheme, authority, segments, selector)
-   +-------------------------------+
-                     |
-                     v
-   +-------------------------------+     config: stores, schemes, stages
-   | resolve      (resolver.py)    | <-- (config.py: YAML file or etcd)
-   +-------------------------------+
-                     |  logical URI -> physical URI
-                     |  "github://octocat/Hello-World/README?at=branch:master"
-                     v
-   +-------------------------------+
-   | pick store by scheme          |  file -> LocalStore, s3 -> S3Store,
-   |              (catalog.py)     |  github -> GithubStore, lakefs -> LakefsStore
-   +-------------------------------+
-                     |
-                     v
-   +-------------------------------+     +----------------------------------+
-   | store: pin, stat, list, fetch | --> | LocalCache   (cache.py)          |
-   |              (stores/*.py)    | <-- | /tmp/provcat-tour/github/...     |
-   +-------------------------------+     +----------------------------------+
-                     |
-                     v
-   /tmp/provcat-tour/github/octocat/Hello-World/7fd1a60b.../README
-```
+The configuration, `tours/provcat/provcat.yaml`, defines two stores, three logical schemes and one entry. A logical scheme turns a name into a URI of a store. Step 6 shows the entry.
 
-A URI can skip the resolve step. If its scheme already names a store, for example `github`, provcat uses it as it is. A URI like that is a **physical URI**. A URI whose scheme the configuration defines, for example `code`, is a **logical URI**, and it goes through the resolver once.
+| Name | Kind | What it is |
+|---|---|---|
+| `tour-files` | store | Local files under `$TOUR_DIR/files`. |
+| `tour-s3` | store | moto, on `localhost`, at port 5055 or the port in `TOUR_S3_PORT`. |
+| `notes://project/path` | scheme | A local file of `tour-files`. |
+| `files://project/path` | scheme | The bucket `tour-PROJECT` on `tour-s3`, on the branch `main` unless a selector names another branch. |
+| `code://owner/repo/branch/path` | scheme | A file on GitHub. Only Step 11 uses it. |
 
-## Step 1: Read one file from GitHub
-
-Start with a physical URI, so the resolver does nothing. Ask provcat to pin it.
-
-```
-$ uv run provc pin 'github://octocat/Hello-World/README?at=branch:master'
-github://octocat/Hello-World/README?at=commit:7fd1a60b01f91b314f59955a4e4d4e80d8edf11d
-```
-
-**What happened:** `GithubStore.pin` asked the GitHub API where the branch `master` points. The answer is a commit. provcat wrote the branch and the commit in a ref record under `/tmp/provcat-tour/.provcat/refs`. A pin turns a name that moves, such as a branch, into a name that does not move.
-
-Now fetch the file.
-
-```
-$ uv run provc fetch 'github://octocat/Hello-World/README?at=branch:master'
-/tmp/provcat-tour/github/octocat/Hello-World/7fd1a60b01f91b314f59955a4e4d4e80d8edf11d/README
-```
-
-**What happened:** the store pinned the branch again and got the same commit. It then asked the cache for the file at that commit. The cache did not have it, so the store asked GitHub whether the path is a file or a folder. For a file, the store wrote the bytes into a temporary file that the cache gave it. The cache renamed the file into place. It also wrote a meta record with the version, the size, the time and the SHA-256 of the file.
-
-The path holds the commit, so a file in the cache never goes stale. A new commit on `master` gets a new folder.
-
-Print the file, and look at its entry.
-
-```
-$ uv run provc cat 'github://octocat/Hello-World/README?at=branch:master'
-Hello World!
-
-$ uv run provc stat 'github://octocat/Hello-World/README?at=branch:master'
-{
-  "uri": "github://octocat/Hello-World/README?at=commit:7fd1a60b01f91b314f59955a4e4d4e80d8edf11d",
-  "kind": "file",
-  "size": 13,
-  "version": "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d"
-}
-```
-
-An **entry** is the answer of `stat` and `ls`. It holds the pinned URI, the kind, the size and the version. For GitHub, the version is the commit.
-
-## Step 2: Use a logical URI
-
-A logical URI names a thing, and the configuration says where the thing lives. The example configuration has a scheme `code` for GitHub code:
+The `files` scheme looks like this:
 
 ```yaml
 schemes:
-  code:
-    parts: [org, repo, env]
+  files:
+    parts: [project]
     rest: path
-    target: "github://{org}/{repo}/{path}"
-    ref: "{env}"
-    pass_selector: true
+    target: "tour-s3://tour-{project}/{ref}/{path}"
+    ref: main
 ```
 
-In the scheme, the parts of the URI are `org`, `repo` and `env`, in that order. Every segment after them goes into `path`. The `target` is a template for the physical URI. The `env` is the branch, through `ref: "{env}"`. `pass_selector: true` puts that branch on the physical URI as `?at=branch:...`.
+## Step 1: Read a local file by its name
 
-The scheme also has `match` patterns that refuse names GitHub does not allow. A branch name with `/`, such as `feature/x`, cannot be one segment. Name it with a selector, as in `code://octocat/Hello-World/master/README?at=branch:feature/x`. The env must still be there and match its pattern.
-
-Resolve a `code` URI.
+The scheme `notes` sends a name to a local file under the tour's folder. `resolve` shows where the name goes, and `cat` prints the file.
 
 ```
-$ uv run provc --config $C resolve 'code://octocat/Hello-World/master/README'
+$ uv run provc resolve notes://sales/targets.csv
 {
-  "logical": "code://octocat/Hello-World/master/README",
-  "physical": "github://octocat/Hello-World/README?at=branch:master",
+  "logical": "notes://sales/targets.csv",
+  "physical": "tour-files:///sales/targets.csv",
   "via": [
-    "code template -> github://octocat/Hello-World/README?at=branch:master"
+    "notes template -> tour-files:///sales/targets.csv"
   ]
 }
+
+$ uv run provc cat notes://sales/targets.csv
+region,target
+east,120
+west,95
 ```
 
-**What happened:** `TemplateResolver.resolve` matched the parts to names, made the branch from `env`, filled the template, and parsed the result as a URI. A selector such as `?at=tag:v1` replaces the branch. The `via` list records each step. The resolver percent-encodes every value before it fills the template. So a value can never add a path segment or a second `?at=`.
+Code that reads `notes://sales/targets.csv` does not know the folder. A change to the configuration can move the file without a change to the code.
 
-Every other command takes the logical URI too. `fetch` and `cat` resolve it first, then do what Step 1 showed.
+## Step 2: Write to a bucket
 
-```
-$ uv run provc --config $C cat 'code://octocat/Hello-World/master/README'
-Hello World!
-```
-
-## Step 3: Use tenants, stages and versions
-
-The rest of the example configuration maps the logical schemes of the old provcat onto a new lakeFS layout. lakeFS is a store with git-like branches over S3. Its S3 gateway reads `s3://repository/branch-or-commit/path`. You do not need lakeFS for this step, because `resolve` does not read any data.
-
-The org is the tenant. It is the first part of every logical URI, as the owner is on GitHub. lakeFS has no orgs, so each org gets its own repositories, and each environment is a branch:
-
-```yaml
-schemes:
-  data+table:
-    parts: [org, domain, env, family, name]
-    target: "lakefs-{org}://{org}-data-{domain}/{ref}/tables/{family}/{name}"
-    ref: "{env}"
-    match:
-      org: "[a-z0-9]{1,20}"
-      env: "[a-z0-9][a-z0-9_-]{0,19}"
-      domain: "[a-z0-9][a-z0-9-]{0,36}"
-```
-
-So `data+table://acme/shared/prod/agreements/qa_outputs` reads the repository `acme-data-shared` on the branch `prod`. The same names for the org `globex` read `globex-data-shared`. The ML schemes use repositories named `{org}-ml-{project}`.
-
-In the lakeFS schemes, the `match` patterns refuse a name that lakeFS does not allow, or that could run into another name. They also keep each repository name within the 63 characters that lakeFS allows. An org has no `-`, so the first `-` in a repository name always ends the org. Two orgs never share a repository, a branch or a commit history.
-
-A **stage** is a name, such as `production`, that points at a fixed version of one thing. The `stages` section of the configuration holds the pointers:
-
-```yaml
-stages:
-  "data+table://acme/shared/prod/agreements/qa_outputs":
-    production: "commit:b8a2f9c123456"
-```
-
-Resolve the stage.
+The scheme `files` sends a name to a bucket on moto. Each project has its own bucket, and the first folder of a key is the branch, `main` by default. Write a file of orders, then read it back by its name.
 
 ```
-$ uv run provc --config $C resolve 'data+table://acme/shared/prod/agreements/qa_outputs?at=stage:production'
-{
-  "logical": "data+table://acme/shared/prod/agreements/qa_outputs?at=stage:production",
-  "physical": "lakefs-acme://acme-data-shared/b8a2f9c123456/tables/agreements/qa_outputs",
-  "via": [
-    "stage:production -> commit:b8a2f9c123456",
-    "data+table template -> lakefs-acme://acme-data-shared/b8a2f9c123456/tables/agreements/qa_outputs"
-  ]
-}
-```
+$ printf 'order,region,amount\n1,east,30\n2,west,12\n' > $TOUR_DIR/day1.csv
 
-**What happened:** the resolver looked up `production` for this URI and found `commit:b8a2f9c123456`. The commit filled `{ref}`, which is the second part of a lakeFS path. Without a selector, `{ref}` takes the default `{env}` from the scheme, which is the branch `prod` here. To move `production` to a new commit, change one line in the configuration.
-
-A `version:` selector fills `{version}` instead, and `{ref}` keeps its default. The `model` scheme uses it.
-
-```
-$ uv run provc --config $C resolve 'model://acme/ml/prod/churn/xgb?at=version:3'
-{
-  "logical": "model://acme/ml/prod/churn/xgb?at=version:3",
-  "physical": "lakefs-acme://acme-ml-churn/prod/ml/models/xgb/v3",
-  "via": [
-    "model template -> lakefs-acme://acme-ml-churn/prod/ml/models/xgb/v3"
-  ]
-}
-```
-
-The scheme `lakefs-acme` in both answers is a store, not a driver. The template names the store `lakefs-{org}`, so each org reads through its own store, with its own keys. The configuration defines the store for `acme` as the `lakefs` driver with the lakeFS endpoint:
-
-```yaml
-stores:
-  lakefs-acme:
-    driver: lakefs
-    endpoint_url: ${oc.env:LAKEFS_S3_ENDPOINT,http://localhost:8000}
-    profile: lakefs-acme
-```
-
-A logical URI of an org with no store fails. For example, `data+table://initech/...` fails with "there is no store named 'lakefs-initech'".
-
-
-
-A **driver** is a class that reads and writes one kind of storage. The `github` driver only reads. A **store** is a driver with options and a name. The name becomes a URI scheme.
-
-The `lakefs` driver is the S3 driver plus the lakeFS REST API, which turns a branch or a time into a commit. So `?at=ts:2026-10-01` on a lakeFS URI reads the branch as it was on that day. The `github` driver answers `ts:` from commit dates.
-
-## Step 4: Read from an S3-compatible server
-
-Step 3 stopped at the physical URI. To read the data, provcat needs a server that speaks the S3 protocol. The tour uses moto, a local S3 server that the tests also use. The same commands work against MinIO with a different `endpoint_url`. For lakeFS, use a store with the `lakefs` driver, so that pins, `ts:` and commits work.
-
-1. Start moto in a second terminal.
-
-   ```
-   uv run moto_server -p 5055
-   ```
-
-2. Give moto any keys. It does not check them.
-
-   ```
-   export AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
-   ```
-
-3. Make a bucket with two files.
-
-   ```
-   uv run python -c "
-   import boto3
-   s = boto3.client('s3', endpoint_url='http://localhost:5055', region_name='us-east-1')
-   s.create_bucket(Bucket='demo')
-   s.put_object(Bucket='demo', Key='main/data/a.csv', Body=b'x,y\n1,2\n')
-   s.put_object(Bucket='demo', Key='main/data/b.csv', Body=b'x,y\n3,4\n')"
-   ```
-
-4. Write a configuration with one store, `local-s3`, in `/tmp/tour.yaml`.
-
-   ```yaml
-   stores:
-     local-s3:
-       driver: s3
-       endpoint_url: http://localhost:5055
-   ```
-
-List the folder, then fetch it.
-
-```
-$ uv run provc --config /tmp/tour.yaml ls local-s3://demo/main/data
+$ uv run provc put files://sales/orders/day1.csv $TOUR_DIR/day1.csv
 [
   {
-    "uri": "local-s3://demo/main/data/a.csv",
+    "uri": "tour-s3://tour-sales/main/orders/day1.csv",
     "kind": "file",
-    "size": 8,
-    "version": "344fd2323dd33d5c058b7cf27de029e8"
-  },
-  {
-    "uri": "local-s3://demo/main/data/b.csv",
-    "kind": "file",
-    "size": 8,
-    "version": "c28e7e30d1dd46f320e0c3c1bc967c77"
+    "size": 40,
+    "version": "ee5762b26311c199582a32b684f862a4"
   }
 ]
 
-$ uv run provc --config /tmp/tour.yaml fetch local-s3://demo/main/data
-/tmp/provcat-tour/local-s3/demo/main/data
-```
-
-**What happened:** for S3, the version of a file is its ETag. An ETag is the fingerprint that S3 gives each version of an object. The fetch of a folder works in this order:
-
-1. It asks S3 whether the path is a file or a folder.
-2. It takes the lock of the folder, and removes the mark that says the folder is done.
-3. It lists every object below the folder.
-4. It downloads each file that the cache does not hold with the same ETag and the same bytes.
-5. It deletes cached files whose objects are gone.
-6. It marks the folder as done.
-
-A plain S3 path can change under the same name. In a bucket with versioning on, `provc pin` and `provc commit` give fixed versions, as "Commits in a bucket" in [the design](design.md#commits-in-a-bucket) explains. Online, provcat checks the ETag before each use, and downloads the file again when the ETag changed. Offline, it uses the cached file without a check. Stop moto with Ctrl+C when you finish.
-
-## Step 5: Work offline
-
-To use provcat inside a container, mount the whole cache folder, `.provcat` included. Then run provcat with `--offline`. It reads only the cache. Do not give a program a cached path to read, because a fetch can rewrite it in place. Give it a snapshot from `Catalog.snapshot` instead, as provrun does.
-
-```
-$ uv run provc --offline --config $C fetch 'code://octocat/Hello-World/master/README'
-/tmp/provcat-tour/github/octocat/Hello-World/7fd1a60b01f91b314f59955a4e4d4e80d8edf11d/README
-```
-
-**What happened:** offline, provcat cannot ask GitHub where `master` points. It read the ref record from Step 1 and used that commit. A branch that was never pinned fails with a clear error:
-
-```
-$ uv run provc --offline --config $C fetch 'code://octocat/Hello-World/test/README'
-provc: github://octocat/Hello-World/README?at=branch:test: offline, and branch:test was never pinned
-```
-
-Do not mount only a part, such as `github/`. Offline provcat needs the records under `.provcat` to find a pinned commit and to trust a cached file.
-
-Look at the cache to see every file that the tour wrote.
-
-```
-$ find /tmp/provcat-tour -type f
-/tmp/provcat-tour/.provcat/meta/a32d46c2....json
-/tmp/provcat-tour/.provcat/refs/2fe8388b....json
-/tmp/provcat-tour/github/octocat/Hello-World/7fd1a60b01f91b314f59955a4e4d4e80d8edf11d/README
-...
-```
-
-The records under `.provcat` have hashed names, so any key fits in a file name. The data files keep their real names.
-
-## Step 6: Share the configuration through etcd
-
-A team can keep one configuration in etcd, a key-value server, instead of a YAML file in each place. You need a running etcd for this step. Its default address is `localhost:2379`.
-
-1. Copy the example configuration into etcd, under the prefix `/provcat`.
-
-   ```
-   uv run provc --config $C config push --to etcd://localhost:2379/provcat
-   ```
-
-2. Read it back.
-
-   ```
-   uv run provc --config etcd://localhost:2379/provcat config show
-   ```
-
-3. Use it with any command.
-
-   ```
-   uv run provc --config etcd://localhost:2379/provcat resolve 'model://acme/ml/prod/churn/xgb?at=version:3'
-   ```
-
-The push copies each `${oc.env:...}` value as written. Each reader fills the value in from its own environment, so one entry in etcd gives each person their own home folder. Do not give write access to the etcd prefix to people you do not trust. A value there can read the environment of every reader.
-
-## Step 7: Read a model from Hugging Face
-
-The `hf` store reads models, datasets and Spaces on the Hugging Face Hub. It needs the `hf` extra, which `uv sync` installs. A public repository needs no login. For a private or gated one, set `HF_TOKEN`, or log in with `hf auth login`.
-
-The first part of the URI is the kind of repository, which is `models`, `datasets` or `spaces`. The next two parts are the owner and the name of the repository. Pin a small test model.
-
-```
-$ uv run provc pin 'hf://models/hf-internal-testing/tiny-random-gpt2?at=branch:main'
-hf://models/hf-internal-testing/tiny-random-gpt2?at=commit:71034c5d8bde858ff824298bdedc65515b97d2b9
-```
-
-**What happened:** `HfStore.pin` asked the Hub for the branches and tags of the repository, and took the commit of `main`. It wrote the pin in a ref record, as the GitHub store does in Step 1. Without a selector, the store uses `main`.
-
-Look at a file, then fetch it.
-
-```
-$ uv run provc stat 'hf://models/hf-internal-testing/tiny-random-gpt2/model.safetensors'
+$ uv run provc resolve files://sales/orders/day1.csv
 {
-  "uri": "hf://models/hf-internal-testing/tiny-random-gpt2/model.safetensors?at=commit:71034c5d8bde858ff824298bdedc65515b97d2b9",
-  "kind": "file",
-  "size": 453864,
-  "version": "71034c5d8bde858ff824298bdedc65515b97d2b9"
+  "logical": "files://sales/orders/day1.csv",
+  "physical": "tour-s3://tour-sales/main/orders/day1.csv",
+  "via": [
+    "files template -> tour-s3://tour-sales/main/orders/day1.csv"
+  ]
 }
 
-$ uv run provc fetch 'hf://models/hf-internal-testing/tiny-random-gpt2/model.safetensors'
-/tmp/provcat-tour/hf/models/hf-internal-testing/tiny-random-gpt2/71034c5d8bde858ff824298bdedc65515b97d2b9/model.safetensors
+$ uv run provc cat files://sales/orders/day1.csv
+order,region,amount
+1,east,30
+2,west,12
 ```
 
-**What happened:** the Hub keeps this file in Xet, its storage for large files. The store downloaded it with the `hf_xet` package, which `huggingface_hub` uses for Xet, straight into a temporary file of the provcat cache. It checked the size and the SHA-256 against the ones that the Hub lists, and only then did the cache rename the file into place. Nothing went into the cache of `huggingface_hub`.
+`put` prints the entry of the file it wrote. Its `version` field is the ETag of the object, a hash of its bytes, so the same bytes give the same ETag. Step 4 shows the version ID that a pin uses, which is a different value.
 
-A time picks the commit that a branch had then:
+## Step 3: Commit a folder, and read the commit after a change
+
+A commit records the version of every file in a folder. Commit the orders, then change a line of the file.
 
 ```
+$ FIRST=$(uv run provc commit files://sales/orders -m "first day" --meta source=till)
+
+$ echo "$FIRST"
+tour-s3://tour-sales/main/orders?at=commit:819ea816ccdbf97b0575420fc1a72626cd47bbc14c6eba9820ef59fa6fb7de12
+
+$ printf 'order,region,amount\n1,east,30\n2,west,15\n' > $TOUR_DIR/day1.csv
+
+$ uv run provc put files://sales/orders/day1.csv $TOUR_DIR/day1.csv
+[
+  {
+    "uri": "tour-s3://tour-sales/main/orders/day1.csv",
+    "kind": "file",
+    "size": 40,
+    "version": "67fd407bbf80fc532b35d6f2b914e3f1"
+  }
+]
+
+$ uv run provc cat files://sales/orders/day1.csv
+order,region,amount
+1,east,30
+2,west,15
+
+$ ID=${FIRST#*commit:}
+
+$ uv run provc cat "tour-s3://tour-sales/main/orders/day1.csv?at=commit:$ID"
+order,region,amount
+1,east,30
+2,west,12
+```
+
+The name reads the new file. The commit still reads the file as it was. `$FIRST` holds the URI that the commit printed, and `$ID` holds its ID.
+
+## Step 4: Pin a name to a fixed version
+
+`pin` turns a name into a URI that always reads the same bytes.
+
+```
+$ uv run provc pin files://sales/orders/day1.csv
+tour-s3://tour-sales/main/orders/day1.csv?at=version:549fce9b-7d43-4d2d-9dfd-b6badd667f35
+
+$ uv run provc pin files://sales/orders
+tour-s3://tour-sales/main/orders?at=commit:819ea816ccdbf97b0575420fc1a72626cd47bbc14c6eba9820ef59fa6fb7de12
+```
+
+The file pins to its version ID in the bucket, which names this version of the object and no other. The folder pins to its newest commit, the one from Step 3. That commit does not hold the change of Step 3, so run `provc commit` first to pin what the name reads now.
+
+## Step 5: Make a branch
+
+In a bucket, each top folder is a branch, such as `main`. `branch` copies `main` to a new branch, `dev`. List the orders on `dev`.
+
+```
+$ uv run provc branch 'files://sales?at=branch:dev' --from main
+tour-s3://tour-sales/dev
+
+$ uv run provc ls 'files://sales/orders?at=branch:dev'
+[
+  {
+    "uri": "tour-s3://tour-sales/dev/orders/day1.csv",
+    "kind": "file",
+    "size": 40,
+    "version": "67fd407bbf80fc532b35d6f2b914e3f1"
+  }
+]
+```
+
+A selector, `?at=branch:dev`, picks the branch on any command. Work on `dev` does not change `main`.
+
+## Step 6: Send one name somewhere else
+
+An entry is a rule of the configuration for one name, or for every name under a prefix. The tour's configuration has one entry. It sends `files://sales/prices` to a local file, while the rest of `files://sales` stays in the bucket.
+
+```
+$ uv run provc resolve files://sales/prices
+{
+  "logical": "files://sales/prices",
+  "physical": "tour-files:///shared/prices.csv",
+  "via": [
+    "entry files://sales/prices -> tour-files:///shared/prices.csv"
+  ]
+}
+
+$ uv run provc cat files://sales/prices
+item,price
+pen,2
+book,12
+```
+
+The `via` list names the entry. An entry moves one name, or every name under a prefix, without a change to the code that reads it.
+
+## Step 7: Fetch into the cache, and read offline
+
+`fetch` puts a folder in the local cache and prints its path. With `--offline`, provcat reads only the cache.
+
+```
+$ uv run provc fetch files://sales/orders
+/tmp/provcat-tour/cache/tour-s3/tour-sales/main/orders
+
+$ find $TOUR_DIR/cache -type f -not -path '*/.provcat/*' | sort
+/tmp/provcat-tour/cache/tour-s3/tour-sales/main/orders/day1.csv
+/tmp/provcat-tour/cache/tour-s3@commit-819ea816ccdbf97b0575420fc1a72626cd47bbc14c6eba9820ef59fa6fb7de12/tour-sales/main/orders/day1.csv
+
+$ uv run provc --offline cat files://sales/orders/day1.csv
+order,region,amount
+1,east,30
+2,west,15
+
+$ uv run provc --offline cat "tour-s3://tour-sales/main/orders/day1.csv?at=commit:$ID"
+order,region,amount
+1,east,30
+2,west,12
+```
+
+The cache keeps the live folder and the commit apart, so the commit's file never changes. Offline, the name reads the copy it fetched last, and the commit reads its own copy.
+
+## Step 8: Give a program a snapshot
+
+A snapshot is a read-only copy of one pinned version, in a folder named by the SHA-256 of its content. `tours/provcat/snapshot.py` makes one of the commit from Step 3, and lists its files.
+
+```
+$ uv run python tours/provcat/snapshot.py "$FIRST"
+pinned: tour-s3://tour-sales/main/orders?at=commit:819ea816ccdbf97b0575420fc1a72626cd47bbc14c6eba9820ef59fa6fb7de12
+digest: feb1e4a1980a1b554363cd5e3f80fecc1c43050d0d8ffe90373e495070880597
+day1.csv 0o444
+```
+
+The mode `0o444` means that nobody can write the file. Give a program a snapshot, not a path in the cache. A later fetch can change a cached file.
+
+## Step 9: Read through fsspec
+
+fsspec is the library that pandas and many other libraries use to open files. `tours/provcat/read_fsspec.py` opens a logical URI with it.
+
+```
+$ uv run python tours/provcat/read_fsspec.py
+['files://sales/orders/day1.csv']
+order,region,amount
+```
+
+`cat.fs()` gives fsspec the logical schemes of the catalog, so any library built on fsspec reads the names.
+
+## Step 10: Watch and limit an app with hooks
+
+A hook is a function that runs at each step of a request, such as the lookup of the name and the fetch. A recorder is a hook that writes the request down, and a gate is a hook that can refuse it. `tours/provcat/hooks.yaml` gives the app `tour` two hooks. `provcat.log` writes one line for each step, and `provcat.logical_only` refuses a physical URI.
+
+```
+$ export PROVCAT_HOOKS=tours/provcat/hooks.yaml PROVCAT_APP=tour
+
+$ uv run provc cat files://sales/prices
+{"app": "tour", "spot": "session", "logical": null, "physical": null, "event": "open"}
+{"app": "tour", "spot": "resolve", "logical": "files://sales/prices", "physical": null, "answer": "tour-files:///shared/prices.csv"}
+{"app": "tour", "spot": "fetch", "logical": "files://sales/prices", "physical": "tour-files:///shared/prices.csv", "answer": "/private/tmp/provcat-tour/files/shared/prices.csv"}
+item,price
+pen,2
+book,12
+{"app": "tour", "spot": "session", "logical": null, "physical": null, "event": "close"}
+
+$ uv run provc cat tour-files:///shared/prices.csv || true
+{"app": "tour", "spot": "session", "logical": null, "physical": null, "event": "open"}
+{"app": "tour", "spot": "fetch", "logical": null, "physical": "tour-files:///shared/prices.csv", "error": "AccessDenied: tour-files:///shared/prices.csv: app tour reads and writes only logical URIs"}
+provc: tour-files:///shared/prices.csv: app tour reads and writes only logical URIs
+{"app": "tour", "spot": "session", "logical": null, "physical": null, "event": "close"}
+
+$ unset PROVCAT_HOOKS PROVCAT_APP
+```
+
+The first read went through the lookup and the fetch, and each line names the logical URI. The second read had no logical URI, so the gate refused it.
+
+## Step 11: Read GitHub and Hugging Face (needs the network)
+
+This step runs only with `--online`. The scheme `code` sends a name to GitHub, and its third part is the branch. A Hugging Face URI takes a time.
+
+```
+$ uv run provc pin 'code://octocat/Hello-World/master/README'
+github://octocat/Hello-World/README?at=commit:7fd1a60b01f91b314f59955a4e4d4e80d8edf11d
+
+$ uv run provc cat 'code://octocat/Hello-World/master/README'
+Hello World!
+
 $ uv run provc pin 'hf://models/hf-internal-testing/tiny-random-gpt2?at=ts:2023-01-01'
 hf://models/hf-internal-testing/tiny-random-gpt2?at=commit:937b4d23b6648f5a1a0d1247b939b26981798903
-```
 
-`provc ls` lists a folder, and `provc fetch` of a folder downloads every file in it, one by one. Offline, `fetch` and `stat` serve what the store fetched before, and refuse the rest. `ls` needs the network.
-
-```
-$ uv run provc --offline fetch 'hf://models/hf-internal-testing/tiny-random-gpt2/tokenizer.json'
-provc: hf://models/hf-internal-testing/tiny-random-gpt2/tokenizer.json: commit 71034c5d8bde858ff824298bdedc65515b97d2b9 is not in the cache
-```
-
-A logical scheme can point at the Hub as at any store. A target such as `hf://datasets/{org}/{repo}/{path}` gives code a name that does not say where the data is. [The reference](reference.md#stores) lists the options of the store, and [the design](design.md#the-hugging-face-driver) gives the details. "Known limits" in the design lists what does not work yet.
-
-## Step 8: Send one name somewhere else with an entry
-
-The `code` template sends every `code://` name to GitHub. An entry sends one name, or every name under a prefix, somewhere else. The example configuration has one entry. It sends the weights of `Hello-World` to a model on Hugging Face, while the rest of the repository stays on GitHub:
-
-```yaml
-entries:
-  "code://octocat/Hello-World/master/weights":
-    target: "hf://models/hf-internal-testing/tiny-random-gpt2/{path}"
-```
-
-Resolve a name under the entry, and one beside it.
-
-```
-$ uv run provc --config $C resolve 'code://octocat/Hello-World/master/weights/config.json'
+$ uv run provc stat 'hf://models/hf-internal-testing/tiny-random-gpt2/config.json?at=ts:2023-01-01'
 {
-  "logical": "code://octocat/Hello-World/master/weights/config.json",
-  "physical": "hf://models/hf-internal-testing/tiny-random-gpt2/config.json",
-  "via": [
-    "entry code://octocat/Hello-World/master/weights -> hf://models/hf-internal-testing/tiny-random-gpt2/config.json"
-  ]
-}
-
-$ uv run provc --config $C resolve 'code://octocat/Hello-World/master/README'
-{
-  "logical": "code://octocat/Hello-World/master/README",
-  "physical": "github://octocat/Hello-World/README?at=branch:master",
-  "via": [
-    "code template -> github://octocat/Hello-World/README?at=branch:master"
-  ]
-}
-```
-
-**What happened:** the resolver looked for the longest key that is a prefix of each URI, by whole parts. The first URI is under the key, so `{path}` took the rest of it, `config.json`. The second URI is under no key, so the `code` template took it, as in Step 2. The `via` list names the rule that each URI went through.
-
-Every command takes the name, and a selector on the name still picks the version:
-
-```
-$ uv run provc --config $C stat 'code://octocat/Hello-World/master/weights/config.json'
-{
-  "uri": "hf://models/hf-internal-testing/tiny-random-gpt2/config.json?at=commit:71034c5d8bde858ff824298bdedc65515b97d2b9",
+  "uri": "hf://models/hf-internal-testing/tiny-random-gpt2/config.json?at=commit:937b4d23b6648f5a1a0d1247b939b26981798903",
   "kind": "file",
   "size": 807,
-  "version": "71034c5d8bde858ff824298bdedc65515b97d2b9"
+  "version": "937b4d23b6648f5a1a0d1247b939b26981798903"
 }
-
-$ uv run provc --config $C pin 'code://octocat/Hello-World/master/weights/config.json?at=ts:2023-01-01'
-hf://models/hf-internal-testing/tiny-random-gpt2/config.json?at=commit:937b4d23b6648f5a1a0d1247b939b26981798903
 ```
 
-Code that reads `code://octocat/Hello-World/master/weights/config.json` does not change when the entry moves the weights. "Entries" in [the reference](reference.md#entries) gives the rules, including the ones for tenants.
+A branch and a time both pin to a commit. A program that reads the pinned URI next year reads the same file.
 
-## Step 9: Watch and limit an app with hooks
+## Clean up
 
-A hook runs at each step of the catalog. A recorder writes down what an app reads. A gate refuses what the app may not read. Write a hooks file that gives an app named `tour` the two hooks that come with provcat:
-
-```
-$ cat > /tmp/provcat-tour-hooks.yaml <<'EOF'
-apps:
-  tour:
-    "*": [provcat.log, provcat.logical_only]
-EOF
-$ export PROVCAT_HOOKS=/tmp/provcat-tour-hooks.yaml PROVCAT_APP=tour
-```
-
-Read a logical name, and then the same file by its physical URI:
+If you ran the steps by hand, stop moto and delete the scratch folder:
 
 ```
-$ uv run provc --config $C cat 'code://octocat/Hello-World/master/README'
-{"app": "tour", "spot": "session", "logical": null, "physical": null, "event": "open"}
-{"app": "tour", "spot": "resolve", "logical": "code://octocat/Hello-World/master/README", "physical": null, "answer": "github://octocat/Hello-World/README?at=branch:master"}
-{"app": "tour", "spot": "pin", "logical": "code://octocat/Hello-World/master/README", "physical": "github://octocat/Hello-World/README?at=branch:master", "answer": "github://octocat/Hello-World/README?at=commit:7fd1a60b01f91b314f59955a4e4d4e80d8edf11d"}
-{"app": "tour", "spot": "fetch", "logical": "code://octocat/Hello-World/master/README", "physical": "github://octocat/Hello-World/README?at=commit:7fd1a60b01f91b314f59955a4e4d4e80d8edf11d", "answer": "/tmp/provcat-tour/github/octocat/Hello-World/7fd1a60b01f91b314f59955a4e4d4e80d8edf11d/README"}
-Hello World!
-{"app": "tour", "spot": "session", "logical": null, "physical": null, "event": "close"}
-
-$ uv run provc --config $C cat 'github://octocat/Hello-World/README'
-{"app": "tour", "spot": "session", "logical": null, "physical": null, "event": "open"}
-{"app": "tour", "spot": "pin", "logical": null, "physical": "github://octocat/Hello-World/README", "error": "AccessDenied: github://octocat/Hello-World/README: app tour reads and writes only logical URIs"}
-provc: github://octocat/Hello-World/README: app tour reads and writes only logical URIs
-{"app": "tour", "spot": "session", "logical": null, "physical": null, "event": "close"}
+source tours/provcat/stop.sh
 ```
 
-**What happened:** `provcat.log` wrote one line on stderr for each spot. The first read went through the lookup, the pin and the fetch, and each line names the logical URI. The second read had no logical URI, so `provcat.logical_only` refused it at the pin. The log is first in the chain, so it saw the refusal too.
-
-An app that the file does not name cannot start. `PROVCAT_APP=other` gives `no app 'other' under apps:`. Run `unset PROVCAT_HOOKS PROVCAT_APP` to end the step. "Hooks" in [the reference](reference.md#hooks) gives the rules.
-
-## Step 10: Open a logical URI with fsspec
-
-Libraries such as pandas open files through fsspec. `catalog.fs()` gives a file system for fsspec, and it registers the logical schemes. Then `fsspec.open` takes a logical URI:
-
-```
-$ uv run python - <<'EOF'
-import fsspec
-from provcat import Catalog
-cat = Catalog.open("packages/provcat/config/provcat.example.yaml")
-fs = cat.fs()
-print(fs.ls("code://octocat/Hello-World/master", detail=False))
-with fsspec.open("code://octocat/Hello-World/master/README", "rb") as f:
-    print(f.read(), f.pinned, f.ranges)
-EOF
-['code://octocat/Hello-World/master/README']
-b'Hello World!\n' github://octocat/Hello-World/README?at=commit:7fd1a60b01f91b314f59955a4e4d4e80d8edf11d [(0, 13)]
-```
-
-**What happened:** `fs.ls` listed the folder and named each file by its logical URI. `fsspec.open` found the `code` scheme, which `cat.fs()` registered. The open looked up the name and pinned it to a commit, and every read used that commit. `f.ranges` lists the bytes read. A recorder hook gets the same facts at the `read_block` and `close` spots. "Files and fsspec" in [the reference](reference.md#files-and-fsspec) gives the rules.
-
-## Where each step lives in the code
-
-| Step | Files |
-|---|---|
-| Parse a URI and its selector | `packages/provcat/src/provcat/uri.py` |
-| Read the configuration | `packages/provcat/src/provcat/config.py` |
-| Resolve a logical URI, with its entries | `packages/provcat/src/provcat/resolver.py` |
-| Join the parts and pick the store | `packages/provcat/src/provcat/catalog.py` |
-| Read GitHub | `packages/provcat/src/provcat/stores/github.py` |
-| Read Hugging Face | `packages/provcat/src/provcat/stores/hf.py` |
-| Read and write S3 and MinIO | `packages/provcat/src/provcat/stores/s3.py`, with the shared logic of object stores in `stores/objects.py` |
-| Read and write GCS and Azure | `packages/provcat/src/provcat/stores/gcs.py` and `stores/azure.py` |
-| Read and write lakeFS, and commit, branch and merge | `packages/provcat/src/provcat/stores/lakefs.py` |
-| Read and write local files | `packages/provcat/src/provcat/stores/local.py` |
-| Keep files, records and locks | `packages/provcat/src/provcat/cache.py` |
-| Run hooks at the lifecycle spots | `packages/provcat/src/provcat/hooks.py` |
-| Open files, and the file system for fsspec | `packages/provcat/src/provcat/files.py` and `packages/provcat/src/provcat/fs.py` |
-| The `provc` command | `packages/provcat/src/provcat/cli.py` |
-
-The tests in `packages/provcat/tests` and `packages/provrun/tests` are a second set of examples. The system tests use real services, and each runs only when you set its environment variable. "Run the tests" in [setup](setup.md) lists them.
+`run.sh` does this itself.
 
 ## Where to go next
 
-- **Use provcat from Python.** `Catalog` has the methods `resolve`, `pin`, `stat`, `list`, `fetch`, `read` and `snapshot` for reading. It has `put`, `delete`, `commit`, `branch` and `merge` for writing. `open_file` and `fs` open files, as Step 10 shows. `list` is `provc ls`, and `read` returns the bytes that `provc cat` prints. For example, `Catalog.open("packages/provcat/config/provcat.example.yaml").fetch(uri)` returns a path.
-- **Add a driver.** The section "Stores" in [design.md](design.md) lists the methods that a driver needs.
-- **Learn the limits.** The section "Known limits" in [design.md](design.md) lists what does not work yet, and what to do about each limit.
+- [What provcat does](provcat-features.md) shows lakeFS commits, branches and merges, tenants, stages and etcd, with examples.
+- [The reference](reference.md) lists the commands and options.
+- [The design](design.md) explains how the parts work, and lists the known limits.
+- [The reference lakeFS target](lakefs-target.md) is a lakeFS that keeps orgs apart.
+- [Setup](setup.md) shows how to run the tests, and how to set up each service.
