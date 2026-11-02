@@ -16,7 +16,7 @@ def test_etcd_round_trip_and_same_resolution(etcd, tmp_path):
     assert src.load() == cfg
     from_etcd = Catalog(src.load(), cache_root=tmp_path).resolve("t://x?at=stage:prod").physical
     from_dict = Catalog(cfg, cache_root=tmp_path).resolve("t://x?at=stage:prod").physical
-    assert from_etcd == from_dict and str(from_etcd) == "s3://b/c1/x"
+    assert from_etcd == from_dict and str(from_etcd) == "s3://b/main/x?at=commit:c1"
 
 
 def test_push_keeps_env_references_and_drops_old_sections(etcd, tmp_path, monkeypatch, capsys):

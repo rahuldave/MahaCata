@@ -60,6 +60,7 @@ _SETTLE = 600  # seconds; a ts: pin closer to now than this is not cached
 @register_driver
 class LakefsStore(S3Store):
     driver = "lakefs"
+    refs_in_path = True  # lakefs://repo/REF/path takes a branch, a tag or a commit
 
     def option_types(self):
         return {**super().option_types(), "api_url": str}

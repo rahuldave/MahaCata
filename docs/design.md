@@ -391,6 +391,20 @@ A bucket with versioning on keeps every version of an object, and gives each an 
 
 A pin of a folder gives the newest commit of that folder, or of a folder above it, that holds the folder. A folder with no commit cannot be pinned. A bucket without versioning cannot pin or commit, and provcat says so.
 
+### Fixed versions of a logical URI
+
+A logical URI names a fixed version with the same selectors. The resolver keeps the branch in the path and puts the fixed version in `?at=`:
+
+```
+files://acme/sales/t?at=commit:ID          -> s3-acme://acme-sales/main/t?at=commit:ID
+files://acme/sales/t/a.csv?at=version:ID   -> s3-acme://acme-sales/main/t/a.csv?at=version:ID
+files://acme/sales/t?at=branch:dev         -> s3-acme://acme-sales/dev/t
+```
+
+The branch in the path is the default branch of the scheme, its `ref`, even when the target places the selector with `{at}`. A stage that names a commit resolves the same way. A bucket has no tags, so `?at=tag:X` is refused. lakeFS takes a commit in the path, so a lakeFS target still puts a commit in `{ref}`. Each store says which way it works with the attribute `refs_in_path`.
+
+A commit records its folder, such as `main/t`, and the first folder is the branch. A read at a commit checks that its URI is in that folder. So a logical URI reads a commit only on the default branch of the scheme. A commit made on another branch, such as `dev`, fails through the logical URI. The error names the physical URI to read, such as `s3-acme://acme-sales/dev/t?at=commit:ID`, and `provc commit` prints that URI too. A logical URI cannot name a branch and a commit at once, and the resolver does not read the commit to find its branch.
+
 ### What a commit is
 
 `provc commit s3://acme-sales/main/tables -m "qa run 42"` writes two objects at the top of the bucket:
@@ -433,7 +447,6 @@ What a bucket commit does not give:
 | A folder and a folder inside it can be fetched at the same time, under different locks. | Avoid it. If a fetch fails with an error, run it again. |
 | A `${oc.env:...}` value in etcd reads the environment of each reader. | Let only trusted people write to the etcd prefix. |
 | `ts:` works on lakeFS, GitHub and Hugging Face. Buckets refuse it. | Pin a bucket folder with a provcat commit. |
-| A logical URI of a bucket scheme, such as `files://`, drops `?at=version:ID`, and puts the ID of `?at=commit:ID` or the name of `?at=tag:X` in the path as a branch. A stage that names a commit fails the same way. | Read a fixed version of a bucket through the physical URI that `provc pin` prints. |
 | A GitHub `ts:` goes by committer dates, not push times. | Pin with `commit:` when the exact state matters. |
 | A bucket commit lists every version under its folder, twice, so it slows as history grows. | Commit small folders, or delete old versions that no commit names. |
 | A `ts:` search reads at most 100,000 commits on lakeFS, and 10,000 on GitHub and Hugging Face. | Use `commit:` or a stage for older versions. |

@@ -173,7 +173,7 @@ After the first start, `packages/provcat/scripts/lakefs_local.py` starts lakeFS 
 
 - **A container.** The Postgres container from step 1 must exist. The script starts it, and does not make it.
 - **The program.** `--lakefs` gives the `lakefs` program, as a path or as a name on your `PATH`. The default is `~/Projects/lakeFS/lakefs`, the build from source.
-- **A folder.** `--lakefs-dir` gives the folder with the configuration, named `config.yaml`. lakeFS runs in this folder, so relative paths in the configuration start there. The default is `~/Catalog/lakefs`.
+- **A folder.** `--lakefs-dir` gives the folder with the configuration, named `config.yaml`. lakeFS runs in this folder, so relative paths in the configuration start there. The default is `~/.local/share/provcat/lakefs`.
 - **Relative paths.** A relative `--lakefs` or `--lakefs-dir` starts from the folder you run the script in.
 - **The port.** Give the port that the container publishes on `127.0.0.1`.
 
@@ -193,7 +193,7 @@ The script reads the connection string from `config.yaml`. It changes only the h
 uv run python packages/provcat/scripts/lakefs_acl_local.py
 ```
 
-The first run makes the folder `~/Catalog/lakefs-acl`, and writes these files there:
+The first run makes the folder `~/.local/share/provcat/lakefs-acl`, and writes these files there:
 
 - `acl.yaml` and `lakefs.yaml`, each with a new random secret key.
 - `api-token`, the random token between lakeFS and the access-list server.
@@ -214,7 +214,7 @@ An org user cannot list, make or delete its own keys. Only the admin can, throug
 To use it with provcat and the example configuration:
 
 ```
-export AWS_SHARED_CREDENTIALS_FILE=~/Catalog/lakefs-acl/credentials
+export AWS_SHARED_CREDENTIALS_FILE=~/.local/share/provcat/lakefs-acl/credentials
 export LAKEFS_S3_ENDPOINT=http://127.0.0.1:8002
 ```
 
@@ -363,9 +363,9 @@ To test isolation on one lakeFS with access control, start `packages/provcat/scr
 ```
 PROVCAT_SYSTEM_LAKEFS_ACL=http://127.0.0.1:8002 \
 PROVCAT_SYSTEM_LAKEFS_ACL_SERVER=http://127.0.0.1:8011 \
-PROVCAT_SYSTEM_LAKEFS_ACL_DIR=~/Catalog/lakefs-acl \
-PROVCAT_SYSTEM_LAKEFS_ACL_CREDENTIALS=~/Catalog/lakefs-acl/credentials \
-PROVCAT_SYSTEM_LAKEFS_ACL_DATA=~/Catalog/lakefs-acl/data \
+PROVCAT_SYSTEM_LAKEFS_ACL_DIR=~/.local/share/provcat/lakefs-acl \
+PROVCAT_SYSTEM_LAKEFS_ACL_CREDENTIALS=~/.local/share/provcat/lakefs-acl/credentials \
+PROVCAT_SYSTEM_LAKEFS_ACL_DATA=~/.local/share/provcat/lakefs-acl/data \
 uv run pytest -m system packages/provcat/tests/system/test_lakefs_acl.py
 ```
 

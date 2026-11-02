@@ -16,8 +16,8 @@ config.yaml.
 
 The folder given by --lakefs-dir holds config.yaml, and lakeFS runs in it.
 --lakefs names the lakefs program: a path, or a bare name to look up on the
-PATH. The defaults fit this machine: lakeFS 1.86.0
-built from source in ~/Projects/lakeFS, its config in ~/Catalog/lakefs, and
+PATH. The defaults are lakeFS 1.86.0
+built from source in ~/Projects/lakeFS, its config in ~/.local/share/provcat/lakefs, and
 the container lakefs-postgres published on 127.0.0.1:55440.
 """
 from __future__ import annotations
@@ -136,7 +136,7 @@ def run_lakefs(program: Path, home: Path, env: dict) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--lakefs", default="~/Projects/lakeFS/lakefs", help="the lakefs program, or its name on the PATH")
-    ap.add_argument("--lakefs-dir", default="~/Catalog/lakefs", help="the folder with config.yaml")
+    ap.add_argument("--lakefs-dir", default="~/.local/share/provcat/lakefs", help="the folder with config.yaml")
     ap.add_argument("--container", default="lakefs-postgres", help="the Postgres container, which must exist")
     ap.add_argument("--port", type=int, default=55440, help="the port the container publishes on 127.0.0.1")
     ap.add_argument("--wait", type=int, default=60, help="seconds to wait for Postgres")

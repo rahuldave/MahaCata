@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from provcat import Catalog, NotFound, UriError
+from provcat import Catalog, NotFound, ResolveError, UriError
 from provcat.cli import main
 from provcat.errors import StoreError
 
@@ -112,7 +112,8 @@ def test_a_scheme_that_drops_the_branch_refuses_the_write(tmp_path):
                  "schemes": {"t": {"parts": ["team"], "rest": "path", "target": "data:///{team}/{path}"}}},
                 cache_root=tmp_path / "cache")
     c.put("t://ml/a.csv", b"default")  # no selector: fine
-    with pytest.raises(UriError, match="does not use the branch"):
+    # The resolver refuses a branch that the target has no place for.
+    with pytest.raises(ResolveError, match="branch:dev would be dropped"):
         c.put("t://ml/a.csv?at=branch:dev", b"dev")
     assert (tmp_path / "ml" / "a.csv").read_bytes() == b"default"
 

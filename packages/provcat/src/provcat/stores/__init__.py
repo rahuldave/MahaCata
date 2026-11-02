@@ -52,6 +52,11 @@ class Store(ABC):
     # True when fetch reads a branch at the version that pin gives. The
     # catalog then pins first, so the hooks at pin see each version read.
     fetch_pins: bool = False
+    # True when a ref of any kind, a branch, a tag or a commit, can stand in
+    # the path, as in lakeFS. A bucket sets it False: only a branch stands in
+    # its path, and a fixed version goes in ?at=. The resolver reads it to fill
+    # {ref} (see provcat.resolver).
+    refs_in_path: bool = True
 
     def __init__(self, name: str, options: dict | None = None, *, offline: bool = False):
         self.name = name
