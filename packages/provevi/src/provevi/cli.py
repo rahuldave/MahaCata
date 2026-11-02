@@ -109,14 +109,18 @@ def cmd_policy(args) -> int:
 
 
 def cmd_telemetry(args) -> int:
-    from .telemetry import BLOCKED
+    from .telemetry import BLOCKED, PROBLEM
 
-    blocked = [e for e in _events(args) if e.type == BLOCKED]
-    for e in blocked:
-        lib = e.data.get("library") or ""
-        print(f"{e.seq:4} {e.time} {e.data.get('path', '')} {lib}  {e.data.get('detail', '')}".rstrip())
-    if not blocked:
-        print(f"{args.run}: no blocked attempts")
+    found = [e for e in _events(args) if e.type in (BLOCKED, PROBLEM)]
+    for e in found:
+        if e.type == BLOCKED:
+            lib = e.data.get("library") or ""
+            line = f"blocked {e.data.get('path', '')} {lib}  {e.data.get('detail', '')}"
+        else:
+            line = f"problem {e.data.get('problem', '')}"
+        print(f"{e.seq:4} {e.time} {line}".rstrip())
+    if not found:
+        print(f"{args.run}: no blocked attempts and no problems")
     return 0
 
 
@@ -167,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("show", help="print the events of a run")
     s.add_argument("run")
     s.set_defaults(fn=cmd_show)
-    t = sub.add_parser("telemetry", help="print the telemetry that the policy blocked in a run")
+    t = sub.add_parser("telemetry", help="print what the telemetry policy blocked in a run, and the problems the run found")
     t.add_argument("run")
     t.set_defaults(fn=cmd_telemetry)
     p = sub.add_parser("policy", help="check a telemetry policy file, and the installed versions of its libraries")

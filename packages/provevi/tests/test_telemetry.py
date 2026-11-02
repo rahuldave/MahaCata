@@ -8,7 +8,8 @@ import pytest
 
 from provevi import EvidenceEvent, FileStore, ProveviError, sha256_bytes
 from provevi.cli import main
-from provevi.telemetry import (BLOCKED, TelemetryPolicy, attributes_for, blocked_data, level_of, split_body)
+from provevi.telemetry import (BLOCKED, PROBLEM, TelemetryPolicy, attributes_for, blocked_data, level_of,
+                               normal_endpoint, otlp_traces_target, split_body)
 
 POLICY = {
     "version": 1,
@@ -303,4 +304,188 @@ def test_prove_telemetry_says_when_nothing_was_blocked(tmp_path, capsys):
     run_id = "run-20261101T000000Z-0000bbbb"
     _run_with_events(tmp_path, run_id, [("run_created", {})])
     assert main(["--runs", str(tmp_path), "telemetry", run_id]) == 0
-    assert capsys.readouterr().out == f"{run_id}: no blocked attempts\n"
+    assert capsys.readouterr().out == f"{run_id}: no blocked attempts and no problems\n"
+
+
+def test_prove_telemetry_lists_problems_with_the_blocked_attempts(tmp_path, capsys):
+    run_id = "run-20261101T000000Z-0000cccc"
+    _run_with_events(tmp_path, run_id, [
+        ("run_created", {}),
+        (PROBLEM, {"problem": "logfire is configured"}),
+        (BLOCKED, blocked_data("destination", detail="https://other.example")),
+    ])
+    assert main(["--runs", str(tmp_path), "telemetry", run_id]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0].endswith("problem logfire is configured")
+    assert "blocked destination" in out[1] and out[1].endswith("https://other.example")
+
+
+@pytest.mark.parametrize("a, b", [
+    ("https://OTEL.example.com/v1/traces/", "https://otel.example.com:443/v1/traces"),
+    ("http://otel.example.com.", "http://otel.example.com:80"),
+    ("postgresql+psycopg://u:p@db.example.com/mlflow", "postgresql://db.example.com:5432/mlflow"),
+    ("https://xn--bcher-kva.example/x", "https://XN--BCHER-KVA.example/x/"),
+    ("mssql+pyodbc://db.example.com:1433/m", "mssql://db.example.com:1433/m"),
+    ("http://[::1]:4318/v1/traces", "http://[::1]:4318/v1/traces/"),
+])
+def test_two_ways_of_writing_one_endpoint_are_equal(a, b):
+    assert normal_endpoint(a) == normal_endpoint(b)
+
+
+def test_an_ipv6_host_keeps_its_brackets():
+    assert normal_endpoint("http://[::1]/x") == "http://[::1]:80/x"
+
+
+@pytest.mark.parametrize("a, b", [
+    ("https://otel.example.com/v1/traces", "http://otel.example.com/v1/traces"),
+    ("https://otel.example.com:4318/v1/traces", "https://otel.example.com/v1/traces"),
+    ("https://otel.example.com/v1/traces", "https://otel.example.com/v1"),
+    ("https://otel.example.com", "https://otel.example.com.evil.example"),
+])
+def test_different_endpoints_stay_different(a, b):
+    assert normal_endpoint(a) != normal_endpoint(b)
+
+
+@pytest.mark.parametrize("url, words", [
+    ("ftp://x.example", "not an http"),
+    ("databricks", "not an http"),
+    ("file:///tmp/x", "not an http"),
+    ("https://", "not an http"),
+    ("https://x.example:99999", "not a URL"),
+    ("sqlite://host/x.db", "absolute path"),
+    ("sqlite:///relative.db", "absolute path"),
+    # Two parsers could read these as two places.
+    ("https://evil.example\\@otel.example.com/v1/traces", "backslash"),
+    ("https://otel.example.com\\.evil.example/v1", "backslash"),
+    ("https://otel.example.com /v1", "backslash, space"),
+    ("https://otel.example.com/v1\n", "backslash, space"),
+    ("https://evil.example@otel.example.com/v1/traces", "no user or password"),
+    ("https://u:p@otel.example.com", "no user or password"),
+    ("postgresql://db.example.com/mlflow?host=evil.example", "no query"),
+    ("mysql://db.example.com/m?unix_socket=/tmp/x", "no query"),
+    ("postgresql://db.example.com,evil.example/mlflow", "not a host name"),
+    ("https://h%6Fst.example/x", "not a host name"),
+    ("https://otel.example.com:0/v1", "a port from 1"),
+    ("https://otel.example.com:/v1", "a port from 1"),
+    ("https://otel.example.com/a/../v1", "no . or .. segments"),
+    ("https://otel.example.com//v1", "no //"),
+    ("https://otel.example.com/%2e%2e/v1", "no %"),
+    # Review findings: SQLAlchemy reads no fragment, so it connects to evil.com.
+    ("postgresql://good.example.com:5432/mlflow#@evil.com/mlflow", "control character or #"),
+    ("postgresql://good.example.com#@evil.com:5432/mlflow", "control character or #"),
+    ("https://otel.example.com/v1/traces#f", "control character or #"),
+    ("sqlite:////srv/mlflow.db#x", "control character or #"),
+    # IDNA 2003 gives fass.de, IDNA 2008 gives xn--fa-hia.de.
+    ("https://faß.de/v1/traces", "in ASCII"),
+    ("https://bücher.example/x", "in ASCII"),
+    ("https://otel.example.com/otlp?k=1", "no query"),
+    ("https://otel.example.com/otlp?", "no query"),
+    ("mssql+pyodbc://gooddsn", "a port and a database"),
+    ("mssql://db.example.com:1433", "a port and a database"),
+    ("https+x://otel.example.com/v1/traces", "not an http"),
+])
+def test_normal_endpoint_refuses_what_is_not_one_clear_place(url, words):
+    with pytest.raises(ProveviError, match=words):
+        normal_endpoint(url)
+
+
+def test_a_sqlite_path_keeps_its_trailing_slash():
+    assert normal_endpoint("sqlite:////srv/mlflow.db") != normal_endpoint("sqlite:////srv/mlflow.db/")
+
+
+def test_a_review_finding_url_matches_nothing():
+    doc = {"version": 1, "hosts": ["good.example.com", "fass.de"], "destinations": {
+        "pg": {"kind": "mlflow", "receives": "bodies", "endpoint": "postgresql://good.example.com:5432/mlflow"},
+        "lite": {"kind": "mlflow", "receives": "bodies", "endpoint": "sqlite:////srv/mlflow.db"},
+        "o": {"kind": "otlp", "receives": "names", "endpoint": "https://fass.de/v1/traces"},
+        "o2": {"kind": "otlp", "receives": "names", "endpoint": "https://good.example.com/otlp"}}}
+    p = TelemetryPolicy.from_dict(doc)
+    assert p.match_destination("mlflow", "postgresql://good.example.com:5432/mlflow#@evil.com/mlflow") is None
+    assert p.match_destination("mlflow", "sqlite:////srv/mlflow.db#x") is None
+    assert p.match_destination("mlflow", "sqlite:////srv/mlflow.db/") is None
+    assert p.match_destination("otlp", "https://faß.de/v1/traces") is None
+    assert p.match_destination("otlp", "https+x://good.example.com/otlp") is None
+    assert p.match_destination("otlp", "https://good.example.com/otlp?k=1") is None
+
+
+def test_a_url_that_two_parsers_read_differently_matches_nothing():
+    p = policy()
+    assert p.match_destination("otlp", "https://evil.example\\@otel.example.com/v1/traces") is None
+    assert p.match_destination("otlp", "https://evil.example@otel.example.com/v1/traces") is None
+
+
+def test_a_database_url_with_a_query_matches_nothing():
+    doc = {"version": 1, "hosts": ["db.example.com"],
+           "destinations": {"pg": {"kind": "mlflow", "receives": "bodies", "endpoint": "postgresql://db.example.com/m"}}}
+    p = TelemetryPolicy.from_dict(doc)
+    assert p.match_destination("mlflow", "postgresql://u:pw@db.example.com/m").name == "pg"
+    assert p.match_destination("mlflow", "postgresql://db.example.com/m?host=evil.example") is None
+
+
+def test_a_variable_matches_the_destination_of_its_kind_and_endpoint():
+    p = policy()
+    assert p.match_destination("otlp", "https://OTEL.example.com:443/v1/traces/").name == "collector"
+    assert p.match_destination("logfire", "https://otel.example.com/v1/traces") is None
+    assert p.match_destination("otlp", "https://otel.example.com/v1/logs") is None
+    assert p.match_destination("otlp", "not a url") is None
+    assert p.match_destination("otlp", None) is None
+
+
+def test_an_mlflow_destination_may_name_a_tracking_server_or_a_database():
+    doc = {"version": 1, "hosts": ["mlflow.example.com", "db.example.com"], "destinations": {
+        "server": {"kind": "mlflow", "receives": "usage", "endpoint": "https://mlflow.example.com"},
+        "pg": {"kind": "mlflow", "receives": "bodies", "endpoint": "postgresql://db.example.com/mlflow"},
+        "lite": {"kind": "mlflow", "receives": "bodies", "endpoint": "sqlite:////srv/mlflow.db"},
+        "own": {"kind": "mlflow", "receives": "names"},
+    }}
+    p = TelemetryPolicy.from_dict(doc)
+    assert p.match_destination("mlflow", "postgresql+psycopg2://u:pw@db.example.com:5432/mlflow").name == "pg"
+    assert p.match_destination("mlflow", "sqlite:////srv/mlflow.db").name == "lite"
+    assert p.match_destination("mlflow", "https://mlflow.example.com/").name == "server"
+    assert p.match_destination("mlflow", None).name == "own"
+
+
+@pytest.mark.parametrize("kind, endpoint, words", [
+    ("otlp", "postgresql://db.example.com/x", "needs an http or https endpoint"),
+    ("mlflow", "postgresql://db.evil.example/x", "'db.evil.example', which is not in hosts"),
+    ("mlflow", "postgresql://u:pw@db.example.com/x", "no user or password"),
+    ("otlp", "https://token@otel.example.com", "no user or password"),
+    ("mlflow", "ftp://db.example.com", "needs an http, https or database endpoint"),
+    ("mlflow", "sqlite://db.example.com/x.db", "absolute path"),
+    ("mlflow", "postgresql://db.example.com/x?host=db.example.com", "no query"),
+    ("otlp", "https://otel.example.com:0", "a port from 1"),
+])
+def test_a_policy_endpoint_is_checked(kind, endpoint, words):
+    doc = {"version": 1, "hosts": ["db.example.com", "otel.example.com"],
+           "destinations": {"d": {"kind": kind, "receives": "names", "endpoint": endpoint}}}
+    with pytest.raises(ProveviError, match=words):
+        TelemetryPolicy.from_dict(doc)
+
+
+@pytest.mark.parametrize("env, want", [
+    ({}, None),
+    ({"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": ""}, None),
+    ({"OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example.com"}, ("http/protobuf", "https://otel.example.com/v1/traces")),
+    ({"OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example.com/"}, ("http/protobuf", "https://otel.example.com/v1/traces")),
+    ({"OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example.com", "OTEL_EXPORTER_OTLP_PROTOCOL": "GRPC"},
+     ("grpc", "https://otel.example.com")),
+    ({"OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel.example.com", "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
+      "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "http/json"}, ("http/json", "https://otel.example.com/v1/traces")),
+    ({"OTEL_EXPORTER_OTLP_ENDPOINT": "https://a.example", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://b.example/t"},
+     ("http/protobuf", "https://b.example/t")),
+    ({"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "", "OTEL_EXPORTER_OTLP_ENDPOINT": "https://a.example"},
+     ("http/protobuf", "https://a.example/v1/traces")),
+    ({"OTEL_EXPORTER_OTLP_ENDPOINT": "otel.example.com:4317", "OTEL_TRACES_EXPORTER": "otlp_proto_grpc"},
+     ("grpc", "https://otel.example.com:4317")),
+    ({"OTEL_EXPORTER_OTLP_ENDPOINT": "localhost:4317", "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
+      "OTEL_EXPORTER_OTLP_INSECURE": "true"}, ("grpc", "http://localhost:4317")),
+    ({"OTEL_EXPORTER_OTLP_ENDPOINT": "https://a.example", "OTEL_TRACES_EXPORTER": "otlp_proto_http"},
+     ("http/protobuf", "https://a.example/v1/traces")),
+])
+def test_the_traces_target_follows_the_otel_rules(env, want):
+    assert otlp_traces_target(env) == want
+
+
+def test_an_unknown_otlp_protocol_is_refused():
+    with pytest.raises(ProveviError, match="not one of"):
+        otlp_traces_target({"OTEL_EXPORTER_OTLP_ENDPOINT": "https://a.example", "OTEL_EXPORTER_OTLP_PROTOCOL": "udp"})

@@ -4,7 +4,9 @@ title: provevi
 
 provevi stores, reads and checks the evidence of provrun's runs. Its command is `prove`. Phases 1 and 2 of [the plan](provevi-plan.md) are built. Phase 1 gave the package, the `file` store and the checks. Phase 2 gave the `sqlite` store, which answers questions across runs.
 
-Of Phase 3, provevi's part is built. It reads and checks the telemetry policy. So far provrun applies steps 2 to 8 and step 10. They record the telemetry variables, own the providers, turn off each library's own telemetry, and find what cannot be turned off. Step 9, which sends provrun's spans to approved destinations, is not built. The copy in MLflow, experiments as catalog objects and the span receiver come in later phases.
+Of Phase 3, provevi's part is built. It reads and checks the telemetry policy. So far provrun applies steps 2 to 8 and step 10. They record the telemetry variables, own the providers, turn off each library's own telemetry, and find what cannot be turned off. Step 9, which sends provrun's spans to approved destinations, is not built in provrun. provevi's part of it, the rule that matches a variable to a destination, is built.
+
+The copy in MLflow, experiments as catalog objects and the span receiver come in later phases.
 
 ## Terms
 
@@ -155,8 +157,8 @@ hosts:
 |---|---|
 | `version` | `1`, the format of the file. |
 | `libraries` | Each approved library, by its distribution name. `versions` is the versions that were tested, as a version specifier. `telemetry` is the destinations that its instrumentation may feed. |
-| `destinations` | Each place outside the evidence that spans may go to. `kind` is `logfire`, `otlp` or `mlflow`. `receives` is `names`, `usage` or `bodies`. `endpoint` is an http or https URL, and its host must be in `hosts`. Only an `mlflow` destination may leave it out, because the copy in MLflow goes into the store's own file. |
-| `hosts` | The hosts that a run may connect to. An entry with a leading dot, such as `.amazonaws.com`, allows each host under the domain, but not the domain itself. A dotted entry needs two labels at least, so `.com` is refused. |
+| `destinations` | Each place outside the evidence that spans may go to. `kind` is `logfire`, `otlp` or `mlflow`. `receives` is `names`, `usage` or `bodies`. `endpoint` is an http or https URL, and its host must be in `hosts`. An `mlflow` endpoint may also be a database URL, such as `postgresql://db.example.com/mlflow` or `sqlite:////srv/mlflow.db`. An `mlflow` destination may leave the endpoint out, for the copy in the store's own file. An endpoint names no user and no password, because the policy holds no secrets. |
+| `hosts` | The hosts that destinations may send to. provevi checks each endpoint's host against this list, and the list is a record for the firewall. Neither provevi nor provrun limits where a run connects, because that is the job of the firewall or the container. An entry with a leading dot, such as `.amazonaws.com`, names each host under the domain, but not the domain itself. A dotted entry needs two labels at least, so `.com` is refused. |
 
 A library or a destination that the policy does not name gets nothing. A run with no policy file gets `TelemetryPolicy.deny_all()`, which approves nothing. The loader refuses an unknown key, a key named twice in one mapping, and a `version` that is not the integer `1`. It reports every problem in the file at once. A library installed as a local build, such as `2.64.0+patched`, passes only if `versions` names the local build.
 
@@ -167,6 +169,65 @@ An attribute that provevi does not know counts as a body, so a new attribute nev
 provevi also checks each value. A `names` attribute must hold one word of at most 200 characters, with no space. A `usage` attribute must hold numbers. Any other value counts as a body, because it may hold text from a prompt. `attributes_for(attributes, level)` gives what a destination receives. `split_body(attributes)` takes the bodies out of a span's attributes, so that the evidence keeps them in a payload, not in the event.
 
 **Narrow the policy for one run.** `policy.narrow(section)` reads a run file's `telemetry` section. The section has the keys `libraries`, `destinations` and `hosts`, and each one replaces the policy's list with a smaller one. A destination can receive a lower level, and a library can feed fewer destinations. The section cannot change versions, kinds or endpoints. If the section would widen the policy in any way, `narrow` raises `ProveviError`.
+
+**Match a variable to a destination.** A run finds its destinations in the user's variables, such as `OTEL_EXPORTER_OTLP_ENDPOINT` and `MLFLOW_TRACKING_URI`. `policy.match_destination(kind, url)` gives the destination of that kind whose endpoint is the URL, or `None`. provrun sends nothing to a URL with no match, and writes `telemetry_blocked` with the path `destination`.
+
+Before the match, `normal_endpoint` puts both URLs in one form. It lowercases the scheme and the host, and adds the default port. It drops a trailing `/`, and a database driver such as `+psycopg`. It drops the user and the password of a database URL. A sqlite URL keeps only its absolute path, with its trailing `/` if it has one.
+
+`normal_endpoint` refuses a URL that two URL parsers could read as two places. Such a URL matches no destination. It refuses:
+
+- a backslash, a space, a control character or a `#`, because a database library reads no fragment, so `#@evil.example` names another host;
+- a host that is not ASCII, because the two standards of international names read some hosts, such as `faß.de`, as two hosts;
+- a user or a password in an `http` or `https` URL;
+- a `%` in the host, or a list of hosts;
+- a port of 0, or an empty port;
+- a path with `%`, with `.` or `..` segments, or with `//`;
+- a query, because a query such as `?host=` can name another server;
+- an `mssql` URL with no port or no database, because ODBC can read its host as the name of a data source;
+- a driver such as `+x` on an `http` or `https` scheme;
+- a sqlite URL with a relative path.
+
+Some variables send a matched URL somewhere else. `HTTPS_PROXY` sends it through a proxy, and `PGHOSTADDR` makes Postgres connect to another address. provrun must clear them for its exporters, or the firewall must stop them.
+
+A policy endpoint holds no user and no password, because the policy holds no secrets. Its host must be in `hosts`.
+
+`otlp_traces_target(environ)` gives the protocol and the address to which provrun's OpenTelemetry exporter sends traces. It follows the OpenTelemetry specification:
+
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` wins, as it is.
+- Otherwise `OTEL_EXPORTER_OTLP_ENDPOINT` is used, with `/v1/traces` added over HTTP.
+- The protocol comes from `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`, then `OTEL_EXPORTER_OTLP_PROTOCOL`, then `OTEL_TRACES_EXPORTER`. It is `http/protobuf` when none is set.
+- A variable that is set but empty counts as not set.
+
+It gives `None` when neither endpoint variable is set. provrun then makes no OTLP exporter. An OpenTelemetry library left to itself would send to `localhost:4318` instead.
+
+An MLflow destination needs the tracking URI too. provrun sets it on the client itself, because MLflow's default, when `MLFLOW_TRACKING_URI` is unset, is not the evidence store's file.
+
+This program matches three URLs against a policy with two destinations:
+
+```python
+from provevi import TelemetryPolicy, otlp_traces_target
+
+policy = TelemetryPolicy.from_dict({
+    "version": 1,
+    "destinations": {
+        "collector": {"kind": "otlp", "receives": "usage", "endpoint": "https://otel.example.com/v1/traces"},
+        "tracking": {"kind": "mlflow", "receives": "bodies", "endpoint": "postgresql://db.example.com/mlflow"},
+    },
+    "hosts": ["otel.example.com", "db.example.com"],
+})
+protocol, url = otlp_traces_target({"OTEL_EXPORTER_OTLP_ENDPOINT": "https://OTEL.example.com:443/"})
+print(protocol, url, "->", policy.match_destination("otlp", url).name)
+print(policy.match_destination("mlflow", "postgresql+psycopg://u:pw@db.example.com:5432/mlflow").name)
+print(policy.match_destination("otlp", "https://evil.example@otel.example.com/v1/traces"))
+```
+
+It prints:
+
+```
+http/protobuf https://OTEL.example.com:443/v1/traces -> collector
+tracking
+None
+```
 
 **Record what was blocked.** provrun writes a `telemetry_blocked` event for each attempt that the policy blocked. `blocked_data(path, library=..., detail=...)` gives its data, where `path` names what was blocked, such as `litellm.callbacks` or `network`. `policy.digest()` is the SHA-256 of the policy, for a run to record which policy it ran under.
 
@@ -187,7 +248,7 @@ If an approved library is installed at a version that the policy does not name, 
 prove: pydantic-ai 2.64.0 is installed, but the policy approves >=2.65
 ```
 
-`prove telemetry RUN` prints the `telemetry_blocked` events of a run, one on each line, with the sequence number, the time, the path, the library and the detail. If the policy blocked nothing, it prints `RUN: no blocked attempts`.
+`prove telemetry RUN` prints the `telemetry_blocked` and `telemetry_problem` events of a run, one on each line, with the sequence number and the time. A blocked attempt shows `blocked`, the path, the library and the detail. A problem, such as a library that set up its own telemetry, shows `problem` and its text. If the run has neither, it prints `RUN: no blocked attempts and no problems`.
 
 ## The command `prove`
 
@@ -201,7 +262,7 @@ prove: pydantic-ai 2.64.0 is installed, but the policy approves >=2.65
 | `prove experiments` | Lists the experiments. |
 | `prove access RUN` | Prints the grants and refusals of a run. |
 | `prove show RUN` | Prints the events of a run. |
-| `prove telemetry RUN` | Prints the attempts that the telemetry policy blocked in a run. |
+| `prove telemetry RUN` | Prints the attempts that the telemetry policy blocked in a run, and the telemetry problems that the run found. |
 | `prove policy FILE` | Checks a telemetry policy file, and the installed version of each library it approves. |
 | `prove verify RUN` | Checks the evidence, the outputs and the committed bundle. It takes `--config`, `--tenant`, `--bundle` and `--require-bundle`, as `provr verify` does. |
 

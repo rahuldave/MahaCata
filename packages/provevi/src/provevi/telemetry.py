@@ -13,14 +13,23 @@ approves exceptions in a policy file, which this module reads and checks::
       logfire:
         kind: logfire               # logfire, otlp or mlflow
         receives: usage             # names, usage or bodies
+        endpoint: https://logfire-us.pydantic.dev
     hosts:
-      - api.anthropic.com           # a host a run may connect to
+      - logfire-us.pydantic.dev     # a host that a destination may send to
       - .amazonaws.com              # a leading dot: any host under the domain
 
 A run file's ``telemetry`` section can narrow the policy with ``narrow``, but
 never widen it. ``attributes_for`` gives the span attributes that a
 destination receives at its level, and ``split_body`` takes the bodies out of
 a span's attributes, so that the evidence keeps them as a payload.
+``match_destination`` finds the destination that a telemetry variable, such
+as ``OTEL_EXPORTER_OTLP_ENDPOINT``, points at. ``otlp_traces_target`` gives
+the protocol and the address to which provrun sends traces over OTLP.
+
+The ``hosts`` list names the hosts that destinations may send to. The policy
+checks each destination's endpoint against it, and the list is also a record
+for the firewall. Neither provevi nor provrun limits a run's connections. That
+belongs to the firewall or the container that runs it.
 
 provrun applies the policy. This module only reads, checks and describes it.
 """
@@ -49,6 +58,13 @@ DESTINATION_KINDS = ("logfire", "otlp", "mlflow")
 POLICY_VERSION = 1
 #: The event type of an attempt that the policy blocked.
 BLOCKED = "telemetry_blocked"
+#: The event type of a problem that a run found after it started, such as a
+#: library that set up its own telemetry.
+PROBLEM = "telemetry_problem"
+#: The database schemes that an mlflow destination may name, as SQLAlchemy
+#: writes them, with or without a driver, as in postgresql+psycopg.
+MLFLOW_DATABASES = ("postgresql", "mysql", "mssql", "sqlite")
+_DEFAULT_PORTS = {"http": 80, "https": 443, "postgresql": 5432, "mysql": 3306, "mssql": 1433}
 
 # A destination at the level "names" receives only these attributes. Every
 # attribute not named here, or under usage, counts as a body, so a new
@@ -178,8 +194,8 @@ class Destination:
 @dataclass(frozen=True)
 class TelemetryPolicy:
     """What a run may record or send besides its evidence. A library or a
-    destination that the policy does not name gets nothing, and a run may
-    connect only to the hosts it names."""
+    destination that the policy does not name gets nothing. Each destination's
+    endpoint must be on a host that ``hosts`` names."""
 
     libraries: Mapping[str, Library] = field(default_factory=dict)
     destinations: Mapping[str, Destination] = field(default_factory=dict)
@@ -246,9 +262,25 @@ class TelemetryPolicy:
         return [] if lib is None else [self.destinations[d] for d in lib.telemetry]
 
     def allows_host(self, host: str) -> bool:
-        """True if a run may connect to host. An entry with a leading dot
-        allows each host under that domain, but not the domain itself."""
+        """True if hosts names host. An entry with a leading dot names each
+        host under that domain, but not the domain itself."""
         return _allowed(host, self.hosts)
+
+    def match_destination(self, kind: str, url: str | None) -> Destination | None:
+        """The destination of this kind whose endpoint is url, or None. Both
+        are made regular first by ``normal_endpoint``. An mlflow destination
+        with no endpoint, the copy in the store's own file, matches url None.
+        A url that cannot be made regular matches nothing."""
+        if url is None:
+            return next((d for d in self.destinations.values() if d.kind == kind and d.endpoint is None), None)
+        try:
+            want = normal_endpoint(url)
+        except ProveviError:
+            return None
+        for d in self.destinations.values():
+            if d.kind == kind and d.endpoint is not None and normal_endpoint(d.endpoint) == want:
+                return d
+        return None
 
     def check_installed(self, versions: Mapping[str, str] | None = None) -> list[str]:
         """A problem for each approved library that is installed at a version
@@ -429,12 +461,15 @@ def _destinations(value: Any, hosts: tuple[str, ...], problems: list[str]) -> di
             ok = False
         if kind == "mlflow" and endpoint is None:
             pass  # the copy in MLflow goes into the store's own file
-        elif not isinstance(endpoint, str) or urlsplit(endpoint).scheme not in ("http", "https"):
-            problems.append(f"destination {name!r} needs an http or https endpoint, not {endpoint!r}")
+        elif not isinstance(endpoint, str):
+            what = "an http, https or database" if kind == "mlflow" else "an http or https"
+            problems.append(f"destination {name!r} needs {what} endpoint, not {endpoint!r}")
             ok = False
-        elif not _allowed(urlsplit(endpoint).hostname or "", hosts):
-            problems.append(f"destination {name!r} sends to {urlsplit(endpoint).hostname!r}, which is not in hosts")
-            ok = False
+        else:
+            problem = _endpoint_problem(str(name), kind, endpoint, hosts)
+            if problem:
+                problems.append(problem)
+                ok = False
         if ok:
             out[str(name)] = Destination(str(name), kind, receives, endpoint)
     return out
@@ -470,3 +505,130 @@ def _libraries(value: Any, destinations: set[str], problems: list[str]) -> dict[
                 problems.append(f"library {raw!r} feeds {d!r}, which is not a destination")
         out[name] = Library(name, versions, tuple(d for d in telemetry if d in destinations))
     return out
+
+
+
+def _scheme(url: str) -> str:
+    scheme = urlsplit(url).scheme.lower()
+    base = scheme.split("+", 1)[0]
+    # Only a database URL names a driver, as postgresql+psycopg does.
+    return base if base in MLFLOW_DATABASES else scheme
+
+
+_BAD_CHARS = re.compile(r"[\\\s\x00-\x1f\x7f#]")
+_HOST = re.compile(r"[a-z0-9.-]+|\[[0-9a-f:.]+\]")
+_PROTOCOLS = ("grpc", "http/protobuf", "http/json")
+
+
+def normal_endpoint(url: str) -> str:
+    """url in one regular form, so that two ways of writing one address are
+    equal. The scheme and the host are lowercased, and the default port is
+    added. A trailing / is dropped, except from a sqlite path, and so are a
+    database driver such as +psycopg and the user and password of a database
+    URL. A sqlite URL keeps only its path.
+
+    Raises ProveviError for anything that two URL parsers could read as two
+    different places: a backslash, a space, a control character or a #; a
+    host that is not ASCII, because two standards of international names
+    read some hosts differently; a user in an http or https URL; a % in the
+    host; a port of 0 or an empty port; a path with . or .. segments or //;
+    a query, which can name another server, as ?host= does; a host list; a
+    relative sqlite path; an mssql URL with no port or no database, which
+    ODBC can read as the name of a data source. Also for a URL that is not
+    http, https or a database."""
+    if not isinstance(url, str) or _BAD_CHARS.search(url):
+        raise ProveviError(f"{url!r}: an endpoint has no backslash, space, control character or #")
+    if not url.isascii():
+        raise ProveviError(f"{url!r}: write an endpoint in ASCII, with a host in its punycode form")
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError as e:
+        raise ProveviError(f"{url!r} is not a URL: {e}") from None
+    scheme = _scheme(url)
+    database = scheme in MLFLOW_DATABASES
+    if scheme == "sqlite":
+        path = parts.path
+        if parts.netloc or parts.query or not path.startswith("//"):
+            raise ProveviError(f"{url!r}: write a sqlite URL with an absolute path, as sqlite:////srv/mlflow.db")
+        return "sqlite:///" + _path(url, path[1:], keep_slash=True)
+    if scheme not in _DEFAULT_PORTS or not parts.hostname:
+        raise ProveviError(f"{url!r} is not an http, https or database URL with a host")
+    if "@" in parts.netloc and not database:
+        raise ProveviError(f"{url!r}: an http or https endpoint names no user or password")
+    if parts.query or url.endswith("?"):
+        raise ProveviError(f"{url!r}: an endpoint has no query, because a query can name another server")
+    if scheme == "mssql" and (port is None or parts.path.strip("/") == ""):
+        raise ProveviError(f"{url!r}: write an mssql URL with a port and a database, so ODBC cannot read it as a data source")
+    hostport = parts.netloc.rpartition("@")[2]
+    if hostport.endswith(":") or port == 0:
+        raise ProveviError(f"{url!r}: write a port from 1 to 65535, or none")
+    host = parts.hostname.rstrip(".")
+    if ":" in host:
+        host = f"[{host}]"  # an IPv6 address
+    if not _HOST.fullmatch(host):
+        raise ProveviError(f"{url!r}: {host!r} is not a host name")
+    return f"{scheme}://{host}:{port if port is not None else _DEFAULT_PORTS[scheme]}{_path(url, parts.path)}"
+
+
+def _path(url: str, path: str, keep_slash: bool = False) -> str:
+    segments = path.split("/")
+    if "%" in path or any(seg in (".", "..") for seg in segments) or "//" in path.rstrip("/"):
+        raise ProveviError(f"{url!r}: write the path with no %, no . or .. segments and no //")
+    return path if keep_slash else path.rstrip("/")
+
+
+def _endpoint_problem(name: str, kind: str, endpoint: str, hosts: tuple[str, ...]) -> str | None:
+    scheme = _scheme(endpoint)
+    allowed = ("http", "https") + (MLFLOW_DATABASES if kind == "mlflow" else ())
+    if scheme not in allowed:
+        what = "an http, https or database" if kind == "mlflow" else "an http or https"
+        return f"destination {name!r} needs {what} endpoint, not {endpoint!r}"
+    if "@" in endpoint.split("//", 1)[-1].split("/", 1)[0]:
+        return f"destination {name!r}: an endpoint names no user or password; the policy holds no secrets"
+    try:
+        normal = normal_endpoint(endpoint)
+    except ProveviError as e:
+        return f"destination {name!r}: {e}"
+    host = urlsplit(normal).hostname or ""
+    if scheme != "sqlite" and not _allowed(host, hosts):
+        return f"destination {name!r} sends to {host!r}, which is not in hosts"
+    return None
+
+
+def otlp_traces_target(environ: Mapping[str, str]) -> tuple[str, str] | None:
+    """The protocol and the address to which provrun's OTLP exporter sends
+    traces, from the variables in environ, as the OpenTelemetry specification
+    gives them. None if neither endpoint variable is set, and then provrun
+    makes no OTLP exporter.
+
+    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT wins, and is used as it is. Otherwise
+    OTEL_EXPORTER_OTLP_ENDPOINT is used, with /v1/traces added over HTTP but
+    not over gRPC. A variable that is set but empty counts as not set. The
+    protocol comes from OTEL_EXPORTER_OTLP_TRACES_PROTOCOL, then
+    OTEL_EXPORTER_OTLP_PROTOCOL, then OTEL_TRACES_EXPORTER (otlp_proto_grpc
+    or otlp_proto_http), and is http/protobuf, the specification's default,
+    otherwise. provrun must make the exporter of that protocol. A gRPC
+    endpoint written as host:port gets https://, or http:// when
+    OTEL_EXPORTER_OTLP_TRACES_INSECURE or OTEL_EXPORTER_OTLP_INSECURE is true.
+    Raises ProveviError for a protocol that is not grpc, http/protobuf or
+    http/json."""
+    protocol = (environ.get("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") or environ.get("OTEL_EXPORTER_OTLP_PROTOCOL")
+                or {"otlp_proto_grpc": "grpc", "otlp_proto_http": "http/protobuf"}.get(
+                    (environ.get("OTEL_TRACES_EXPORTER") or "").strip().lower(), "http/protobuf"))
+    protocol = protocol.strip().lower()
+    if protocol not in _PROTOCOLS:
+        raise ProveviError(f"OTLP protocol {protocol!r} is not one of {', '.join(_PROTOCOLS)}")
+    traces = environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") or ""
+    base = environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") or ""
+    if traces:
+        url = traces
+    elif base:
+        url = base if protocol == "grpc" else base.removesuffix("/") + "/v1/traces"
+    else:
+        return None
+    if protocol == "grpc" and "://" not in url:
+        insecure = (environ.get("OTEL_EXPORTER_OTLP_TRACES_INSECURE") or environ.get("OTEL_EXPORTER_OTLP_INSECURE")
+                    or "").strip().lower() == "true"
+        url = ("http://" if insecure else "https://") + url
+    return protocol, url
