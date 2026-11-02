@@ -29,15 +29,17 @@ from typing import Literal
 
 from provcat import Catalog
 from provevi import EvidenceStore
+from provevi.telemetry import TelemetryPolicy
 
 from .access import Broker, StubBroker
 from .backends import Backend, RunResult, load_backend
-from .context import Bundle, RunContext
+from .context import Bundle, RunContext, evidence_mode
 from .errors import RunSettingError
 from .outputs import Artifact, Outputter
 from .resolve import ProvcatResolver, Resolver
 from .spec import AgentSpec, RunFile
 from .stagers import InProcessStager, Stager
+from .telemetry import Telemetry, load_policy
 
 
 @dataclass
@@ -71,12 +73,32 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
                     resolver: Resolver | None = None, stager: Stager | None = None,
                     backend: Backend | None = None, runs_root: Path | None = None,
                     mode: str | None = None, bundle_scheme: str | None = None,
-                    store: EvidenceStore | None = None) -> RunOutcome:
+                    store: EvidenceStore | None = None, policy: TelemetryPolicy | str | Path | None = None,
+                    telemetry: dict | None = None) -> RunOutcome:
     """Run agent once. With no broker, a StubBroker allows the inputs of the
     spec and the URIs in allow. The evidence goes through store, a provevi
-    store, by default the file store in the run folder. A bad setting or an unknown backend raises
-    RunSettingError before the run folder is made; any later error fails the
-    run, and the outcome holds it."""
+    store, by default the file store in the run folder.
+
+    policy is the operator's telemetry policy, or the path of its file; by
+    default, the file that PROVRUN_TELEMETRY_POLICY names, else a policy that
+    approves nothing. telemetry, a run file's telemetry section, narrows it.
+    provrun.telemetry says what a run does with the policy.
+
+    A bad setting, a telemetry section that widens the policy, or an unknown
+    backend raises RunSettingError before the run folder is made; so does a
+    telemetry problem in strict mode. Any later error fails the run, and the
+    outcome holds it."""
+    tel = Telemetry.prepare(load_policy(policy), telemetry, evidence_mode(env, mode))
+    with tel.applied():
+        # The environment is set now, before the backend imports its library.
+        return await _run_agent(agent, tel, catalog=catalog, org=org, domain=domain, env=env, actor=actor,
+                                allow=allow, broker=broker, resolver=resolver, stager=stager, backend=backend,
+                                runs_root=runs_root, mode=mode, bundle_scheme=bundle_scheme, store=store)
+
+
+async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org: str, domain: str, env: str,
+                     actor: str, allow, broker, resolver, stager, backend, runs_root, mode, bundle_scheme,
+                     store) -> RunOutcome:
     if backend is None:
         try:
             backend = load_backend(agent.backend)
@@ -88,7 +110,9 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
     ctx = RunContext.open(org=org, domain=domain, env=env, actor=actor, broker=broker,
                           resolver=resolver or ProvcatResolver(catalog), catalog=catalog,
                           runs_root=runs_root, mode=mode, bundle_scheme=bundle_scheme, store=store,
-                          data={"agent": agent.name, "backend": agent.backend, "spec": agent.to_dict()})
+                          data={"agent": agent.name, "backend": agent.backend, "spec": agent.to_dict(),
+                                "telemetry": tel.record()})
+    tel.recorder = ctx.recorder
     stager = stager or InProcessStager()
     outcome = RunOutcome(ctx.run_id, "failed", ctx.folder, Bundle(ctx.folder))
     error = None
@@ -122,8 +146,8 @@ async def run_file(rf: RunFile, *, catalog: Catalog, runs_root: Path | None = No
                    bundle_scheme: str | Literal[False] | None = None, **parts) -> RunOutcome:
     """Run a checked run file. bundle_scheme, when given, takes the place of
     the run file's; False writes no bundle through the catalog. The other
-    keyword arguments (broker, resolver, stager, backend, store) go to
-    run_agent. Without store, the run file's store setting opens one, and
+    keyword arguments (broker, resolver, stager, backend, store, policy) go
+    to run_agent, with the run file's telemetry section. Without store, the run file's store setting opens one, and
     without that the file store is used."""
     s = rf.settings
     if parts.get("store") is None and s.store is not None:
@@ -132,7 +156,8 @@ async def run_file(rf: RunFile, *, catalog: Catalog, runs_root: Path | None = No
         parts["store"] = open_store(s.store)
     scheme = s.bundle_scheme if bundle_scheme is None else (None if bundle_scheme is False else bundle_scheme)
     return await run_agent(rf.agent, catalog=catalog, org=s.org, domain=s.domain, env=s.env, actor=s.actor,
-                           allow=list(s.allow), runs_root=runs_root, mode=mode, bundle_scheme=scheme, **parts)
+                           allow=list(s.allow), runs_root=runs_root, mode=mode, bundle_scheme=scheme,
+                           telemetry=rf.telemetry, **parts)
 
 
 def run_file_sync(rf: RunFile, **kw) -> RunOutcome:

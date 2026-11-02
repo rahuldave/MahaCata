@@ -92,14 +92,15 @@ Each span also keeps an `attributes` column, in MLflow's expanded form, with `ml
 
 The build can only copy what the evidence holds. Each step writes one event when it ends. Today the evidence lacks these values:
 
-- **Span IDs.** provrun asks OpenTelemetry for the trace ID, span ID and parent span ID of each step, and of each tool call that the provider runs. provrun sets no tracer provider yet, so the IDs are there only when the program that runs provrun sets one. Phase 3 of [provevi's plan](provevi-plan.md) makes provrun own a provider, and then the IDs are always there.
 - **The provider of each model call.** No event holds it.
 - **The details of a LiteLLM reply.** The payload keeps the reply as plain text. It has no model that answered, no tool calls and no cache tokens.
 - **The full tool definitions and a session ID.** `sandbox_started` holds the tool names only, and no event holds a session ID.
 
 provrun writes all of these, so each change needs the agent that owns provrun.
 
-The start of each step is there now. Each step's event holds `started_at`, so the build can give a duration. Runs written before this field have none. A tool that the provider ran has no `started_at` either, because provrun did not see it run.
+The span IDs are there now. provrun owns its tracer provider. So each step's event holds its trace ID, span ID and parent span ID, and so does each tool call that the provider runs. Runs written before provrun owned its provider have none.
+
+The start of each step is there now too. Each step's event holds `started_at`, so the build can give a duration. Runs written before this field have none. A tool that the provider ran has no `started_at` either, because provrun did not see it run.
 
 The build does not guess a time for a step with no `started_at`. For a tool that the provider ran, it leaves the start, the end and the duration empty, and sets `timed` to false. The span goes inside the span of its `model_called`. For a step of an older run, it keeps the end and sets `timed` to false. So a query never takes a guessed time for a measured one.
 

@@ -14,6 +14,7 @@ from typing import Any
 
 import yaml
 from provevi import ProveviError, check_store_uri
+from provevi.telemetry import load_yaml
 
 from .context import check_scheme, check_segment
 from .errors import RunFileError, RunSettingError
@@ -122,18 +123,15 @@ class RunSpec:
     env: dict[str, str] = field(default_factory=dict)
 
 
-def load_run_file(path: Path) -> tuple[dict, AgentSpec]:
-    """Read a run file: a ``run`` section with org, domain, env and actor, and
-    an ``agent`` section that is an agent spec. The run section comes back as
-    it is written; ``RunFile.load`` also checks it."""
+def _read_run_file(path: Path) -> tuple[dict, AgentSpec, Any]:
     path = Path(path)
     try:
-        doc = yaml.safe_load(path.read_text()) or {}
+        doc = load_yaml(path.read_text()) or {}
     except (OSError, UnicodeDecodeError, yaml.YAMLError) as e:
         raise RunFileError(f"cannot read the run file {path}: {e}") from e
     if not isinstance(doc, dict):
         raise RunFileError(f"{path}: a run file is a mapping with run and agent sections")
-    unknown = set(doc) - {"run", "agent"}
+    unknown = set(doc) - {"run", "agent", "telemetry"}
     if unknown:
         raise RunFileError(f"{path}: unknown sections {sorted(unknown)}")
     if "agent" not in doc:
@@ -143,11 +141,23 @@ def load_run_file(path: Path) -> tuple[dict, AgentSpec]:
         raise RunFileError(f"{path}: the run section must be a mapping")
     if not isinstance(doc["agent"], dict):
         raise RunFileError(f"{path}: the agent section must be a mapping")
+    telemetry = doc.get("telemetry")
+    if telemetry is not None and not isinstance(telemetry, dict):
+        raise RunFileError(f"{path}: the telemetry section must be a mapping")
     try:
         agent = AgentSpec.from_dict(doc["agent"])
     except (TypeError, ValueError) as e:
         raise RunFileError(f"{path}: the agent section: {e}") from e
-    return dict(run), agent
+    return dict(run), agent, telemetry
+
+
+def load_run_file(path: Path) -> tuple[dict, AgentSpec]:
+    """Read a run file: a ``run`` section with org, domain, env and actor, an
+    ``agent`` section that is an agent spec, and an optional ``telemetry``
+    section, which ``RunFile.load`` keeps. A key written twice is refused. The
+    run section comes back as it is written; ``RunFile.load`` also checks it."""
+    run, agent, _ = _read_run_file(path)
+    return run, agent
 
 
 @dataclass(frozen=True)
@@ -200,9 +210,11 @@ class RunFile:
 
     settings: RunSettings
     agent: AgentSpec
+    telemetry: dict | None = None  # the telemetry section, which narrows the operator's policy
 
     @classmethod
     def load(cls, path: str | Path) -> RunFile:
-        """Read and check a run file. Raises RunFileError."""
-        run, agent = load_run_file(Path(path))
-        return cls(RunSettings.from_dict(run, f"{path}: the run section"), agent)
+        """Read and check a run file. Raises RunFileError. The telemetry
+        section is checked against the policy when the run starts."""
+        run, agent, telemetry = _read_run_file(Path(path))
+        return cls(RunSettings.from_dict(run, f"{path}: the run section"), agent, telemetry)

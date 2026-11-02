@@ -2500,6 +2500,7 @@ version = "0.1.0"
 source = { editable = "packages/provrun" }
 dependencies = [
     { name = "opentelemetry-api" },
+    { name = "opentelemetry-sdk" },
     { name = "provcat" },
     { name = "provevi" },
     { name = "pyyaml" },
@@ -2518,6 +2519,7 @@ pydantic-ai = [
 requires-dist = [
     { name = "litellm", marker = "extra == 'litellm'", specifier = "==1.83.0" },
     { name = "opentelemetry-api", specifier = ">=1.30.0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.30.0" },
     { name = "provcat", editable = "packages/provcat" },
     { name = "provevi", editable = "packages/provevi" },
     { name = "pydantic-ai-filesystem-sandbox", marker = "extra == 'pydantic-ai'", specifier = ">=0.9.0" },

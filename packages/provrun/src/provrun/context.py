@@ -67,6 +67,14 @@ def check_scheme(value, catalog: Catalog | None = None) -> None:
         raise RunSettingError(f"bundle_scheme {value!r} is a store of the catalog; use a logical scheme")
 
 
+def evidence_mode(env: str, mode: str | None = None) -> str:
+    """The evidence mode of a run: mode if given, else lenient in dev and
+    strict in every other environment. Raises RunSettingError on a bad mode."""
+    if mode is not None and mode not in MODES:
+        raise RunSettingError(f"mode must be one of {MODES}; got {mode!r}")
+    return mode or ("lenient" if env == "dev" else "strict")
+
+
 def new_run_id() -> str:
     return f"run-{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{secrets.token_hex(4)}"
 
@@ -133,8 +141,7 @@ class RunContext:
         folder.mkdir(parents=True, exist_ok=False)
         for sub in ("output", "input", "scratch"):
             (folder / sub).mkdir()
-        recorder = EvidenceRecorder(run_id, actor, folder / "evidence",
-                                    mode=mode or ("lenient" if env == "dev" else "strict"), store=store)
+        recorder = EvidenceRecorder(run_id, actor, folder / "evidence", mode=evidence_mode(env, mode), store=store)
         ctx = cls(run_id, org, domain, env, actor, folder, recorder, broker, resolver, catalog, bundle_scheme)
         recorder.emit("run_created", "RunContext", refs=[ctx.run_uri],
                       data={"org": org, "domain": domain, "env": env, "mode": recorder.mode, **(data or {})})
