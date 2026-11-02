@@ -419,9 +419,20 @@ $ OTEL_EXPORTER_OTLP_ENDPOINT=http://collector.example:4318 \
   MLFLOW_TRACKING_URI="postgresql://mlflow:example-password@db.example:5432/mlflow" \
   LITELLM_MODE=DEV \
     uv run provr run /tmp/provrun-tour/run.yaml --config $PROVCAT_CONFIG
-$ R4=run-20261102T171847Z-c0e43607
+$ R4=run-20261102T190517Z-62fc81a4
 $ head -1 /tmp/provrun-tour/runs/$R4/evidence/events.jsonl | jq .data.telemetry
 {
+  "destinations": [
+    {
+      "destination": null,
+      "kind": "otlp",
+      "note": "matches no otlp destination of the policy; nothing is sent",
+      "receives": null,
+      "sending": false,
+      "url": "http://collector.example:4318",
+      "variable": "OTEL_EXPORTER_OTLP_ENDPOINT"
+    }
+  ],
   "imported_before": [],
   "overridden": {
     "LITELLM_MODE": "DEV"
@@ -429,6 +440,7 @@ $ head -1 /tmp/provrun-tour/runs/$R4/evidence/events.jsonl | jq .data.telemetry
   "policy": "408d9fe84aa3ae7943c374d9e3f5b275c22f23173f2735d72bd2082adfae1e16",
   "policy_source": "/tmp/provrun-tour/policy.yaml",
   "problems": [],
+  "redirects": [],
   "variables": {
     "MLFLOW_TRACKING_URI": "postgresql://db.example:5432",
     "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector.example:4318",
@@ -443,7 +455,14 @@ $ head -1 /tmp/provrun-tour/runs/$R4/evidence/events.jsonl | jq .data.telemetry
 - `run_created` names the policy by its SHA-256, so the run says which policy it ran under.
 - provrun left the variables as you set them. They are your configuration. `variables` records where each one points. The database URI keeps only its scheme, host and port, so the password is not recorded. The header, which holds a token, is recorded by its name only.
 - provrun set `LITELLM_MODE=PRODUCTION` for the run, so that LiteLLM read no `.env` file, and put `DEV` back after it. `overridden` records your value.
-- As in every run, provrun's own OpenTelemetry providers made the spans, so each step event, such as `model_called`, holds a span ID. provrun does not yet send them to the collector or the database; step 9 of the plan will.
+- The policy approves no destination, so provrun sent the run's spans nowhere. `destinations` records the collector that the variable names, and that nothing went to it. A `telemetry_blocked` event says so too:
+
+  ```
+  $ uv run prove telemetry /tmp/provrun-tour/runs/$R4
+     1 2026-11-02T19:05:17.609555Z blocked destination   OTEL_EXPORTER_OTLP_ENDPOINT: matches no otlp destination of the policy; nothing is sent
+  ```
+
+- provrun sends nothing to MLflow yet. That waits for Phase 4 of provevi's plan.
 
 A run file can narrow the policy in a `telemetry` section, but never widen it. Add a host that the policy does not allow:
 
@@ -479,20 +498,20 @@ Run it, and list what the run turned off with `prove telemetry`:
 
 ```
 $ uv run python /tmp/provrun-tour/quiet.py
-run-20261102T151936Z-3217bc0f completed
+run-20261102T190536Z-e165d5c6 completed
 callbacks after the run: 1
-$ R5=run-20261102T151936Z-3217bc0f
+$ R5=run-20261102T190536Z-e165d5c6
 $ uv run prove telemetry /tmp/provrun-tour/runs/$R5
-   1 2026-11-02T15:19:36.418541Z litellm.callbacks   removed __main__.<lambda> from litellm.success_callback
-   2 2026-11-02T15:19:36.418598Z logging litellm  raised the logger 'LiteLLM' from DEBUG to WARNING
-   3 2026-11-02T15:19:36.418639Z logging litellm  raised the logger 'LiteLLM Router' from DEBUG to WARNING
-   4 2026-11-02T15:19:36.418673Z logging litellm  raised the logger 'LiteLLM Proxy' from DEBUG to WARNING
-   5 2026-11-02T15:19:36.418704Z logging anthropic  raised the logger 'anthropic' from DEBUG to WARNING
-   6 2026-11-02T15:19:36.418734Z logging openai  raised the logger 'openai' from DEBUG to WARNING
-   7 2026-11-02T15:19:36.418762Z logging botocore  raised the logger 'botocore' from DEBUG to WARNING
+   1 2026-11-02T19:05:36.498805Z blocked litellm.callbacks   removed __main__.<lambda> from litellm.success_callback
+   2 2026-11-02T19:05:36.498904Z blocked logging litellm  raised the logger 'LiteLLM' from DEBUG to WARNING
+   3 2026-11-02T19:05:36.498966Z blocked logging litellm  raised the logger 'LiteLLM Router' from DEBUG to WARNING
+   4 2026-11-02T19:05:36.499012Z blocked logging litellm  raised the logger 'LiteLLM Proxy' from DEBUG to WARNING
+   5 2026-11-02T19:05:36.499055Z blocked logging anthropic  raised the logger 'anthropic' from DEBUG to WARNING
+   6 2026-11-02T19:05:36.499096Z blocked logging openai  raised the logger 'openai' from DEBUG to WARNING
+   7 2026-11-02T19:05:36.499134Z blocked logging botocore  raised the logger 'botocore' from DEBUG to WARNING
 ```
 
-Your run ID and times differ. Each line gives the sequence number of a `telemetry_blocked` event, its time, what was blocked, the library, and the detail. The callback has no library, because it is the program's own.
+Your run ID and times differ. Each line gives the sequence number of a `telemetry_blocked` event, its time, the word `blocked`, what was blocked, the library, and the detail. The callback has no library, because it is the program's own.
 
 **What happened:**
 - As the run started, provrun emptied LiteLLM's callback lists, so the callback saw no model call. The loggers that can log request bodies stayed at `WARNING`. So the log file holds no prompt, and none of the request signatures that botocore, the S3 library, logs at `DEBUG`.
@@ -504,19 +523,112 @@ The run is one trace. Print the span ID and the parent span ID of each event tha
 ```
 $ jq -c 'select(.data.span_id != null) | {type, span: .data.span_id, parent: .data.parent_span_id}' \
     /tmp/provrun-tour/runs/$R5/evidence/events.jsonl
-{"type":"run_created","span":"3dfc5a6941847c92","parent":null}
-{"type":"context_resolved","span":"f5d8f3fb3b72d285","parent":"3dfc5a6941847c92"}
-{"type":"snapshot_materialized","span":"fb5d4bbf681f6016","parent":"3dfc5a6941847c92"}
-{"type":"input_staged","span":"30f946e660849d7e","parent":"3dfc5a6941847c92"}
-{"type":"model_called","span":"75028126e74020b1","parent":"3dfc5a6941847c92"}
-{"type":"input_verified","span":"5883f771f584348d","parent":"3dfc5a6941847c92"}
-{"type":"output_artifact_created","span":"d5b4f99a29baec8e","parent":"3dfc5a6941847c92"}
-{"type":"run_completed","span":"3dfc5a6941847c92","parent":null}
+{"type":"run_created","span":"0fc6c5f3f64b4e94","parent":null}
+{"type":"context_resolved","span":"80d0d8b2a4b62a7d","parent":"0fc6c5f3f64b4e94"}
+{"type":"snapshot_materialized","span":"bec264b01294f253","parent":"0fc6c5f3f64b4e94"}
+{"type":"input_staged","span":"139c79c376b94f73","parent":"0fc6c5f3f64b4e94"}
+{"type":"model_called","span":"601f57cf62dac11c","parent":"0fc6c5f3f64b4e94"}
+{"type":"input_verified","span":"e750d19c545a2358","parent":"0fc6c5f3f64b4e94"}
+{"type":"output_artifact_created","span":"19c9907af0543c91","parent":"0fc6c5f3f64b4e94"}
+{"type":"run_completed","span":"0fc6c5f3f64b4e94","parent":null}
 ```
 
 `run_created` and `run_completed` hold the span ID of the run's root span. Each step's parent is that span, and every event with a span holds the same `trace_id`.
 
-## Step 12: Call a real model (optional)
+## Step 12: Send the spans to a collector
+
+A policy can approve a place for the run's spans. Write one to `/tmp/provrun-tour/send.yaml`. It approves a collector on this machine, which receives names only:
+
+```yaml
+version: 1
+libraries:
+  litellm:
+    versions: "==1.83.0"
+destinations:
+  collector:
+    kind: otlp
+    receives: names
+    endpoint: http://127.0.0.1:4318/v1/traces
+hosts:
+  - api.openai.com
+  - 127.0.0.1
+```
+
+Save this small collector as `/tmp/provrun-tour/collector.py`. It prints the name and the attribute names of each span it gets:
+
+```python
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+
+
+class Collector(BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        for rs in ExportTraceServiceRequest.FromString(body).resource_spans:
+            for ss in rs.scope_spans:
+                for span in ss.spans:
+                    keys = sorted(kv.key for kv in span.attributes)
+                    print(self.path, span.name, keys, flush=True)
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+HTTPServer(("127.0.0.1", 4318), Collector).serve_forever()
+```
+
+Start it in a third terminal with `uv run python /tmp/provrun-tour/collector.py`. Then run the file under the new policy, with a proxy set that does not exist. `NO_PROXY=localhost` lets the run still reach moto:
+
+```
+$ PROVRUN_TELEMETRY_POLICY=/tmp/provrun-tour/send.yaml \
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 \
+  HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 NO_PROXY=localhost \
+    uv run provr run /tmp/provrun-tour/run.yaml --config $PROVCAT_CONFIG
+$ R6=run-20261102T190611Z-c91775b3
+$ head -1 /tmp/provrun-tour/runs/$R6/evidence/events.jsonl | jq '.data.telemetry | {destinations, redirects}'
+{
+  "destinations": [
+    {
+      "destination": "collector",
+      "kind": "otlp",
+      "note": "",
+      "receives": "names",
+      "sending": true,
+      "url": "http://127.0.0.1:4318",
+      "variable": "OTEL_EXPORTER_OTLP_ENDPOINT"
+    }
+  ],
+  "redirects": [
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY"
+  ]
+}
+```
+
+The collector's terminal shows the run's spans:
+
+```
+/v1/traces context_resolved ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces snapshot_materialized ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces input_staged ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces model_called ['gen_ai.operation.name', 'gen_ai.request.model', 'provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces input_verified ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces output_artifact_created ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces run ['gen_ai.agent.name', 'gen_ai.operation.name', 'provrun.component', 'provrun.run_id', 'provrun.step']
+```
+
+**What happened:**
+- The variable named a place that the policy approves, so provrun sent the run's spans to the collector. There is one for each step, and the run's own span comes last.
+- The collector receives names only, so `model_called` came without its token counts. Its `gen_ai.usage.*` attributes stayed in the evidence.
+- provrun's sender ignored the proxy, which does not exist, and went straight to the collector. `redirects` records which proxy variables were set, by name only.
+
+Stop the collector with Ctrl+C.
+
+## Step 13: Call a real model (optional)
 
 This step needs `ANTHROPIC_API_KEY` in the environment, and it costs a few cents.
 
@@ -554,4 +666,5 @@ chmod -R u+w /tmp/provrun-tour && rm -rf /tmp/provrun-tour
 | Keep the evidence in SQLite, and answer queries | `packages/provevi/src/provevi/sqlite.py` |
 | The library entry and its errors | `packages/provrun/src/provrun/runner.py`, `spec.py` and `errors.py` |
 | Apply the telemetry policy | `packages/provrun/src/provrun/telemetry.py`, with the policy in `packages/provevi/src/provevi/telemetry.py` |
+| Send the spans to approved places | `packages/provrun/src/provrun/destinations.py` |
 | The commands | `packages/provrun/src/provrun/cli.py`; `provr verify` calls `packages/provevi/src/provevi/cli.py` |

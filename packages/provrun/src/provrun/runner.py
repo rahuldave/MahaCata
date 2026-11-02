@@ -122,7 +122,7 @@ async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org:
                               data={"agent": agent.name, "backend": agent.backend, "spec": agent.to_dict(),
                                     "telemetry": tel.record()})
         ctx.telemetry = tel
-        tel.attach(ctx.recorder)
+        tel.attach(ctx.recorder, trace.get("trace_id"))
         outcome, error = await _steps(ctx, agent, stager, backend)
         if error is not None:
             root.set_status(otel.ERROR, f"{error.__class__.__name__}: {error}")

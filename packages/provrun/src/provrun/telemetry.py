@@ -28,7 +28,9 @@ For each run, provrun:
   send past the policy and cannot be turned off;
 - builds a PydanticAI agent with instrumentation off, or sent to provrun's
   providers when the policy approves it (``pydantic_ai_instrument``), and
-  takes a model out of an InstrumentedModel (``pydantic_ai_model``).
+  takes a model out of an InstrumentedModel (``pydantic_ai_model``);
+- sends the run's spans only to the places that the policy approves, and
+  keeps an approved library's spans as evidence (``destinations``).
 
 Each refusal, and each thing turned off, is written to each open run's
 evidence as ``telemetry_blocked``, with the distribution that did it.
@@ -192,6 +194,20 @@ def _enter_environment(t: Telemetry) -> None:
             os.environ[key] = value
 
 
+def _users_environment() -> dict[str, str]:
+    """The environment with the user's own value of each setting that runs
+    set, such as LOGFIRE_SEND_TO_LOGFIRE, so that it says what the user wants."""
+    with _lock:
+        env = dict(os.environ)
+        for key in SETTINGS:
+            if key in _saved:
+                if _saved[key] is None:
+                    env.pop(key, None)
+                else:
+                    env[key] = _saved[key]
+    return env
+
+
 def _leave_environment(t: Telemetry) -> None:
     with _lock:
         if not any(o is t for o in _open):
@@ -275,6 +291,12 @@ def providers() -> _Providers:
             from . import otel
 
             otel.use(_providers.tracer)
+            from opentelemetry.sdk.trace import TracerProvider
+
+            from .destinations import router
+
+            # The base method: the guarded one refuses every processor.
+            TracerProvider.add_span_processor(_providers.tracer, router)
         return _providers
 
 
@@ -682,6 +704,7 @@ class Telemetry:
     recorded: int | None = None  # how many problems run_created's record holds
     ended: bool = False  # the end checks have run
     checked: bool = False  # the start's check is past; a problem now fails or warns as it is found
+    routes: Any = None  # where the run's spans go, a destinations.Routes
 
     @classmethod
     def prepare(cls, policy: TelemetryPolicy, section: Any, mode: str) -> Telemetry:
@@ -714,6 +737,9 @@ class Telemetry:
             scanned, self.baseline = _scan_problems(None)
             for problem in scanned:
                 self.found(problem)
+            from .destinations import Routes
+
+            self.routes = Routes.read(self, _users_environment())
             if p.foreign:
                 self.problems.append(f"the global {', '.join(p.foreign)} provider was set by someone else "
                                      "before provrun")
@@ -725,7 +751,11 @@ class Telemetry:
             self.checked = True
             yield self
         finally:
-            _leave_environment(self)
+            try:
+                if self.routes is not None:
+                    self.routes.close()  # after the run's root span has ended, so it is sent too
+            finally:
+                _leave_environment(self)
             for path, library, detail in self.pending:  # the run never opened its evidence
                 _warn(f"provrun: {path}: {detail}")
             self.pending.clear()
@@ -738,7 +768,8 @@ class Telemetry:
         return {"policy": self.policy.digest(), "policy_source": self.policy.source,
                 "variables": dict(self.variables), "overridden": dict(self.overridden),
                 "problems": problems,
-                "imported_before": list(self.imported_before)}
+                "imported_before": list(self.imported_before),
+                **(self.routes.record() if self.routes is not None else {"destinations": [], "redirects": []})}
 
     def found(self, problem: str) -> None:
         """A problem found during the run. It is written as a telemetry_problem
@@ -794,11 +825,12 @@ class Telemetry:
         if fail:
             self.fail_if_found()
 
-    def attach(self, recorder: Any) -> None:
+    def attach(self, recorder: Any, trace_id: str | None = None) -> None:
         """Write the run's telemetry_blocked events to recorder from now on,
         starting with those found before the run's evidence was open. A
         problem found after run_created's record was taken is written as a
-        telemetry_problem event."""
+        telemetry_problem event. The spans of trace_id, the run's trace, go
+        to the run's destinations from now on."""
         with _lock:
             self.recorder = recorder
             pending, self.pending = self.pending, []
@@ -807,6 +839,8 @@ class Telemetry:
             self.blocked(path, library=library, detail=detail)
         for problem in late:  # found failed or warned already
             self._write(problem, warn=False)
+        if self.routes is not None:
+            self.routes.start(trace_id)
 
     def blocked(self, path: str, *, library: str | None = None, detail: str = "") -> None:
         """Write a telemetry_blocked event. Before the run's evidence is open,

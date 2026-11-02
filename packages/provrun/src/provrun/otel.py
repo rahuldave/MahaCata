@@ -25,6 +25,11 @@ ERROR = trace.StatusCode.ERROR
 
 _tracer = trace.get_tracer("provrun")
 
+# The span IDs of the spans that provrun made and that have not ended. Another
+# library can name its tracer provrun, so a span is provrun's own only if its
+# ID is here; the span router takes each ID out when the span ends.
+OURS: set[int] = set()
+
 # The GenAI operation for each evidence step that has one.
 _OPERATION = {"model_called": "chat", "tool_called": "execute_tool", "sandbox_started": "invoke_agent"}
 # Step data copied onto the span, with the attribute name of the conventions.
@@ -52,6 +57,8 @@ def span(step: str, run_id: str, component: str, parent: trace.Span | None = Non
         attributes["gen_ai.operation.name"] = _OPERATION[step]
     context = trace.set_span_in_context(parent) if parent is not None else None
     with _tracer.start_as_current_span(step, context=context, attributes=attributes) as s:
+        if s.is_recording():
+            OURS.add(s.get_span_context().span_id)
         yield s
 
 
@@ -63,6 +70,8 @@ def run(run_id: str, agent: str) -> Iterator[trace.Span]:
     attributes = {"provrun.run_id": run_id, "provrun.step": "run", "provrun.component": "runner",
                   "gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": agent}
     with _tracer.start_as_current_span("run", context=Context(), attributes=attributes) as s:
+        if s.is_recording():
+            OURS.add(s.get_span_context().span_id)
         yield s
 
 

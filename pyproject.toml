@@ -6,7 +6,7 @@ requires-python = ">=3.13"
 dependencies = [
     "provcat",
     "provevi",
-    "provrun[litellm,pydantic-ai]",
+    "provrun[litellm,otlp,pydantic-ai]",
 ]
 
 [tool.uv]
