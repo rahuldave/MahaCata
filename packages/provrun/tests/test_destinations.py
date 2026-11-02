@@ -531,3 +531,10 @@ def test_a_path_or_an_address_is_not_a_span_name(name):
 
 def test_a_model_name_is_a_span_name():
     assert destinations._cut(_span("chat gpt-4o"), "names").name == "chat gpt-4o"
+
+
+def test_a_scope_that_is_no_module_keeps_its_whole_name():
+    # The Anthropic SDK names its tracer com.anthropic.sdk.python; com is no module.
+    assert destinations._library("com.anthropic.sdk.python") is None
+    assert destinations._names("com.anthropic.sdk.python") == ["com.anthropic.sdk.python"]
+    assert destinations._library("litellm") == "litellm"

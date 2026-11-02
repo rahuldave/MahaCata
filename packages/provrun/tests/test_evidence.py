@@ -1,5 +1,4 @@
 """The evidence recorder: the chain, the payloads, the manifest and the modes."""
-import json
 
 import pytest
 

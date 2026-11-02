@@ -11,7 +11,6 @@ checks after the run.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from provcat.cache import copy_readonly, tree_digest

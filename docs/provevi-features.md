@@ -276,7 +276,7 @@ The first URL matches although it is written another way. The second matches wit
 
 ## Copy a run into MLflow
 
-The evidence is the record of a run. MLflow holds a copy, so that its viewer can show the run, search runs and add judgements. `prove mlflow` makes the copy at the place that `MLFLOW_TRACKING_URI` names, and only if the policy approves it. With the variable unset, the copy goes into the store's own file.
+The evidence is the record of a run. MLflow holds a copy, so that its viewer can show the run, search runs and add judgements. `prove mlflow` makes the copy at the place that `MLFLOW_TRACKING_URI` names, and only if the policy approves it. With the variable unset, the copy goes into the store's own file. provrun makes the same copy itself when a run is sealed, as [its features page](provrun-features.md#copy-a-run-into-mlflow) shows.
 
 With no policy, nothing is copied:
 

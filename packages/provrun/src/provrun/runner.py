@@ -53,12 +53,17 @@ class RunOutcome:
     result: RunResult | None = None
     artifacts: list[Artifact] | None = None
     error: BaseException | None = None
+    mlflow: dict | None = None  # where the sealed run was copied in MLflow, when the policy approves a place
 
     def to_dict(self) -> dict:
-        """The summary that ``provr run`` prints, as plain values."""
-        return {"run_id": self.run_id, "status": self.status, "folder": str(self.folder),
-                "bundle": self.bundle.uri, "pinned": self.bundle.pinned, "note": self.bundle.note,
-                "error": f"{self.error.__class__.__name__}: {self.error}" if self.error else None}
+        """The summary that ``provr run`` prints, as plain values. It has
+        ``mlflow`` only when the run was to be copied into MLflow."""
+        d = {"run_id": self.run_id, "status": self.status, "folder": str(self.folder),
+             "bundle": self.bundle.uri, "pinned": self.bundle.pinned, "note": self.bundle.note,
+             "error": f"{self.error.__class__.__name__}: {self.error}" if self.error else None}
+        if self.mlflow is not None:
+            d["mlflow"] = self.mlflow
+        return d
 
 
 def input_name(uri: str, given: str | None) -> str:
@@ -91,11 +96,16 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
     telemetry problem in strict mode. Any later error fails the run, and the
     outcome holds it."""
     tel = Telemetry.prepare(load_policy(policy), telemetry, evidence_mode(env, mode))
-    with tel.applied():
+    with tel.applied(store):
         # The environment is set now, before the backend imports its library.
-        return await _run_agent(agent, tel, catalog=catalog, org=org, domain=domain, env=env, actor=actor,
-                                allow=allow, broker=broker, resolver=resolver, stager=stager, backend=backend,
-                                runs_root=runs_root, mode=mode, bundle_scheme=bundle_scheme, store=store)
+        outcome = await _run_agent(agent, tel, catalog=catalog, org=org, domain=domain, env=env, actor=actor,
+                                   allow=allow, broker=broker, resolver=resolver, stager=stager, backend=backend,
+                                   runs_root=runs_root, mode=mode, bundle_scheme=bundle_scheme, store=store)
+    if tel.routes is not None and tel.routes.mlflow is not None:
+        # The run is sealed, and the user's variables are back.
+        outcome.mlflow = await asyncio.to_thread(tel.routes.copy, outcome.run_id, store,
+                                                 outcome.folder / "evidence")
+    return outcome
 
 
 async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org: str, domain: str, env: str,

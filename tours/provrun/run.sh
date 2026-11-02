@@ -5,6 +5,10 @@
 #   bash tours/provrun/run.sh --online   # also the step that calls a real model
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+if [ "${1:-}" = "--online" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+  echo "run.sh: --online needs ANTHROPIC_API_KEY" >&2
+  exit 1
+fi
 # Stop the tour on any exit, but only a tour that this run started.
 trap 'if [ -n "${_PROVRUN_TOUR_SAVED:-}" ]; then source tours/provrun/stop.sh; fi' EXIT
 source tours/provrun/start.sh > /dev/null
@@ -105,9 +109,42 @@ show 'R6=$(uv run python tours/provrun/field.py $TOUR_DIR/r6.json run_id)'
 show 'uv run python tours/provrun/event.py $R6 run_created telemetry.destinations telemetry.redirects'
 show 'cat $TOUR_DIR/collector.log'
 
+step "Step 13: Copy a run into MLflow"
+show 'cat $TOUR_DIR/mlflow.yaml'
+show 'M=sqlite:///$TOUR_DIR/mlflow-evidence.db'
+show 'PROVRUN_TELEMETRY_POLICY=$TOUR_DIR/mlflow.yaml uv run provr --store $M run $TOUR_DIR/run.yaml > $TOUR_DIR/r7.json'
+show 'uv run python tours/provrun/field.py $TOUR_DIR/r7.json mlflow'
+show 'uv run python tours/provrun/mlflow_spans.py $TOUR_DIR/r7.json'
+show 'PROVRUN_TELEMETRY_POLICY=$TOUR_DIR/mlflow.yaml MLFLOW_TRACKING_URI=sqlite:///$TOUR_DIR/elsewhere.db \
+  uv run provr --store $M run $TOUR_DIR/run.yaml > $TOUR_DIR/r8.json'
+show 'R8=$(uv run python tours/provrun/field.py $TOUR_DIR/r8.json run_id)'
+show 'uv run python tours/provrun/event.py $R8 telemetry_blocked detail'
+show 'ls $TOUR_DIR/elsewhere.db || echo "no copy"'
+
 if [ "${1:-}" = "--online" ]; then
-  step "Step 13: Call a real model (needs ANTHROPIC_API_KEY)"
+  step "Step 14: Call a real model (needs ANTHROPIC_API_KEY)"
   show 'sed -e "s|openai/gpt-4o-mini|anthropic/claude-haiku-5-5|" -e "/settings:/,\$d" $TOUR_DIR/run.yaml > $TOUR_DIR/real.yaml'
-  show 'uv run provr run $TOUR_DIR/real.yaml > $TOUR_DIR/r7.json'
-  show 'cat $PROVRUN_RUNS/$(uv run python tours/provrun/field.py $TOUR_DIR/r7.json run_id)/output/response.txt'
+  show 'cat $TOUR_DIR/online.yaml'
+  show 'export PROVRUN_TELEMETRY_POLICY=$TOUR_DIR/online.yaml OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$TOUR_OTLP_PORT LOGFIRE_TOKEN=pylf_v1_us_example-token'
+  show 'O=sqlite:///$TOUR_DIR/online.db'
+  show 'N=$(wc -l < $TOUR_DIR/collector.log)'
+  show 'uv run provr --store $O run $TOUR_DIR/real.yaml > $TOUR_DIR/r9.json'
+  show 'R9=$(uv run python tours/provrun/field.py $TOUR_DIR/r9.json run_id)'
+  show 'cat $PROVRUN_RUNS/$R9/output/response.txt; echo'
+  show 'uv run python tours/provrun/event.py $R9 model_called model input_tokens output_tokens finish_reason'
+  show 'uv run prove telemetry $PROVRUN_RUNS/$R9'
+  show 'tail -n +$((N + 1)) $TOUR_DIR/collector.log'
+  show 'uv run python tours/provrun/field.py $TOUR_DIR/r9.json mlflow'
+  show 'uv run provr --store $O verify $R9'
+  show 'cat $TOUR_DIR/agent.yaml'
+  show 'N=$(wc -l < $TOUR_DIR/collector.log)'
+  show 'uv run provr --store $O run $TOUR_DIR/agent.yaml > $TOUR_DIR/r10.json'
+  show 'R10=$(uv run python tours/provrun/field.py $TOUR_DIR/r10.json run_id)'
+  show 'cat $PROVRUN_RUNS/$R10/output/answer.txt'
+  show 'uv run python tours/provrun/types.py $R10'
+  show 'uv run prove telemetry $PROVRUN_RUNS/$R10'
+  show 'tail -n +$((N + 1)) $TOUR_DIR/collector.log'
+  show 'uv run python tours/provrun/field.py $TOUR_DIR/r10.json mlflow'
+  show 'uv run provr --store $O verify $R10'
+  show 'unset PROVRUN_TELEMETRY_POLICY OTEL_EXPORTER_OTLP_ENDPOINT LOGFIRE_TOKEN'
 fi

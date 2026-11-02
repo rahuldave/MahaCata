@@ -1,0 +1,13 @@
+# The policy of Step 13: it approves LiteLLM, and one MLflow destination with
+# no endpoint, which is the SQLite evidence store's own file. MLflow there
+# gets names only: no token counts, prompts or answers.
+version: 1
+libraries:
+  litellm:
+    versions: "==1.83.0"
+destinations:
+  own:
+    kind: mlflow
+    receives: names
+hosts:
+  - api.openai.com

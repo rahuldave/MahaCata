@@ -155,7 +155,7 @@ def copy_run(store: EvidenceStore, run_id: str, policy: TelemetryPolicy, *,
     # this destination, as provrun sends it only to such places.
     events = [e for e in events if e.type != SPAN or _feeds(policy, e.data.get("library"), name)]
     shown = _shown(url)
-    _refuse_redirects(url)
+    refuse_redirects(url)
     sqlite_file = _sqlite_path(url)
     if sqlite_file is not None:
         _wal(sqlite_file)  # before MLflow makes its tables, so the file is in WAL mode from the start
@@ -205,19 +205,22 @@ def _shown_error(e: Exception, url: str) -> str:
     return text.replace(password, "<password>") if password else text
 
 
-def _refuse_redirects(url: str) -> None:
-    """Refuse the variables that would send the copy somewhere other than
-    url, which the policy approved."""
+def refuse_redirects(url: str, environ: Mapping[str, str] | None = None) -> None:
+    """Raise ProveviError if a variable in environ, by default os.environ,
+    would send a copy to url somewhere else, or change which servers it
+    trusts. provrun calls it as a run starts, so that the run records a
+    copy that would be refused."""
+    env = os.environ if environ is None else environ
     scheme = url.split(":", 1)[0].lower().split("+", 1)[0]
     if scheme in ("http", "https"):
-        found = sorted(k for k, v in os.environ.items() if k.lower() in _PROXIES and v)
-        if str(os.environ.get("MLFLOW_TRACKING_INSECURE_TLS", "")).lower() in ("true", "1"):
+        found = sorted(k for k, v in env.items() if k.lower() in _PROXIES and v)
+        if str(env.get("MLFLOW_TRACKING_INSECURE_TLS", "")).lower() in ("true", "1"):
             found.append("MLFLOW_TRACKING_INSECURE_TLS")
-        found += sorted(k for k in _TRUST if os.environ.get(k))
+        found += sorted(k for k in _TRUST if env.get(k))
     elif scheme == "postgresql":
-        found = sorted(k for k in _PG if os.environ.get(k))
+        found = sorted(k for k in _PG if env.get(k))
     elif scheme == "mysql":
-        found = sorted(k for k in _MYSQL if os.environ.get(k))
+        found = sorted(k for k in _MYSQL if env.get(k))
     else:
         found = []
     if found:

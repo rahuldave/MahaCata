@@ -1,7 +1,7 @@
 """The runnable tour: tours/provrun/run.sh runs, and docs/provrun-tour.md shows its output.
 
 The script starts its own moto server and collector on free ports, in a
-scratch folder, and deletes the folder when it ends. Step 13 calls a real
+scratch folder, and deletes the folder when it ends. Step 14 calls a real
 model, so these tests run the script without --online, and compare the steps
 before it with the page.
 """
@@ -21,7 +21,7 @@ TOURS = ROOT / "tours" / "provrun"
 SCRIPT = TOURS / "run.sh"
 PAGE = ROOT / "docs" / "provrun-tour.md"
 FEATURES = ROOT / "docs" / "provrun-features.md"
-ONLINE = "Step 13"
+ONLINE = "Step 14"
 PAGE_DIR = "/tmp/provrun-tour"
 PAGE_OTLP_PORT = "4318"
 
@@ -66,6 +66,7 @@ class _Normal:
         text = text.replace("/private<TOUR>", "<TOUR>")
         text = text.replace(f"127.0.0.1:{self.otlp_port}", "127.0.0.1:<OTLP>")
         text = re.sub(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|\+00:00)", "<TIME>", text)
+        text = re.sub(r"\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}", "<TIME>", text)  # MLflow's log lines
         for kind, pattern in self.PATTERNS:
             text = re.sub(pattern, lambda m, kind=kind: self._name(kind, m.group(0)), text)
         return text
@@ -143,7 +144,7 @@ def test_the_features_page_shows_output_of_the_script(run):
 def test_the_page_shows_the_online_commands_of_the_script():
     online = next(b for t, b in _page_steps(PAGE.read_text()).items() if t.startswith(ONLINE))
     shown = [line[2:] for line in online.splitlines() if line.startswith("$ ")]
-    body = SCRIPT.read_text().split('if [ "${1:-}" = "--online" ]', 1)[1]
+    body = SCRIPT.read_text().split('if [ "${1:-}" = "--online" ]; then', 1)[1]
     ran = [line.split("show ", 1)[1][1:-1] for line in body.splitlines() if "show " in line]
     assert shown == ran
 
@@ -262,4 +263,12 @@ def test_start_refuses_a_port_in_use(tmp_path):
                               capture_output=True, text=True, timeout=60)
     assert done.returncode == 1
     assert f"port {port} is in use" in done.stderr
+    assert not (tmp_path / "t").exists()
+
+
+def test_online_without_a_key_stops_before_the_tour_starts(tmp_path):
+    done = subprocess.run(["bash", str(SCRIPT), "--online"], cwd=ROOT, env=_env(tmp_path / "t"),
+                          capture_output=True, text=True, timeout=60)
+    assert done.returncode == 1
+    assert "needs ANTHROPIC_API_KEY" in done.stderr
     assert not (tmp_path / "t").exists()

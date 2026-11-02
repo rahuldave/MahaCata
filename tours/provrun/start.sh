@@ -68,7 +68,8 @@ _tour_start() {
               $(env | grep -Eo '^(OTEL|LOGFIRE|MLFLOW|LITELLM)_[A-Za-z0-9_]*=' | tr -d =); do
     unset "$name"
   done
-  cp tours/provrun/provcat.yaml tours/provrun/run.yaml tours/provrun/policy.yaml "$TOUR_DIR/" || return 1
+  cp tours/provrun/provcat.yaml tours/provrun/run.yaml tours/provrun/policy.yaml tours/provrun/mlflow.yaml \
+    tours/provrun/agent.yaml "$TOUR_DIR/" || return 1
   export PROVCAT_CONFIG="$TOUR_DIR/provcat.yaml" PROVCAT_CACHE="$TOUR_DIR/cache" PROVRUN_RUNS="$TOUR_DIR/runs"
   # moto takes any keys.
   export AWS_ACCESS_KEY_ID=tour AWS_SECRET_ACCESS_KEY=tour AWS_DEFAULT_REGION=us-east-1
@@ -78,6 +79,10 @@ _tour_start() {
   # The policy of Step 12 names the collector's port.
   printf 'version: 1\nlibraries:\n  litellm:\n    versions: "==1.83.0"\ndestinations:\n  collector:\n    kind: otlp\n    receives: names\n    endpoint: http://127.0.0.1:%s/v1/traces\nhosts:\n  - api.openai.com\n  - 127.0.0.1\n' \
     "$TOUR_OTLP_PORT" > "$TOUR_DIR/send.yaml" || return 1
+  # The policy of Step 14: the collector, and a copy in MLflow, both with
+  # token counts, for runs that call Anthropic.
+  printf 'version: 1\nlibraries:\n  litellm:\n    versions: "==1.83.0"\ndestinations:\n  collector:\n    kind: otlp\n    receives: usage\n    endpoint: http://127.0.0.1:%s/v1/traces\n  own:\n    kind: mlflow\n    receives: usage\nhosts:\n  - api.anthropic.com\n  - 127.0.0.1\n' \
+    "$TOUR_OTLP_PORT" > "$TOUR_DIR/online.yaml" || return 1
 
   uv run moto_server -p "$TOUR_S3_PORT" > "$TOUR_DIR/moto.log" 2>&1 &
   echo $! > "$TOUR_DIR/moto.pid"

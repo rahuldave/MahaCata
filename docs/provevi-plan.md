@@ -74,7 +74,7 @@ In a controlled environment, the evidence must be the only record of a run, unle
 
 The code goes into provrun, in a new module, because it acts on the process that runs the agent. provevi checks the policy and records what the module blocked.
 
-**Status: provevi's part is built, and so are steps 2 to 10 in provrun, but for step 9's MLflow destination.** [provevi's page](provevi.md) describes the policy, `prove policy` and `prove telemetry`. [provrun's page](provrun.md#control-of-library-telemetry) describes how a run finds the policy, records the variables and owns the providers. It also describes how a run turns off each library's own telemetry, checks during the run, and sends its spans. 
+**Status: provevi's part is built, and so are steps 2 to 10 in provrun.** [provevi's page](provevi.md) describes the policy, `prove policy` and `prove telemetry`. [provrun's page](provrun.md#control-of-library-telemetry) describes how a run finds the policy, records the variables and owns the providers. It also describes how a run turns off each library's own telemetry, checks during the run, and sends its spans. 
 
 Step 9 is built for the `otlp` and `logfire` destinations, on provevi's rule that matches a variable to a destination. Its MLflow destination is the copy of Phase 4, which is built. provrun has only to call it when a run is sealed.
 
@@ -102,7 +102,7 @@ So a run keeps them, records them, and sends provrun's own spans where they poin
    Control of where a run may connect belongs to the firewall or the container that runs it. The docs list the hosts a run needs. They are the model provider, the catalog's stores and the approved destinations.
 9. **Keep provrun's spans as evidence, and send them where the policy approves.** A span processor on provrun's tracer provider takes provrun's spans, and those of an approved instrumentation. It moves each body, such as a prompt in an attribute, into a payload named by its hash. It writes the span into the run's evidence store. Then it sends each approved destination what the policy lets it receive. A destination's address and credential come from the variables the user set, and the policy must approve that destination. How a variable is matched to the policy's destinations is open, below. provrun sends OTLP itself, with the headers the user set. If the user set `OTEL_SDK_DISABLED=true` or `OTEL_TRACES_EXPORTER=none`, provrun sends nothing to the OTLP destination. The destinations are:
    - an OpenTelemetry collector or receiver, at the `OTEL_EXPORTER_OTLP_*` endpoint, with its headers;
-   - an MLflow tracking server, or an MLflow database such as Postgres or SQLite, at `MLFLOW_TRACKING_URI`. The copy of Phase 4 serves it, once the run is sealed;
+   - an MLflow tracking server, or an MLflow database such as Postgres or SQLite, at `MLFLOW_TRACKING_URI`. provrun calls the copy of Phase 4, `copy_run`, once the run is sealed. A copy that fails only warns;
    - Logfire, with `LOGFIRE_TOKEN`.
 
    The span receiver of Phase 6 does the same for spans that come from another process. A run in process needs no receiver.
@@ -112,10 +112,12 @@ So a run keeps them, records them, and sends provrun's own spans where they poin
 
 **Done when:** MLflow, Logfire and an OpenTelemetry exporter are installed, with their variables set. Then a real PydanticAI run and a real LiteLLM run write no telemetry of their own. Their evidence records each thing that was turned off, and the variables that were set. provrun's spans reach each approved destination, and no other. For MLflow, that is the copy of Phase 4.
 
+**Checked on 2026-11-02,** with Claude Haiku, in Step 14 of [provrun's tour](provrun-tour.md#step-14-call-a-real-model-needs-anthropic_api_key). A real LiteLLM run and a real PydanticAI run had a collector, a Logfire token and the store's own MLflow file to send to. The approved collector got their spans, and MLflow got a copy of each. Logfire, which the policy does not approve, got nothing. Each run records what was blocked, and verifies. The collector is local, and Logfire was only named by a token, so no Logfire service was reached.
+
 **Open:**
 
 - **Decided on 2026-11-02: matching a destination to a variable.** `TelemetryPolicy.match_destination(kind, url)` matches by kind, then by endpoint, after `normal_endpoint` puts both in one form. An `mlflow` endpoint may be a database URL, such as `postgresql://` or `sqlite:///`. For traces, `otlp_traces_target(environ)` gives the protocol and the address, by the OpenTelemetry rules, and provrun makes the exporter of that protocol. `normal_endpoint` refuses a URL that two parsers could read as two places, and such a URL matches nothing. A URL with no match gets nothing, and provrun writes `telemetry_blocked` with the path `destination`. [provevi's page](provevi.md#check-a-telemetry-policy) gives the rule.
-- **Decided on 2026-11-02: variables that redirect a matched URL.** `HTTPS_PROXY`, `grpc_proxy` and the other proxy variables can send a matched URL to another place. provrun's senders ignore them and connect straight to the matched place. `run_created` records each one that was set, by name only, under `redirects`. `PGHOSTADDR` and `PGSERVICE` are recorded too, and step 9's MLflow destination must keep them from moving a matched database.
+- **Decided on 2026-11-02: variables that redirect a matched URL.** `HTTPS_PROXY`, `grpc_proxy` and the other proxy variables can send a matched URL to another place. provrun's senders ignore them and connect straight to the matched place. `run_created` records each one that was set, by name only, under `redirects`. `PGHOSTADDR` and `PGSERVICE` are recorded too. The copy into MLflow refuses to run while one of them is set, so none can move a matched database.
 - **Decided on 2026-11-02: the `hosts` list stays.** provevi checks each destination's endpoint against it, and it is a record for the firewall. It does not limit a run's connections.
 - **Decided on 2026-11-02: `prove telemetry RUN` lists `telemetry_problem` events** as well as `telemetry_blocked` events.
 
@@ -124,7 +126,7 @@ So a run keeps them, records them, and sends provrun's own spans where they poin
 
 ## Phase 4: the copy in MLflow
 
-**Status: built, except the call from provrun.** [provevi's page](provevi.md#copy-a-run-into-mlflow) describes `copy_run`, `prove mlflow` and `prove ui`. provrun does not call the copy when a run is sealed yet. That call belongs to provrun's step 9. Decided on 2026-11-02:
+**Status: built.** [provevi's page](provevi.md#copy-a-run-into-mlflow) describes `copy_run`, `prove mlflow` and `prove ui`. provrun calls the copy when a run is sealed, as [provrun's page](provrun.md#copy-a-sealed-run-into-mlflow) says. That call is provrun's part of step 9. Decided on 2026-11-02:
 
 - **The copy is made after the seal,** from the evidence, not while the run goes on. So a slow or broken MLflow cannot harm a run, and the copy can be deleted and rebuilt.
 - **The evidence stays the record.** MLflow has no place for most of a run, its rows carry no hash chain, and its tables change often. It gives a viewer, search and assessments for free. A viewer of provevi's own may come later.
