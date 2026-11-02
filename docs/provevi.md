@@ -1,12 +1,14 @@
 ---
-title: provevi
+title: provevi reference
 ---
 
-provevi stores, reads and checks the evidence of provrun's runs. Its command is `prove`. Phases 1 and 2 of [the plan](provevi-plan.md) are built. Phase 1 gave the package, the `file` store and the checks. Phase 2 gave the `sqlite` store, which answers questions across runs.
+This page lists provevi's commands, stores, tables, policy keys, exit codes and errors. [What provevi does](provevi-features.md) shows the features with examples, [the tour](provevi-tour.md) runs them, and [the design](provevi-design.md) explains how the parts fit together.
+
+provevi stores, reads and checks the evidence of provrun's runs. Its command is `prove`. Phases 1, 2 and 4 of [the plan](provevi-plan.md) are built. Phase 1 gave the package, the `file` store and the checks. Phase 2 gave the `sqlite` store, which answers questions across runs. Phase 4 gave the copy in MLflow, for MLflow's viewer.
 
 Of Phase 3, provevi's part is built. It reads and checks the telemetry policy. provrun applies steps 2 to 10. They record the telemetry variables, own the providers, turn off each library's own telemetry, and find what cannot be turned off. Step 9 sends provrun's spans to approved destinations, using provevi's rule that matches a variable to a destination. Its MLflow destination waits for Phase 4.
 
-The copy in MLflow, experiments as catalog objects and the span receiver come in later phases.
+Experiments as catalog objects and the span receiver come in later phases.
 
 ## Terms
 
@@ -19,6 +21,7 @@ The copy in MLflow, experiments as catalog objects and the span receiver come in
 - **Committed bundle:** a copy of the run's evidence that provrun commits through provcat, in another store.
 - **Telemetry policy:** the operator's file that says what may record or send data from a run, besides the evidence.
 - **Destination:** a place outside the evidence that spans may go to, such as Logfire or an OpenTelemetry endpoint.
+- **Copy in MLflow:** a sealed run, rebuilt from its evidence in MLflow's tables, for MLflow's viewer. The evidence stays the record.
 
 ## How the packages depend on each other
 
@@ -182,12 +185,12 @@ Before the match, `normal_endpoint` puts both URLs in one form. It lowercases th
 - a `%` in the host, or a list of hosts;
 - a port of 0, or an empty port;
 - a path with `%`, with `.` or `..` segments, or with `//`;
-- a query, because a query such as `?host=` can name another server;
+- a query, because a query such as `?host=` can name another server. A database URL may still carry a few settings that name no place. They are `sslmode`, `connect_timeout` and `application_name` for Postgres, and `charset` and `connect_timeout` for MySQL. The match ignores them, except `sslmode`. So a policy endpoint that ends in `?sslmode=require` matches only a URL that asks for TLS;
 - an `mssql` URL with no port or no database, because ODBC can read its host as the name of a data source;
 - a driver such as `+x` on an `http` or `https` scheme;
 - a sqlite URL with a relative path.
 
-Some variables send a matched URL somewhere else. `HTTPS_PROXY` sends it through a proxy, and `PGHOSTADDR` makes Postgres connect to another address. provrun's senders ignore the proxy variables, and a run records which were set. [provrun's page](provrun.md#control-of-library-telemetry) says how.
+Some variables send a matched URL somewhere else. `HTTPS_PROXY` sends it through a proxy, and `PGHOSTADDR` makes Postgres connect to another address. provrun's senders ignore the proxy variables, and a run records which were set. [provrun's page](provrun.md#control-of-library-telemetry) says how. The copy in MLflow refuses to run while one of them is set, as the next section says.
 
 A policy endpoint holds no user and no password, because the policy holds no secrets. Its host must be in `hosts`.
 
@@ -250,9 +253,92 @@ prove: pydantic-ai 2.64.0 is installed, but the policy approves >=2.65
 
 `prove telemetry RUN` prints the `telemetry_blocked` and `telemetry_problem` events of a run, one on each line, with the sequence number and the time. A blocked attempt shows `blocked`, the path, the library and the detail. A problem, such as a library that set up its own telemetry, shows `problem` and its text. If the run has neither, it prints `RUN: no blocked attempts and no problems`.
 
+## Copy a run into MLflow
+
+The evidence is the record of a run. MLflow holds a copy, so that its viewer can show the run, search runs and add judgements. `copy_run(store, run_id, policy)` makes the copy, and `prove mlflow RUN` calls it. The copy needs the extra `provevi[mlflow]`, which installs MLflow 3.17.
+
+**Where the copy goes.** `MLFLOW_TRACKING_URI` names the place, and the policy must approve it:
+
+- An `http` or `https` URL is an MLflow tracking server.
+- A database URL, such as `postgresql://db.example.com/mlflow`, is MLflow's tables in that database.
+- With the variable unset, the copy goes into the `sqlite` store's own file, beside provevi's tables. The policy approves this with an `mlflow` destination that has no endpoint.
+
+The destination that matches gives the level. A place that no destination matches gets nothing, and `prove mlflow` exits with 1. `prove mlflow` reads the policy from `--policy FILE`, or else from the file that `PROVRUN_TELEMETRY_POLICY` names, as provrun does. With neither, the policy approves nothing.
+
+**What the copy holds.** The copy makes an MLflow experiment named for the run's experiment, and one MLflow run, tagged `provrun.run_id`. MLflow picks its own run ID, so provevi finds the copy by the tag. The run's trace keeps provrun's trace and span IDs. Each step is a span from its start to its end, under the root span of the run.
+
+| Level | What the copy holds |
+|---|---|
+| `names` | The experiment, the run with its tags, the settings that are names, but no name that holds a URL, a password, a setting such as `token=` or a path from `/`. A name such as `ns:model@tag` looks like `user:password@host`, so it stays out too, each input's SHA-256, and the spans with their names, models and IDs. A part of the experiment's name that is not a name, such as an agent called with free text, shows as `agent`. An input whose name is not a name is called `input`. |
+| `usage` | Also the token counts on the spans, and the counts of tokens and calls as the run's metrics. |
+| `bodies` | Also every other setting, each input's URIs, each step's data and URIs, the request and response of each model call, and the events that had no span, as events of the root span. |
+
+The store's assessments of the run and of its spans go onto the trace. Below `bodies`, an assessment whose name is not a name stays out, and one whose author is not a name shows `provevi` as its author. Its value goes in at `names` if it is a name or a yes or no, and at `usage` if it is a number too. A rationale goes only with `bodies`.
+
+**A library's spans.** provrun writes the span of an approved library, such as PydanticAI, as a `span_recorded` event. The copy makes it a span of the trace, with its own name, times and status. It does so only if the policy lets that library feed the MLflow destination. Its names and usage come from the event. With `bodies`, its other attributes and its events come from the payload.
+
+**What the copy guards.** Before it writes, the copy checks the run's chain, as `prove verify` does, and refuses a run that does not verify. A run ID must be letters, digits, `_`, `.` and `-`, because the copy searches MLflow for it.
+
+Some variables would send the copy somewhere the policy did not approve. The copy refuses to run while one is set. For a tracking server, these are `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY`, in either case. For Postgres, they are `PGHOST`, `PGHOSTADDR`, `PGPORT`, `PGDATABASE`, `PGSERVICE`, `PGSERVICEFILE`, `PGSYSCONFDIR`, `PGSSLMODE` and `PGREQUIRESSL`. For MySQL, they are `MYSQL_HOST`, `MYSQL_TCP_PORT`, `MYSQL_UNIX_PORT` and `MYSQL_PWD`.
+
+Variables that change which servers the copy trusts are refused too. They are `MLFLOW_TRACKING_INSECURE_TLS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `MLFLOW_TRACKING_SERVER_CERT_PATH`, and `MLFLOW_TRACKING_AUTH`, which loads a plugin.
+
+macOS and Windows can name a proxy in the system settings, with no variable set. The copy sets `NO_PROXY` to `*` while it runs, so MLflow's HTTP client uses no proxy.
+
+It writes whole spans through MLflow's store, so MLflow adds nothing of its own, such as the user name or the git commit. MLflow's usage telemetry is off. MLflow prices a model call with LiteLLM if it can import it, and importing LiteLLM fetches a price table from the network. So the copy keeps LiteLLM out, and MLflow uses the price table that it ships.
+
+A SQLite file is put in WAL mode before MLflow opens it, with or without a driver such as `sqlite+pysqlite`. The copy puts back the MLflow variables that it sets. MLflow's artifacts go in a folder next to the SQLite file, not in the current folder.
+
+If a copy fails part way, it deletes its run and its trace, as a rebuild deletes the first copy. An experiment that it made stays, empty. A database that cannot be reached gives an error, with no password in it. A store makes one copy at a time. The copy holds a lock file next to the store's file, or in the runs root for the `file` store.
+
+**Copy again to rebuild.** A second copy of the same run deletes the first, with its trace, and writes it again. So the copy can be deleted and rebuilt from the evidence at any time.
+
+In a database, the first copy's rows are deleted for good, with its inputs, and each dataset that no run names any more. MLflow shares one dataset row among the runs of an experiment. So a dataset's digest is of its name and its source, and a copy never points at a row written at another level. A tracking server only marks the first copy's run as deleted, and keeps its params and tags until its owner runs `mlflow gc`.
+
+This example runs the agent of [the provrun tour](provrun-tour.md) on a local file, with the model's answer mocked, into a `sqlite` store. The policy file `/tmp/provevi-mlflow/policy.yaml` approves the store's own file at `usage`:
+
+```yaml
+version: 1
+destinations:
+  viewer:
+    kind: mlflow
+    receives: usage
+```
+
+Without the policy, nothing is copied. With it, the run is copied, and a second copy replaces the first. A tracking URI that the policy does not name is refused:
+
+```
+$ export S=sqlite:////tmp/provevi-mlflow/evidence.db
+$ uv run prove --store $S mlflow run-20261102T191147Z-d573ce99
+prove: the telemetry policy approves no mlflow destination for the store's own file (MLFLOW_TRACKING_URI is unset)
+
+$ uv run prove --store $S mlflow run-20261102T191147Z-d573ce99 --policy /tmp/provevi-mlflow/policy.yaml
+run-20261102T191147Z-d573ce99: copied to MLflow at sqlite:////private/tmp/provevi-mlflow/evidence.db, destination viewer, level usage
+  experiment 1, MLflow run 542b1c611ed14d38aff7784d9557ca9f, trace tr-369c7182fc0007833cd3d866168b5e95 with 7 spans
+
+$ uv run prove --store $S mlflow run-20261102T191147Z-d573ce99 --policy /tmp/provevi-mlflow/policy.yaml
+run-20261102T191147Z-d573ce99: copied to MLflow at sqlite:////private/tmp/provevi-mlflow/evidence.db, destination viewer, level usage
+  experiment 1, MLflow run f2845cc102a24a7e8c7e673f645a1a8d, trace tr-369c7182fc0007833cd3d866168b5e95 with 7 spans
+  deleted the earlier copy, MLflow run 542b1c611ed14d38aff7784d9557ca9f
+
+$ MLFLOW_TRACKING_URI=https://mlflow.example.com uv run prove --store $S mlflow run-20261102T191147Z-d573ce99 --policy /tmp/provevi-mlflow/policy.yaml
+prove: the telemetry policy approves no mlflow destination for MLFLOW_TRACKING_URI https://mlflow.example.com:443
+```
+
+On macOS, `/tmp` is a link to `/private/tmp`, so the store's path shows as `/private/tmp`.
+
+`prove ui` opens MLflow's viewer on the store's own file. It listens on 127.0.0.1 only, at port 5000 unless `--port` gives another. It passes MLflow no `MLFLOW_` or `OTEL_` variable of the shell:
+
+```
+$ uv run prove --store $S ui --port 5088
+MLflow's viewer on /private/tmp/provevi-mlflow/evidence.db: http://127.0.0.1:5088
+```
+
+provrun does not make the copy at the end of a run yet. Until it does, run `prove mlflow` after the run.
+
 ## The command `prove`
 
-`prove` only reads and checks. provrun writes the runs.
+`prove` reads and checks. provrun writes the runs. The one command that writes, `prove mlflow`, writes only the copy in MLflow.
 
 | Command | What it does |
 |---|---|
@@ -265,6 +351,8 @@ prove: pydantic-ai 2.64.0 is installed, but the policy approves >=2.65
 | `prove telemetry RUN` | Prints the attempts that the telemetry policy blocked in a run, and the telemetry problems that the run found. |
 | `prove policy FILE` | Checks a telemetry policy file, and the installed version of each library it approves. |
 | `prove verify RUN` | Checks the evidence, the outputs and the committed bundle. It takes `--config`, `--tenant`, `--bundle` and `--require-bundle`, as `provr verify` does. |
+| `prove mlflow RUN` | Copies a sealed run into MLflow, at the place that `MLFLOW_TRACKING_URI` names and the policy approves. It takes `--policy FILE`. |
+| `prove ui` | Opens MLflow's viewer on the `sqlite` store's own file, on 127.0.0.1. It takes `--port`. |
 
 `--store URI` chooses the store, before the command, as in `prove --store sqlite:///evidence.db runs`. The default is the file store under the runs root. The file store has no index of runs, so `--reading`, `--experiment`, `experiments` and `access` need a `sqlite` store.
 
@@ -299,7 +387,7 @@ $ uv run prove --runs packages/provevi/tests/data show run-20261031T182026Z-f9c3
 | Code | Meaning |
 |---|---|
 | 0 | The command worked, and the run verifies. |
-| 1 | The run does not verify, or there is no such run, or the catalog cannot be opened. Also a telemetry policy that cannot be read, or an approved library at a version that the policy does not name. Also a store URI that names no store, a store file that cannot be opened or was changed, and a question that the file store cannot answer. |
+| 1 | The run does not verify, or there is no such run, or the catalog cannot be opened. Also a copy in MLflow that the policy does not approve, or that MLflow cannot take. Also a telemetry policy that cannot be read, or an approved library at a version that the policy does not name. Also a store URI that names no store, a store file that cannot be opened or was changed, and a question that the file store cannot answer. |
 | 2 | `prove show` or `prove telemetry` cannot read the events, or met a line that is not an event. Also a command line that argparse rejects. |
 
 ## Errors

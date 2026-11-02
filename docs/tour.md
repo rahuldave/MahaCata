@@ -60,6 +60,7 @@ Add `--online` to run Step 11 too, which reads GitHub and Hugging Face. The scri
    - It sets fake AWS keys for moto, and unsets `AWS_PROFILE`, `AWS_SESSION_TOKEN` and the provcat variables `PROVCAT_HOOKS`, `PROVCAT_APP` and `PROVCAT_TENANT`.
    - It starts moto on port 5055, or the port in `TOUR_S3_PORT`. It refuses a port that is in use.
    - It makes the bucket `tour-sales`, with versioning on, and two local files.
+   - It refuses to start a second tour in a shell that runs one, and to run outside the top folder of the repository. If it fails after its checks, it undoes what it did.
 
 2. Copy each command of the steps below into the same shell, in order. Copy only the text after `$ `.
 

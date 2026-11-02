@@ -1,12 +1,15 @@
 """prove: list, show, query and verify the evidence of runs, and check a telemetry policy.
 
-prove only reads and checks. Runs are written by provrun, through a provevi
-store. Each command calls a library function and prints what it returns.
+prove reads and checks. Runs are written by provrun, through a provevi
+store. The one command that writes, prove mlflow, writes only the copy of a
+run in MLflow. Each command calls a library function and prints what it
+returns.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -124,6 +127,52 @@ def cmd_telemetry(args) -> int:
     return 0
 
 
+#: The variable that names the telemetry policy, as provrun reads it.
+POLICY_ENV = "PROVRUN_TELEMETRY_POLICY"
+
+
+def _policy(path: str | None):
+    from .telemetry import TelemetryPolicy
+
+    path = path or os.environ.get(POLICY_ENV)
+    return TelemetryPolicy.load(path) if path else TelemetryPolicy.deny_all()
+
+
+def cmd_mlflow(args) -> int:
+    from .mlflow_copy import copy_run
+
+    # MLflow sets its logger's level as it is imported, from this variable;
+    # without it, MLflow logs a note to the terminal as it makes its tables.
+    os.environ.setdefault("MLFLOW_LOGGING_LEVEL", "WARNING")
+    store = store_of(args)
+    folder = None
+    if isinstance(store, FileStore):
+        folder = run_folder(args, store) / "evidence"
+    c = copy_run(store, str(args.run), _policy(args.policy), folder=folder)
+    print(f"{c.run_id}: copied to MLflow at {c.tracking_uri}, destination {c.destination}, level {c.level}")
+    print(f"  experiment {c.experiment_id}, MLflow run {c.mlflow_run_id}, "
+          + (f"trace {c.trace_id} with {c.spans} spans" if c.trace_id else "no trace: the run recorded no spans"))
+    for old in c.replaced:
+        print(f"  deleted the earlier copy, MLflow run {old}")
+    return 0
+
+
+def cmd_ui(args) -> int:
+    import shutil
+    import subprocess
+
+    from .mlflow_copy import ui_command
+
+    store = store_of(args)
+    if isinstance(store, FileStore):
+        raise ProveviError("prove ui opens the store's own file; give --store sqlite:///path")
+    command, env = ui_command(store.path, args.port)
+    if shutil.which(command[0]) is None:
+        raise ProveviError("prove ui needs MLflow; install provevi[mlflow]")
+    print(f"MLflow's viewer on {store.path}: http://127.0.0.1:{args.port}", flush=True)
+    return subprocess.call(command, env=env)
+
+
 def verify_command(args, prog: str, folder: Path | None = None) -> int:
     """The verify command of prove, and of provr, which calls it with the
     run folder it found."""
@@ -177,6 +226,15 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("policy", help="check a telemetry policy file, and the installed versions of its libraries")
     p.add_argument("file")
     p.set_defaults(fn=cmd_policy)
+    m = sub.add_parser("mlflow", help="copy a sealed run into MLflow, at the place that MLFLOW_TRACKING_URI names "
+                                      "and the telemetry policy approves")
+    m.add_argument("run")
+    m.add_argument("--policy", help=f"the telemetry policy file; the default is the file that {POLICY_ENV} names, "
+                                    "else a policy that approves nothing")
+    m.set_defaults(fn=cmd_mlflow)
+    u = sub.add_parser("ui", help="open MLflow's viewer on the store's own file, on this machine only")
+    u.add_argument("--port", type=int, default=5000, help="the port, on 127.0.0.1 (default 5000)")
+    u.set_defaults(fn=cmd_ui)
     v = sub.add_parser("verify", help="check the evidence, the outputs and the committed bundle of a run")
     add_verify_arguments(v)
     v.set_defaults(fn=lambda a: verify_command(a, "prove"))

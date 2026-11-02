@@ -1,0 +1,11 @@
+# The tour's telemetry policy. LiteLLM may be loaded at the version that the
+# workspace pins, and feeds no destination. The copy in MLflow may go into
+# the store's own file, with the token counts but no prompts.
+version: 1
+libraries:
+  litellm:
+    versions: "==1.83.0"
+destinations:
+  viewer:
+    kind: mlflow
+    receives: usage

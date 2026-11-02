@@ -582,6 +582,21 @@ class SqliteRecord(RunRecord):
             return None
         return sha256_bytes(p.read_bytes())
 
+    def assessments(self) -> list[dict]:
+        """The assessments of this run, and of its spans, in the order they were made."""
+        rows = self._q(
+            "SELECT a.id, a.target_kind, a.target_id, a.name, a.value, a.rationale, a.source, a.created_by, "
+            "a.created_at FROM provevi_assessments a WHERE (a.target_kind = 'run' AND a.target_id = ?) "
+            "OR (a.target_kind = 'span' AND a.target_id IN (SELECT span_id FROM provevi_events "
+            "WHERE run_id = ? AND span_id IS NOT NULL)) ORDER BY a.created_at, a.id", (self.run_id, self.run_id))
+        return [dict(r) for r in rows]
+
+    def payload_bytes(self, name: str) -> bytes | None:
+        if not self._q("SELECT 1 FROM provevi_payloads WHERE run_id = ? AND sha256 = ?", (self.run_id, name)):
+            return None
+        p = self._payload_path(name)
+        return p.read_bytes() if p is not None and p.is_file() else None
+
     def payload_files(self) -> tuple[set[str], list[str]]:
         rows = self._q("SELECT sha256 FROM provevi_payloads WHERE run_id = ?", (self.run_id,))
         return {str(r[0]) for r in rows}, []

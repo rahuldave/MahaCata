@@ -144,6 +144,10 @@ class RunRecord(ABC):
         """The names of the stored payloads, and a problem for each entry that
         is not a payload, such as a special file."""
 
+    def payload_bytes(self, name: str) -> bytes | None:
+        """The stored payload called name, or None if there is none."""
+        return None
+
     def problems(self) -> list[str]:
         """Problems of the store itself that the chain does not show."""
         return []
@@ -169,6 +173,10 @@ class FolderRecord(RunRecord):
         if not p.exists():
             return None
         return sha256_bytes(p.read_bytes())
+
+    def payload_bytes(self, name: str) -> bytes | None:
+        p = self.folder / "payloads" / name
+        return p.read_bytes() if p.is_file() else None
 
     def payload_files(self) -> tuple[set[str], list[str]]:
         from .checks import _files
