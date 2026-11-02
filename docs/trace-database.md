@@ -92,14 +92,14 @@ Each span also keeps an `attributes` column, in MLflow's expanded form, with `ml
 
 The build can only copy what the evidence holds. Each step writes one event when it ends. Today the evidence lacks these values:
 
-- **Span IDs.** provrun asks OpenTelemetry for the trace ID and span ID of each step. Nothing in the repository sets a tracer provider yet, so the IDs are empty today. Phase 3 of [provevi's plan](provevi-plan.md) makes provrun own a provider, and then the IDs exist.
-- **The parent span ID and the start time of each step.** Without them, the build cannot make the tree of spans or give a duration.
-- **Span IDs on tool calls that the provider runs.** The PydanticAI backend writes them with `emit`, not with `step`, so they have no span.
+- **Span IDs.** provrun asks OpenTelemetry for the trace ID, span ID and parent span ID of each step, and of each tool call that the provider runs. provrun sets no tracer provider yet, so the IDs are there only when the program that runs provrun sets one. Phase 3 of [provevi's plan](provevi-plan.md) makes provrun own a provider, and then the IDs are always there.
 - **The provider of each model call.** No event holds it.
 - **The details of a LiteLLM reply.** The payload keeps the reply as plain text. It has no model that answered, no tool calls and no cache tokens.
 - **The full tool definitions and a session ID.** `sandbox_started` holds the tool names only, and no event holds a session ID.
 
 provrun writes all of these, so each change needs the agent that owns provrun.
+
+The start of each step is there now. Each step's event holds `started_at`, so the build can give a duration. Runs written before this field have none. A tool that the provider ran has no `started_at` either, because provrun did not see it run. So the build must choose a start for its span, for example zero length at the end of its `model_called`.
 
 ## Tests
 

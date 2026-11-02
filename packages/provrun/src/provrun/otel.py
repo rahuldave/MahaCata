@@ -34,11 +34,14 @@ _ATTRIBUTES = {
 
 
 @contextlib.contextmanager
-def span(step: str, run_id: str, component: str) -> Iterator[trace.Span]:
+def span(step: str, run_id: str, component: str, parent: trace.Span | None = None) -> Iterator[trace.Span]:
+    """A span for one step. It is a child of ``parent`` when one is given, else
+    of the current span."""
     attributes = {"provrun.run_id": run_id, "provrun.step": step, "provrun.component": component}
     if step in _OPERATION:
         attributes["gen_ai.operation.name"] = _OPERATION[step]
-    with _tracer.start_as_current_span(step, attributes=attributes) as s:
+    context = trace.set_span_in_context(parent) if parent is not None else None
+    with _tracer.start_as_current_span(step, context=context, attributes=attributes) as s:
         yield s
 
 
@@ -49,10 +52,20 @@ def annotate(s: trace.Span, data: dict) -> None:
             s.set_attribute(name, value)
 
 
+def current() -> trace.Span:
+    """The current span, to pass as ``parent`` to a later span."""
+    return trace.get_current_span()
+
+
 def ids(s: trace.Span) -> dict:
-    """The trace and span IDs, so that an event links to its span; empty when
-    nothing records spans."""
+    """The trace, span and parent span IDs, so that an event links to its span;
+    empty when nothing records the span. The parent span ID is None at the root."""
     ctx = s.get_span_context()
-    if not ctx.is_valid:
+    # A span that records nothing, such as one the sampler dropped, or the
+    # caller's own span handed back when no provider is set, has no parent to
+    # tell; its IDs would name a span that is not this step's.
+    if not ctx.is_valid or not s.is_recording():
         return {}
-    return {"trace_id": format(ctx.trace_id, "032x"), "span_id": format(ctx.span_id, "016x")}
+    parent = s.parent
+    return {"trace_id": format(ctx.trace_id, "032x"), "span_id": format(ctx.span_id, "016x"),
+            "parent_span_id": format(parent.span_id, "016x") if parent is not None and parent.is_valid else None}

@@ -24,7 +24,9 @@ def test_a_closed_run_verifies(tmp_path):
     events = read_events(tmp_path / "ev")
     assert [e.type for e in events] == ["run_created", "model_called", "run_completed"]
     assert events[0].prev is None and all(e.prev for e in events[1:])
+    started = events[1].data.pop("started_at")
     assert events[1].data == {"model": "m", "input_tokens": 3}
+    assert started <= events[1].time
     assert (tmp_path / "ev" / "payloads" / events[1].payload).read_text() == "the prompt"
     assert verify(tmp_path / "ev") == []
 
@@ -127,31 +129,134 @@ def test_redaction_runs_before_the_hash(tmp_path):
     assert "s3cr3t" not in text and verify(tmp_path / "ev") == []
 
 
-def test_spans_carry_the_ids_into_the_event(tmp_path):
-    from opentelemetry import trace
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer("provrun")
-    from provrun import otel
-    old = otel._tracer
-    otel._tracer = tracer
-    try:
-        rec = recorder(tmp_path)
-        with rec.step("model_called", "test", data={"model": "m"}):
-            pass
-    finally:
-        otel._tracer = old
-    [span] = exporter.get_finished_spans()
+def test_spans_carry_the_ids_into_the_event(tmp_path, spans):
+    rec = recorder(tmp_path)
+    with rec.step("model_called", "test", data={"model": "m"}):
+        pass
+    [span] = spans.get_finished_spans()
     [e] = read_events(tmp_path / "ev")
     assert span.name == "model_called"
     assert span.attributes["gen_ai.operation.name"] == "chat"
     assert span.attributes["gen_ai.request.model"] == "m"
+    assert e.data["trace_id"] == format(span.context.trace_id, "032x")
     assert e.data["span_id"] == format(span.context.span_id, "016x")
+    assert e.data["parent_span_id"] is None  # a step at the root has no parent
+
+
+def test_a_nested_step_names_its_parent_span(tmp_path, spans):
+    rec = recorder(tmp_path)
+    with rec.step("sandbox_started", "test"):
+        with rec.step("model_called", "test"):
+            pass
+    inner, outer = read_events(tmp_path / "ev")
+    assert inner.type == "model_called" and outer.type == "sandbox_started"
+    assert inner.data["parent_span_id"] == outer.data["span_id"]
+    assert inner.data["trace_id"] == outer.data["trace_id"]
+    assert outer.data["parent_span_id"] is None
+
+
+def test_a_failed_step_keeps_its_start_and_span(tmp_path, spans):
+    rec = recorder(tmp_path)
+    with pytest.raises(RuntimeError):
+        with rec.step("sandbox_started", "test"):
+            with rec.step("model_called", "test"):
+                raise RuntimeError("boom")
+    failed = read_events(tmp_path / "ev")
+    assert [e.type for e in failed] == ["step_failed", "step_failed"]
+    inner, outer = failed
+    assert inner.data["step"] == "model_called" and inner.data["started_at"] <= inner.time
+    assert inner.data["parent_span_id"] == outer.data["span_id"]
+
+
+def test_without_tracing_a_step_has_its_start_but_no_span_ids(tmp_path):
+    rec = recorder(tmp_path)
+    with rec.step("model_called", "test"):
+        pass
+    with pytest.raises(ValueError):
+        with rec.step("tool_called", "test"):
+            raise ValueError("no")
+    for e in read_events(tmp_path / "ev"):
+        assert e.data["started_at"] <= e.time
+        assert not {"trace_id", "span_id", "parent_span_id"} & e.data.keys()
+
+
+def test_a_dropped_span_gives_no_ids(tmp_path, monkeypatch):
+    """A span the sampler drops records nothing, so it cannot say whether it is
+    a root; the event gets no IDs rather than a wrong null parent."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
+
+    from provrun import otel
+
+    monkeypatch.setattr(otel, "_tracer", TracerProvider(sampler=ALWAYS_OFF).get_tracer("provrun"))
+    rec = recorder(tmp_path)
+    with rec.step("sandbox_started", "test"):
+        with rec.step("model_called", "test"):
+            pass
+    for e in read_events(tmp_path / "ev"):
+        assert not {"trace_id", "span_id", "parent_span_id"} & e.data.keys()
+
+
+def test_with_no_provider_a_callers_span_gives_no_ids(tmp_path):
+    """With no provider, OpenTelemetry hands back the caller's own span; its IDs
+    are not the step's, so the event has none."""
+    from opentelemetry import context, trace
+
+    remote = trace.NonRecordingSpan(trace.SpanContext(0xABC, 0xDEF, is_remote=True,
+                                                      trace_flags=trace.TraceFlags(1)))
+    token = context.attach(trace.set_span_in_context(remote))
+    try:
+        rec = recorder(tmp_path)
+        with rec.step("model_called", "test"):
+            pass
+    finally:
+        context.detach(token)
+    [e] = read_events(tmp_path / "ev")
+    assert not {"trace_id", "span_id", "parent_span_id"} & e.data.keys()
+
+
+def test_the_recorder_owns_the_start_and_span_keys(tmp_path):
+    rec = recorder(tmp_path)
+    with rec.step("model_called", "test", data={"started_at": "then", "parent_span_id": "f" * 16,
+                                                "trace_id": "x", "span_id": "y", "model": "m"}):
+        pass
+    [e] = read_events(tmp_path / "ev")
+    assert e.data["started_at"] != "then" and e.data["model"] == "m"
+    assert not {"trace_id", "span_id", "parent_span_id"} & e.data.keys()
+
+
+def test_concurrent_steps_each_name_the_step_that_holds_them(tmp_path, spans):
+    import asyncio
+
+    rec = recorder(tmp_path)
+
+    async def child(n):
+        with rec.step("tool_called", "test", data={"tool": f"t{n}"}):
+            await asyncio.sleep(0)
+
+    async def go():
+        with rec.step("sandbox_started", "test"):
+            await asyncio.gather(*(child(n) for n in range(3)))
+
+    asyncio.run(go())
+    evs = read_events(tmp_path / "ev")
+    outer = evs[-1]
+    assert outer.type == "sandbox_started"
+    assert sorted(e.data["tool"] for e in evs[:-1]) == ["t0", "t1", "t2"]
+    assert all(e.data["parent_span_id"] == outer.data["span_id"] for e in evs[:-1])
+
+
+def test_the_start_is_taken_before_the_step_runs(tmp_path, monkeypatch):
+    from provrun import evidence
+
+    times = iter(["2026-01-01T00:00:00.000001Z", "2026-01-01T00:00:00.000002Z"])
+    monkeypatch.setattr(evidence, "_now", lambda: next(times))
+    rec = recorder(tmp_path)
+    with rec.step("model_called", "test"):
+        pass
+    [e] = read_events(tmp_path / "ev")
+    assert e.data["started_at"] == "2026-01-01T00:00:00.000001Z"
+    assert e.time == "2026-01-01T00:00:00.000002Z"
 
 
 def test_the_tracer_claims_no_schema_url(monkeypatch):

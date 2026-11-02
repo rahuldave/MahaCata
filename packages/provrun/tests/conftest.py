@@ -33,3 +33,19 @@ def docs(tmp_path):
     (d / "notes").mkdir()
     (d / "notes" / "a.md").write_text("# A\nalpha\n")
     return d
+
+
+@pytest.fixture
+def spans(monkeypatch):
+    """provrun's tracer, recording to memory. Returns the exporter."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from provrun import otel
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(otel, "_tracer", provider.get_tracer("provrun"))
+    return exporter

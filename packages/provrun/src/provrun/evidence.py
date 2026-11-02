@@ -78,6 +78,17 @@ class Step:
         self.payload = payload
 
 
+# The keys of a step's data that the recorder, not the step, sets.
+_STAMPED = ("started_at", "trace_id", "span_id", "parent_span_id")
+
+
+def _stamp(data: dict, started: str, span) -> None:
+    for key in _STAMPED:
+        data.pop(key, None)
+    data["started_at"] = started
+    data.update(otel.ids(span))
+
+
 class EvidenceRecorder:
     """Writes the evidence of one run. Thread-safe; one recorder per run."""
 
@@ -159,18 +170,22 @@ class EvidenceRecorder:
     def step(self, type: str, component: str, *, refs: tuple[str, ...] | list[str] = (),
              data: dict | None = None, payload: Any = None) -> Iterator[Step]:
         """Run a step in an OpenTelemetry span, and write its event when it ends.
-        If the step raises, the event is ``step_failed`` with the error."""
+        If the step raises, the event is ``step_failed`` with the error. The
+        event's data holds ``started_at``, the time the step began, in the
+        format of the event's time, and the span's IDs when a span records.
+        The recorder sets those keys; a value the step gives for them is dropped."""
         s = Step(tuple(refs), data or {}, payload)
         with otel.span(type, self.run_id, component) as span:
+            started = _now()
             try:
                 yield s
             except BaseException as e:
                 s.data.update(step=type, error=f"{e.__class__.__name__}: {e}")
-                s.data.update(otel.ids(span))
+                _stamp(s.data, started, span)
                 self.emit("step_failed", component, refs=s.refs, data=s.data, payload=s.payload)
                 raise
             otel.annotate(span, s.data)
-            s.data.update(otel.ids(span))
+            _stamp(s.data, started, span)
             self.emit(type, component, refs=s.refs, data=s.data, payload=s.payload)
 
     def close(self) -> dict:
