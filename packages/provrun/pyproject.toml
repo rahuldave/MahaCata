@@ -8,6 +8,7 @@ dependencies = [
     "provcat",
     "provevi",
     "opentelemetry-api>=1.30.0",
+    "opentelemetry-sdk>=1.30.0",
     "pyyaml>=6.0.3",
 ]
 

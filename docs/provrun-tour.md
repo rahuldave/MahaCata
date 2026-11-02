@@ -396,7 +396,59 @@ prove: in the store: the manifest counts 13 events, and there are 12
 
 The command exits with status 1. Without `--store`, `prove verify` checks only the run folder, which still verifies.
 
-## Step 10: Call a real model (optional)
+## Step 10: Run under a telemetry policy
+
+The operator's telemetry policy says what may record or send data from a run, besides the evidence. Write one to `/tmp/provrun-tour/policy.yaml`. It approves LiteLLM at the tested version, sends spans nowhere, and lets a run reach only OpenAI.
+
+```yaml
+version: 1
+libraries:
+  litellm:
+    versions: "==1.83.0"
+destinations: {}
+hosts:
+  - api.openai.com
+```
+
+Run the file under it, with two variables set. One names a collector for spans, and the other makes the anthropic SDK log request bodies.
+
+```
+$ export PROVRUN_TELEMETRY_POLICY=/tmp/provrun-tour/policy.yaml
+$ OTEL_EXPORTER_OTLP_ENDPOINT=http://collector.example:4318 ANTHROPIC_LOG=debug \
+    uv run provr run /tmp/provrun-tour/run.yaml --config $PROVCAT_CONFIG
+$ R4=run-20261102T125137Z-87f4e312
+$ head -1 /tmp/provrun-tour/runs/$R4/evidence/events.jsonl | jq .data.telemetry
+{
+  "imported_before": [],
+  "policy": "408d9fe84aa3ae7943c374d9e3f5b275c22f23173f2735d72bd2082adfae1e16",
+  "policy_source": "/tmp/provrun-tour/policy.yaml",
+  "problems": [],
+  "removed": [
+    "ANTHROPIC_LOG",
+    "OTEL_EXPORTER_OTLP_ENDPOINT"
+  ]
+}
+```
+
+`provr` prints its summary, as in step 2. Your run ID differs. The first line of the events is `run_created`.
+
+**What happened:**
+- `run_created` names the policy by its SHA-256, so the run says which policy it ran under.
+- provrun removed both variables before LiteLLM was loaded, and put them back after the run. It records their names, never their values.
+- As in every run, provrun's own OpenTelemetry providers made the spans, so each step event, such as `model_called`, holds a span ID.
+
+A run file can narrow the policy in a `telemetry` section, but never widen it. Add a host that the policy does not allow:
+
+```
+$ cp /tmp/provrun-tour/run.yaml /tmp/provrun-tour/wide.yaml
+$ printf 'telemetry:\n  hosts: [api.openai.com, paste.example]\n' >> /tmp/provrun-tour/wide.yaml
+$ uv run provr run /tmp/provrun-tour/wide.yaml --config $PROVCAT_CONFIG
+provr: the run file: host 'paste.example' is not allowed by the policy
+```
+
+The command exits with status 1, before it makes a run folder. Unset `PROVRUN_TELEMETRY_POLICY` before the next step.
+
+## Step 11: Call a real model (optional)
 
 This step needs `ANTHROPIC_API_KEY` in the environment, and it costs a few cents.
 
@@ -433,4 +485,5 @@ chmod -R u+w /tmp/provrun-tour && rm -rf /tmp/provrun-tour
 | Commit the bundle | `packages/provrun/src/provrun/context.py` |
 | Keep the evidence in SQLite, and answer queries | `packages/provevi/src/provevi/sqlite.py` |
 | The library entry and its errors | `packages/provrun/src/provrun/runner.py`, `spec.py` and `errors.py` |
+| Apply the telemetry policy | `packages/provrun/src/provrun/telemetry.py`, with the policy in `packages/provevi/src/provevi/telemetry.py` |
 | The commands | `packages/provrun/src/provrun/cli.py`; `provr verify` calls `packages/provevi/src/provevi/cli.py` |

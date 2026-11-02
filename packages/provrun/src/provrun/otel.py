@@ -33,6 +33,12 @@ _ATTRIBUTES = {
 }
 
 
+def use(provider: trace.TracerProvider) -> None:
+    """Make provrun's spans with provider's tracer, not the global one."""
+    global _tracer
+    _tracer = provider.get_tracer("provrun")
+
+
 @contextlib.contextmanager
 def span(step: str, run_id: str, component: str, parent: trace.Span | None = None) -> Iterator[trace.Span]:
     """A span for one step. It is a child of ``parent`` when one is given, else

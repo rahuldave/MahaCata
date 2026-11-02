@@ -34,7 +34,7 @@ def cmd_run(args) -> int:
     catalog = Catalog.open(args.config, tenant=args.tenant)
     store = provevi.open_store(args.store) if args.store else None
     outcome = run_file_sync(rf, catalog=catalog, runs_root=args.runs, mode=args.mode,
-                            bundle_scheme=args.bundle_scheme, store=store)
+                            bundle_scheme=args.bundle_scheme, store=store, policy=args.policy)
     print(json.dumps(outcome.to_dict(), indent=2))
     return 0 if outcome.status == "completed" else 1
 
@@ -59,6 +59,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--tenant", help="the provcat tenant")
     r.add_argument("--mode", choices=["strict", "lenient"], help="the evidence mode")
     r.add_argument("--bundle-scheme", help="the provcat scheme that holds run bundles, for example run")
+    r.add_argument("--policy", help="the operator's telemetry policy file; by default the file that "
+                                    "PROVRUN_TELEMETRY_POLICY names, else a policy that approves nothing")
     r.set_defaults(fn=cmd_run)
     s = sub.add_parser("show", help="print the events of a run")
     s.add_argument("run")
