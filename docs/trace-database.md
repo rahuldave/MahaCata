@@ -58,7 +58,7 @@ All tables start with `trace_`. The first version of the schema is version 1, an
 | `trace_meta` | key | the schema version, the build's version |
 | `trace_sources` | run | store URI, run ID, last hash, built at, verified or not |
 | `trace_runs` | run | experiment, org, domain, env, actor, status, start, end, agent, model |
-| `trace_spans` | step | run, seq, span ID, parent span ID, kind, name, start, end, duration, status, error |
+| `trace_spans` | step | run, seq, span ID, parent span ID, kind, name, start, end, duration, timed, status, error |
 | `trace_model_calls` | model call | span, model asked, model that answered, provider, input tokens, output tokens, finish reason, streamed |
 | `trace_messages` | distinct message | hash, role, part kind, text, tool call ID |
 | `trace_call_messages` | message in a call | model call, position, message hash, sent or received |
@@ -99,7 +99,9 @@ The build can only copy what the evidence holds. Each step writes one event when
 
 provrun writes all of these, so each change needs the agent that owns provrun.
 
-The start of each step is there now. Each step's event holds `started_at`, so the build can give a duration. Runs written before this field have none. A tool that the provider ran has no `started_at` either, because provrun did not see it run. So the build must choose a start for its span, for example zero length at the end of its `model_called`.
+The start of each step is there now. Each step's event holds `started_at`, so the build can give a duration. Runs written before this field have none. A tool that the provider ran has no `started_at` either, because provrun did not see it run.
+
+The build does not guess a time for a step with no `started_at`. For a tool that the provider ran, it leaves the start, the end and the duration empty, and sets `timed` to false. The span goes inside the span of its `model_called`. For a step of an older run, it keeps the end and sets `timed` to false. So a query never takes a guessed time for a measured one.
 
 ## Tests
 
@@ -109,6 +111,7 @@ The start of each step is there now. Each step's event holds `started_at`, so th
 - `check` reports a run whose source changed after the build.
 - A query for the calls of one tool, with arguments and results, returns the right rows for a PydanticAI run and a LiteLLM run.
 - A message sent in five calls is stored once.
+- A tool that the provider ran gets a span with `timed` false and no start, inside its model call's span.
 - The build refuses a database not in WAL mode.
 
 ## Open questions

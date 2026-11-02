@@ -2482,11 +2482,17 @@ name = "provevi"
 version = "0.1.0"
 source = { editable = "packages/provevi" }
 dependencies = [
+    { name = "packaging" },
     { name = "provcat" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "provcat", editable = "packages/provcat" }]
+requires-dist = [
+    { name = "packaging", specifier = ">=24" },
+    { name = "provcat", editable = "packages/provcat" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
+]
 
 [[package]]
 name = "provrun"

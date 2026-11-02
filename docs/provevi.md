@@ -2,7 +2,9 @@
 title: provevi
 ---
 
-provevi stores, reads and checks the evidence of provrun's runs. Its command is `prove`. Phases 1 and 2 of [the plan](provevi-plan.md) are built. Phase 1 gave the package, the `file` store and the checks. Phase 2 gave the `sqlite` store, which answers questions across runs. The copy in MLflow, experiments as catalog objects and the span receiver come in later phases.
+provevi stores, reads and checks the evidence of provrun's runs. Its command is `prove`. Phases 1 and 2 of [the plan](provevi-plan.md) are built. Phase 1 gave the package, the `file` store and the checks. Phase 2 gave the `sqlite` store, which answers questions across runs.
+
+Of Phase 3, provevi's part is built. It reads and checks the telemetry policy, and provrun does not apply the policy yet. The copy in MLflow, experiments as catalog objects and the span receiver come in later phases.
 
 ## Terms
 
@@ -13,6 +15,8 @@ provevi stores, reads and checks the evidence of provrun's runs. Its command is 
 - **Experiment:** the runs of one agent in one org, domain and environment, such as `acme/demo/dev/revenue-question`.
 - **Writer:** what a store gives for one run. provrun's recorder hands it each event line and each payload, and seals it at the end.
 - **Committed bundle:** a copy of the run's evidence that provrun commits through provcat, in another store.
+- **Telemetry policy:** the operator's file that says what may record or send data from a run, besides the evidence.
+- **Destination:** a place outside the evidence that spans may go to, such as Logfire or an OpenTelemetry endpoint.
 
 ## How the packages depend on each other
 
@@ -122,6 +126,69 @@ The store answers questions across runs:
 | `access(run_id)` | The grants and refusals of a run, in order. |
 | `inputs(run_id)` | The inputs that a run staged, with their pinned URIs. |
 
+## Check a telemetry policy
+
+During a run, provrun turns off each path by which a library records or sends data, such as MLflow's autolog and LiteLLM's callbacks. Phase 3 of [the plan](provevi-plan.md) gives the steps, and [Library telemetry](provevi-research/library-telemetry.md) gives the research. The operator approves exceptions in a telemetry policy. provevi reads and checks the policy, and provrun applies it.
+
+A policy is a YAML or JSON file:
+
+```yaml
+version: 1
+libraries:
+  pydantic-ai:
+    versions: ">=2.64,<2.65"
+    telemetry: [logfire]
+  litellm:
+    versions: "==1.83.0"
+destinations:
+  logfire:
+    kind: logfire
+    receives: usage
+    endpoint: https://logfire-us.pydantic.dev
+hosts:
+  - api.anthropic.com
+  - .amazonaws.com
+  - logfire-us.pydantic.dev
+```
+
+| Key | What it holds |
+|---|---|
+| `version` | `1`, the format of the file. |
+| `libraries` | Each approved library, by its distribution name. `versions` is the versions that were tested, as a version specifier. `telemetry` is the destinations that its instrumentation may feed. |
+| `destinations` | Each place outside the evidence that spans may go to. `kind` is `logfire`, `otlp` or `mlflow`. `receives` is `names`, `usage` or `bodies`. `endpoint` is an http or https URL, and its host must be in `hosts`. Only an `mlflow` destination may leave it out, because the copy in MLflow goes into the store's own file. |
+| `hosts` | The hosts that a run may connect to. An entry with a leading dot, such as `.amazonaws.com`, allows each host under the domain, but not the domain itself. A dotted entry needs two labels at least, so `.com` is refused. |
+
+A library or a destination that the policy does not name gets nothing. A run with no policy file gets `TelemetryPolicy.deny_all()`, which approves nothing. The loader refuses an unknown key, a key named twice in one mapping, and a `version` that is not the integer `1`. It reports every problem in the file at once. A library installed as a local build, such as `2.64.0+patched`, passes only if `versions` names the local build.
+
+**What a destination receives.** `names` is the names, models, providers and IDs of each span, its error type, its finish reasons, and the server's address and port. `usage` adds the token counts, the cost, and the temperature, `max_tokens` and `top_p` of the request. `bodies` adds every other attribute, such as the messages and the tool arguments.
+
+An attribute that provevi does not know counts as a body, so a new attribute never leaves at a lower level.
+
+provevi also checks each value. A `names` attribute must hold one word of at most 200 characters, with no space. A `usage` attribute must hold numbers. Any other value counts as a body, because it may hold text from a prompt. `attributes_for(attributes, level)` gives what a destination receives. `split_body(attributes)` takes the bodies out of a span's attributes, so that the evidence keeps them in a payload, not in the event.
+
+**Narrow the policy for one run.** `policy.narrow(section)` reads a run file's `telemetry` section. The section has the keys `libraries`, `destinations` and `hosts`, and each one replaces the policy's list with a smaller one. A destination can receive a lower level, and a library can feed fewer destinations. The section cannot change versions, kinds or endpoints. If the section would widen the policy in any way, `narrow` raises `ProveviError`.
+
+**Record what was blocked.** provrun writes a `telemetry_blocked` event for each attempt that the policy blocked. `blocked_data(path, library=..., detail=...)` gives its data, where `path` names what was blocked, such as `litellm.callbacks` or `network`. `policy.digest()` is the SHA-256 of the policy, for a run to record which policy it ran under.
+
+`prove policy FILE` checks a policy file, and checks the installed version of each approved library. The file below is in the repository:
+
+```
+$ uv run prove policy packages/provevi/tests/data/telemetry-policy.yaml
+packages/provevi/tests/data/telemetry-policy.yaml: sha256 927ccec8f74bf254aaae11282df1f64dfc73f6291e6dd50b3c83faa22e313b03
+  library litellm ==1.83.0 feeds nothing
+  library pydantic-ai >=2.64,<2.65 feeds logfire
+  destination logfire (logfire) receives usage at https://logfire-us.pydantic.dev
+  hosts: api.anthropic.com, .amazonaws.com, logfire-us.pydantic.dev
+```
+
+If an approved library is installed at a version that the policy does not name, `prove policy` says so and exits with 1. With `versions: ">=2.65"` for pydantic-ai, it printed:
+
+```
+prove: pydantic-ai 2.64.0 is installed, but the policy approves >=2.65
+```
+
+`prove telemetry RUN` prints the `telemetry_blocked` events of a run, one on each line, with the sequence number, the time, the path, the library and the detail. If the policy blocked nothing, it prints `RUN: no blocked attempts`.
+
 ## The command `prove`
 
 `prove` only reads and checks. provrun writes the runs.
@@ -134,6 +201,8 @@ The store answers questions across runs:
 | `prove experiments` | Lists the experiments. |
 | `prove access RUN` | Prints the grants and refusals of a run. |
 | `prove show RUN` | Prints the events of a run. |
+| `prove telemetry RUN` | Prints the attempts that the telemetry policy blocked in a run. |
+| `prove policy FILE` | Checks a telemetry policy file, and the installed version of each library it approves. |
 | `prove verify RUN` | Checks the evidence, the outputs and the committed bundle. It takes `--config`, `--tenant`, `--bundle` and `--require-bundle`, as `provr verify` does. |
 
 `--store URI` chooses the store, before the command, as in `prove --store sqlite:///evidence.db runs`. The default is the file store under the runs root. The file store has no index of runs, so `--reading`, `--experiment`, `experiments` and `access` need a `sqlite` store.
@@ -169,8 +238,8 @@ $ uv run prove --runs packages/provevi/tests/data show run-20261031T182026Z-f9c3
 | Code | Meaning |
 |---|---|
 | 0 | The command worked, and the run verifies. |
-| 1 | The run does not verify, or there is no such run, or the catalog cannot be opened. Also a store URI that names no store, a store file that cannot be opened or was changed, and a question that the file store cannot answer. |
-| 2 | `prove show` cannot read the events, or met a line that is not an event. Also a command line that argparse rejects. |
+| 1 | The run does not verify, or there is no such run, or the catalog cannot be opened. Also a telemetry policy that cannot be read, or an approved library at a version that the policy does not name. Also a store URI that names no store, a store file that cannot be opened or was changed, and a question that the file store cannot answer. |
+| 2 | `prove show` or `prove telemetry` cannot read the events, or met a line that is not an event. Also a command line that argparse rejects. |
 
 ## Errors
 
