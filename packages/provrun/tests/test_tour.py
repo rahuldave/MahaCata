@@ -156,7 +156,8 @@ ROUND_TRIP = (
     'env | sort > after; set | grep "^PROVRUN_RUNS=" > after_local; '
     'diff before after | grep -v "^[<>] _=" | grep "^[<>]"; diff before_local after_local; '
     'printenv PROVRUN_RUNS && echo "PROVRUN_RUNS was exported"; '
-    'for p in $servers; do kill -0 $p 2> /dev/null && echo "a server still runs"; done; rm before after before_local after_local; true'
+    'for p in $servers; do kill -0 $p 2> /dev/null && echo "a server still runs"; done; rm before after before_local after_local; '
+    'for f in _tour_start _tour_stop; do typeset -f $f > /dev/null 2>&1 && echo "$f is still defined"; done; true'
 )
 
 
@@ -184,6 +185,41 @@ def test_a_failed_start_cleans_up(tmp_path):
     assert "must be a number" in done.stderr
     assert done.stdout.strip() == "0"
     assert not tour_dir.exists()
+
+
+def test_a_failed_start_cleans_up_under_set_e(tmp_path):
+    tour_dir = tmp_path / "t"
+    # run.sh sources start.sh with set -e, which must not exit before the clean-up.
+    done = subprocess.run(["bash", "-c", 'set -e; source tours/provrun/start.sh || echo "rc=$?"; '
+                           'typeset -f _tour_start _tour_stop || echo "no functions"'],
+                          cwd=ROOT, env=_env(tour_dir, TOUR_OTLP_PORT="abc"), capture_output=True, text=True,
+                          timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.split() == ["rc=1", "no", "functions"]
+    assert not tour_dir.exists()
+
+
+def test_a_start_that_fails_halfway_cleans_up_under_set_e(tmp_path):
+    parent = tmp_path / "locked"
+    parent.mkdir()
+    parent.chmod(0o500)  # the tour's folder cannot be made, after the checks
+    try:
+        done = subprocess.run(["bash", "-c", 'set -euo pipefail; PROVRUN_RUNS=orig; '
+                               'source tours/provrun/start.sh || echo "rc=$?"; '
+                               'echo "runs=$PROVRUN_RUNS saved=${_PROVRUN_TOUR_SAVED:-}"'],
+                              cwd=ROOT, env=_env(parent / "t"), capture_output=True, text=True, timeout=60)
+    finally:
+        parent.chmod(0o700)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.split() == ["rc=1", "runs=orig", "saved="]
+
+
+def test_start_run_as_a_script_gives_its_status_quietly(tmp_path):
+    done = subprocess.run(["bash", "tours/provrun/start.sh"], cwd=ROOT,
+                          env=_env(tmp_path / "t", TOUR_OTLP_PORT="abc"), capture_output=True, text=True,
+                          timeout=60)
+    assert done.returncode == 1
+    assert "return" not in done.stderr
 
 
 def test_a_second_start_leaves_the_running_tour_alone(tmp_path):

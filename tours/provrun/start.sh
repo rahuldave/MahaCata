@@ -100,9 +100,12 @@ _tour_start() {
 # A start that a check refused, such as a second start, leaves the tour that
 # runs alone.
 _provrun_tour_mine=""
-_tour_start
-_tour_rc=$?
+# The || keeps a shell with set -e from exiting before the clean-up.
+_tour_rc=0
+_tour_start || _tour_rc=$?
 if [ "$_tour_rc" -ne 0 ] && [ -n "$_provrun_tour_mine" ]; then source tours/provrun/stop.sh; fi
 unset _provrun_tour_mine
+unset -f _tour_start
 # The status of the start is the status of this file.
-eval "unset _tour_rc; (exit $_tour_rc)"
+# exit stands in for return when the file is run instead of sourced.
+eval "unset _tour_rc; return $_tour_rc 2> /dev/null || exit $_tour_rc"
