@@ -28,15 +28,28 @@ ignore the proxy variables, such as ``HTTPS_PROXY`` and ``grpc_proxy``, so that
 no variable sends the spans elsewhere. A run records which of these variables
 were set, by name only, because a proxy URL can hold a password.
 
-The MLflow destination waits for provevi's copy in MLflow.
+MLflow is a destination of another kind. ``MLFLOW_TRACKING_URI`` names it,
+or, when the variable is unset, a sqlite evidence store's own file. MLflow
+gets no span as the run goes. Once the run is sealed, provevi's
+``copy_run`` copies it from the store, cut to the level the destination
+receives (``Routes.copy``). The copy runs in a process of its own, for
+COPY_SECONDS at most. A copy that fails gives a warning, and never fails the
+run, whose evidence is closed by then.
 """
 from __future__ import annotations
 
+import base64
+import functools
+import json
+import pickle
 import re
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -61,6 +74,10 @@ _LOGFIRE_REGIONS = {"us": "https://logfire-us.pydantic.dev", "eu": "https://logf
 _LOGFIRE_TOKEN = re.compile(r"^pylf_v[0-9]+_(?P<region>[a-z]+)_")
 #: How long a run's end waits, at most, for all its places to get its spans.
 FLUSH_MILLIS = 10_000
+#: How long a run's end waits, at most, for its copy into MLflow.
+COPY_SECONDS = 120
+# MLflow's retries of a server that cannot be reached, unless the user set them.
+_MLFLOW_HTTP = {"MLFLOW_HTTP_REQUEST_MAX_RETRIES": "2", "MLFLOW_HTTP_REQUEST_TIMEOUT": "20"}
 # The batches, fixed here, so that no OTEL_BSP_* variable changes them.
 _QUEUE = 2048
 _BATCH = 512
@@ -93,13 +110,15 @@ class Route:
     processor: Any = None  # a BatchSpanProcessor, or None when nothing is sent
     sent: Any = None  # the exporter behind it, which counts what it sent and lost
     handed: int = 0  # the spans handed to the processor
+    copying: bool = False  # MLflow's place, which gets a copy of the sealed run
     note: str = ""
 
     def record(self) -> dict:
         d = self.destination
         return {"kind": self.kind, "variable": self.variable, "url": self.url,
                 "destination": d.name if d is not None else None, "receives": d.receives if d is not None else None,
-                "sending": self.processor is not None, "note": self.note}
+                "sending": self.processor is not None or self.copying,
+                "note": self.note}
 
 
 @dataclass(eq=False)
@@ -114,14 +133,19 @@ class Routes:
     refused: set[str] = field(default_factory=set)  # libraries whose spans were refused, each once
     lock: Any = field(default_factory=threading.Lock)  # spans end in many threads
 
+    mlflow: Route | None = None  # the MLflow place, copied to after the seal
+    environ: Mapping[str, str] = field(default_factory=dict)  # the user's variables, for the copy
+
     @classmethod
-    def read(cls, telemetry: Any, environ: Mapping[str, str]) -> Routes:
+    def read(cls, telemetry: Any, environ: Mapping[str, str], store: Any = None) -> Routes:
         """The routes of a run under telemetry's policy, from environ, the
-        variables as the user set them. A place that matches no destination
-        is a telemetry_blocked event."""
+        variables as the user set them. store is the run's evidence store,
+        None for the file store. A place that matches no destination is a
+        telemetry_blocked event."""
         r = cls(telemetry, redirects=sorted(k for k in REDIRECTS if environ.get(k)))
         r._otlp(environ)
         r._logfire(environ)
+        r._mlflow(environ, store)
         return r
 
     def _blocked(self, route: Route) -> None:
@@ -190,6 +214,67 @@ class Routes:
                 continue
             self._sending(route, lambda: _HttpExporter(base.rstrip("/") + "/v1/traces", {"Authorization": token}))
 
+    def _mlflow(self, environ: Mapping[str, str], store: Any) -> None:
+        from provevi import FileStore
+        from provevi.mlflow_copy import refuse_redirects, tracking_target
+
+        url = environ.get("MLFLOW_TRACKING_URI") or None
+        policy = self.telemetry.policy
+        # Unset, the variable names no place; a policy's mlflow destination
+        # with no endpoint then means the sqlite store's own file.
+        if url is None and policy.match_destination("mlflow", None) is None:
+            return
+        route = Route("mlflow", "MLFLOW_TRACKING_URI", _place(url) if url else "<the store's own file>")
+        # The evidence gets provrun's own words: provevi's message names the
+        # URL with its path, which can be a local one.
+        if url is not None and policy.match_destination("mlflow", url) is None:
+            route.note = "matches no mlflow destination of the policy; nothing is copied"
+            self._blocked(route)
+            return
+        try:
+            name, _, target = tracking_target(policy, store if store is not None else FileStore(), environ)
+        except ProveviError:  # approved, but the file store has no file for MLflow's tables
+            route.destination = policy.match_destination("mlflow", url)
+            route.note = ("the file store has no file for MLflow's tables; set MLFLOW_TRACKING_URI, or use a "
+                          "sqlite store; nothing is copied")
+            self.routes.append(route)
+            _warn(f"provrun: MLFLOW_TRACKING_URI: {route.note}")
+            return
+        route.destination = policy.destinations[name]
+        try:
+            refuse_redirects(target, environ)
+        except ProveviError as e:  # the copy would refuse; its message names variables only
+            route.note = f"{e}; nothing is copied"
+            self._blocked(route)
+            return
+        route.note = "copied into MLflow after the run is sealed"
+        route.copying = True
+        self.mlflow = route
+        self.environ = dict(environ)
+        self.routes.append(route)
+
+    def copy(self, run_id: str, store: Any, folder: Any) -> dict | None:
+        """Copy the sealed run into the approved MLflow place, if any, and
+        say where it went. The copy runs in a process of its own, with the
+        user's variables, for COPY_SECONDS at most. A copy that fails gives a
+        warning and a result with its error; it never raises."""
+        if self.mlflow is None:
+            return None
+        route = self.mlflow
+        done = {"destination": route.destination.name, "receives": route.destination.receives, "copied": False}
+        try:
+            got = _copy_in_process(run_id, store, Path(folder), self.telemetry.policy, self.environ)
+        except Exception as e:  # a copy never fails the run
+            got = {"error": f"{e.__class__.__name__}: {e}"}
+        if "error" in got:
+            done["error"] = got["error"]
+            _warn(f"provrun: MLFLOW_TRACKING_URI: {run_id} was not copied into MLflow: {done['error']}")
+            return done
+        c = got["copy"]
+        done.update(copied=True, **{k: c[k] for k in ("tracking_uri", "experiment_id", "mlflow_run_id",
+                                                      "trace_id", "spans")})
+        return done
+
     def record(self) -> dict:
         """What run_created records: each place, and the redirecting variables set."""
         return {"destinations": [r.record() for r in self.routes], "redirects": list(self.redirects)}
@@ -213,7 +298,7 @@ class Routes:
                     first = library not in self.refused
                     self.refused.add(library)
                 if first:
-                    self.telemetry.blocked("opentelemetry.span", library=_library(library),
+                    self.telemetry.blocked("opentelemetry.span", library=_library(library) or library,
                                            detail=f"a span from {library}, which the policy does not approve")
                 return
             # The evidence holds at least what any place gets: a span that
@@ -331,6 +416,40 @@ class _NoExporter(Exception):
     pass
 
 
+def _copy_in_process(run_id: str, store: Any, folder: Path, policy: Any, environ: Mapping[str, str]) -> dict:
+    from provevi import FileStore, SqliteStore
+
+    if isinstance(store, SqliteStore):
+        where = {"kind": "sqlite", "path": str(Path(store.path).resolve())}
+    elif store is None or isinstance(store, FileStore):
+        # The runs root of this run, so that the copy's lock file is beside its runs.
+        root = store.root if store is not None and store.root is not None else folder.parent.parent
+        where = {"kind": "file", "root": str(Path(root).resolve())}
+    else:
+        return {"error": f"the copy reads only the file and sqlite stores, not {store.__class__.__name__}"}
+    # The policy as this run holds it: a run file's narrowing may not pass
+    # from_dict's checks again. The child is provrun's own, so pickle is safe.
+    folder = folder.resolve()  # the child works in another folder, so every path is absolute
+    request = {"store": where, "run_id": run_id, "folder": str(folder),
+               "policy": base64.b64encode(pickle.dumps(policy)).decode()}
+    env = {**_MLFLOW_HTTP, **environ}
+    try:
+        # -P keeps the working folder off sys.path, so a file there, such as
+        # an mlflow.py, cannot stand in for a library. The child works in the
+        # evidence folder, which holds only what provrun wrote.
+        done = subprocess.run([sys.executable, "-P", "-m", "provrun._copy"], input=json.dumps(request), env=env,
+                              cwd=folder, capture_output=True, text=True, timeout=COPY_SECONDS)
+    except subprocess.TimeoutExpired:
+        return {"error": f"the copy took more than {COPY_SECONDS} seconds and was stopped; "
+                         "run prove mlflow to copy again"}
+    lines = done.stdout.strip().splitlines()
+    try:
+        return json.loads(lines[-1])
+    except (IndexError, ValueError):
+        # Not its error text, which can hold the URL with its password.
+        return {"error": f"the copy ended with status {done.returncode}, and gave no result"}
+
+
 def _place(url: str) -> str:
     from .telemetry import _without_secrets
 
@@ -347,12 +466,22 @@ def _names(library: str) -> list[str]:
     return names
 
 
+@functools.cache
 def _library(scope: str) -> str | None:
     # The whole dotted name: a namespace package, such as opentelemetry, has
-    # many distributions, and only the longest module path tells which.
+    # many distributions, and only the longest module path tells which. A
+    # scope that names no installed module, such as com.anthropic.sdk.python,
+    # has no distribution; its first part, com, would name nothing.
+    from importlib import metadata
+
     from .telemetry import _distribution
 
-    return _distribution(scope.replace("-", "_")) or None
+    module = scope.replace("-", "_")
+    try:
+        installed = module.split(".")[0] in metadata.packages_distributions()
+    except Exception:  # a broken install elsewhere
+        installed = True
+    return (_distribution(module) or None) if installed else None
 
 
 class _Sent:

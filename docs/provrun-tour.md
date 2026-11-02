@@ -44,7 +44,7 @@ Run the script. It takes about 45 seconds.
 bash tours/provrun/run.sh
 ```
 
-Add `--online` to run Step 13 too, which calls a real model. The script starts moto and a small collector, runs the steps, stops both and deletes its scratch folder.
+Add `--online` to run Step 14 too, which calls a real model. The script starts moto and a small collector, runs the steps, stops both and deletes its scratch folder.
 
 ## Or run it step by step
 
@@ -83,7 +83,9 @@ Add `--online` to run Step 13 too, which calls a real model. The script starts m
 | `tours/provrun/policy.yaml` | The telemetry policy of Step 10. |
 | `tours/provrun/quiet.py` | The program of Step 11. |
 | `tours/provrun/collector.py` | The collector of Step 12. |
-| `tours/provrun/field.py`, `event.py`, `spans.py`, `modes.py`, `drop_event.py` | Small helpers that print one field of a run's output or evidence, or change the evidence. |
+| `tours/provrun/mlflow.yaml` | The telemetry policy of Step 13, with an MLflow destination. |
+| `tours/provrun/agent.yaml` | The PydanticAI agent of Step 14, which needs a real model. |
+| `tours/provrun/field.py`, `event.py`, `spans.py`, `types.py`, `mlflow_spans.py`, `modes.py`, `drop_event.py` | Small helpers that print one field of a run's output or evidence, or change the evidence. |
 
 The run file holds this:
 
@@ -141,7 +143,7 @@ $ uv run provc put data://acme/demo/dev/reports/report.txt $TOUR_DIR/report.txt
 ]
 
 $ uv run provc commit data://acme/demo/dev/reports -m 'first report'
-local-s3://data/main/acme/demo/dev/reports?at=commit:97a34a15217876c6b5f14a2be09f07178921398374a7a0769f1c4001a68a5615
+local-s3://data/main/acme/demo/dev/reports?at=commit:370305b1b05729828309544ccacf185983325762c9e9f54a063fb21a5e347ee2
 ```
 
 The `version` that `put` prints is the ETag of the object, a hash that S3 gives its content. The pin below shows the version ID instead, which a versioned bucket gives each write.
@@ -150,7 +152,7 @@ Pin the file, and fetch it.
 
 ```
 $ uv run provc pin data://acme/demo/dev/reports/report.txt
-local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:331f10c3-64f3-43f3-966a-75fb58398960
+local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:ff132f17-7295-4220-8667-de2e7316bae0
 
 $ uv run provc fetch data://acme/demo/dev/reports/report.txt
 /tmp/provrun-tour/cache/local-s3/data/main/acme/demo/dev/reports/report.txt
@@ -168,11 +170,11 @@ $ uv run provc fetch data://acme/demo/dev/reports/report.txt
 ```
 $ uv run provr run $TOUR_DIR/run.yaml | tee $TOUR_DIR/r1.json
 {
-  "run_id": "run-20261102T195556Z-88d8d7ec",
+  "run_id": "run-20261102T224004Z-d7651699",
   "status": "completed",
-  "folder": "/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec",
-  "bundle": "run://acme/demo/dev/run-20261102T195556Z-88d8d7ec",
-  "pinned": "local-s3://runs/main/acme/demo/dev/run-20261102T195556Z-88d8d7ec?at=commit:8f206c3924a18eaa16044cc1c55f55b9d3f595ace09b1d8cae242974cd4e7df9",
+  "folder": "/tmp/provrun-tour/runs/run-20261102T224004Z-d7651699",
+  "bundle": "run://acme/demo/dev/run-20261102T224004Z-d7651699",
+  "pinned": "local-s3://runs/main/acme/demo/dev/run-20261102T224004Z-d7651699?at=commit:2c12c5e026ede88e9f12a86a480f06d1a772b97cd475329e0dce9fe801f62f5d",
   "note": "",
   "error": null
 }
@@ -187,11 +189,11 @@ $ R1=$(uv run python tours/provrun/field.py $TOUR_DIR/r1.json run_id)
 ```
 $ find $TOUR_DIR/cache -type f | sort
 /tmp/provrun-tour/cache/.provcat/locks/94c319e2d0007faa0c7404ce262c520d461c24246cfb26e7a16df72ee7cfe5a7.lock
-/tmp/provrun-tour/cache/.provcat/meta/3d5694fed14124677ab233153f65622540d70ee046e7bfcd0e5f52dc5fde2678.json
+/tmp/provrun-tour/cache/.provcat/meta/a35d1a702b018acdce543e9820b4472ef8af7beea862699a6751183b37088305.json
 /tmp/provrun-tour/cache/.provcat/meta/f56a44fe7fcc5f807321f25b306828115c7bc7f388faeda61dc5dba8ed2c0694.json
 /tmp/provrun-tour/cache/.provcat/snapshots/file/205cfa28c510eeba46bd4bc49acc2fb13f7645f66bab5ff5f0c3bda90d26f0b2/report.txt
 /tmp/provrun-tour/cache/local-s3/data/main/acme/demo/dev/reports/report.txt
-/tmp/provrun-tour/cache/local-s3@version-331f10c3-64f3-43f3-966a-75fb58398960/data/main/acme/demo/dev/reports/report.txt
+/tmp/provrun-tour/cache/local-s3@version-ff132f17-7295-4220-8667-de2e7316bae0/data/main/acme/demo/dev/reports/report.txt
 
 $ uv run python tours/provrun/modes.py $TOUR_DIR/cache/.provcat/snapshots/file/*/report.txt
 -r--r--r-- /tmp/provrun-tour/cache/.provcat/snapshots/file/205cfa28c510eeba46bd4bc49acc2fb13f7645f66bab5ff5f0c3bda90d26f0b2/report.txt
@@ -213,17 +215,17 @@ The records under `.provcat/meta` hold the version, the size and the SHA-256 of 
 
 ```
 $ find $TOUR_DIR/runs/$R1 -type f | sort
-/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/bundle.json
-/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/evidence/events.jsonl
-/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/evidence/manifest.json
-/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/evidence/payloads/169a2eac7d7f094a88744ea5c1500e3a7ccb706952cdd6d5fa67eef58ff6c601
-/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/evidence/payloads/f4503948841cb1db460bbdec8f9b4178f81cc3254f1c17a27487d62495373fcd
-/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/input/report.txt
-/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/output/response.txt
+/tmp/provrun-tour/runs/run-20261102T224004Z-d7651699/bundle.json
+/tmp/provrun-tour/runs/run-20261102T224004Z-d7651699/evidence/events.jsonl
+/tmp/provrun-tour/runs/run-20261102T224004Z-d7651699/evidence/manifest.json
+/tmp/provrun-tour/runs/run-20261102T224004Z-d7651699/evidence/payloads/169a2eac7d7f094a88744ea5c1500e3a7ccb706952cdd6d5fa67eef58ff6c601
+/tmp/provrun-tour/runs/run-20261102T224004Z-d7651699/evidence/payloads/f4503948841cb1db460bbdec8f9b4178f81cc3254f1c17a27487d62495373fcd
+/tmp/provrun-tour/runs/run-20261102T224004Z-d7651699/input/report.txt
+/tmp/provrun-tour/runs/run-20261102T224004Z-d7651699/output/response.txt
 
 $ uv run python tours/provrun/modes.py $TOUR_DIR/runs/$R1/input $TOUR_DIR/runs/$R1/input/report.txt
-dr-xr-xr-x /tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/input
--r--r--r-- /tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/input/report.txt
+dr-xr-xr-x /tmp/provrun-tour/runs/run-20261102T224004Z-d7651699/input
+-r--r--r-- /tmp/provrun-tour/runs/run-20261102T224004Z-d7651699/input/report.txt
 ```
 
 The input and its folder are read-only, so a write to the file fails with `Permission denied`. The root user ignores read-only bits, so as root, for example in a container, the write succeeds. Then `input_verified` is what catches a change.
@@ -257,12 +259,12 @@ $ uv run provr show $R1 | awk '{print $1, $3, $4}'
 $ uv run python tours/provrun/event.py $R1 snapshot_materialized
 {
   "kind": "file",
-  "parent_span_id": "c9fca02628b8d4aa",
-  "pinned": "local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:331f10c3-64f3-43f3-966a-75fb58398960",
+  "parent_span_id": "dd5aca3e4559ab69",
+  "pinned": "local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:ff132f17-7295-4220-8667-de2e7316bae0",
   "sha256": "205cfa28c510eeba46bd4bc49acc2fb13f7645f66bab5ff5f0c3bda90d26f0b2",
-  "span_id": "ce0da8a7d4e73d5c",
-  "started_at": "2026-11-02T19:55:56.301512Z",
-  "trace_id": "13a2ee8f025050d4cb2cefd70147b8cd"
+  "span_id": "4b14991141c42f4d",
+  "started_at": "2026-11-02T22:40:04.463245Z",
+  "trace_id": "95d933aadf4041b35d3c2f51143a38b9"
 }
 ```
 
@@ -286,14 +288,14 @@ $ uv run provc put data://acme/demo/dev/reports/report.txt $TOUR_DIR/report.txt
 ]
 
 $ uv run provc commit data://acme/demo/dev/reports -m 'restated report'
-local-s3://data/main/acme/demo/dev/reports?at=commit:a46dda60a0b8359ec27e84ee6924cbf2b2b139b0d97364450a546df08804325e
+local-s3://data/main/acme/demo/dev/reports?at=commit:6b8d5c87d14c4f9d793c59fc92d42c1c3f5adfd27d4ef022189d04731e637e33
 
 $ uv run provr run $TOUR_DIR/run.yaml > $TOUR_DIR/r2.json
 
 $ R2=$(uv run python tours/provrun/field.py $TOUR_DIR/r2.json run_id)
 
 $ uv run python tours/provrun/event.py $R2 snapshot_materialized pinned sha256
-local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:7974237a-bb0d-49cc-b585-71afe646f008
+local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:60cd1115-53ce-454f-8da0-b8cf58e18441
 106b090a711c049ade3f3601e56d787f023438b672af9d36aa6112a7f123dc75
 ```
 
@@ -319,7 +321,7 @@ The store now holds the restated report. To repeat the first run exactly, give t
 $ PINNED=$(uv run python tours/provrun/event.py $R1 snapshot_materialized pinned)
 
 $ echo "$PINNED"
-local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:331f10c3-64f3-43f3-966a-75fb58398960
+local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:ff132f17-7295-4220-8667-de2e7316bae0
 
 $ sed "s|- data://acme/demo/dev/reports/report.txt|- \"$PINNED\"|" $TOUR_DIR/run.yaml > $TOUR_DIR/rerun.yaml
 
@@ -343,10 +345,10 @@ Revenue in 2025 was 42 million.
 
 ```
 $ uv run provr verify $R1
-run-20261102T195556Z-88d8d7ec: the evidence and the outputs verify, and match the committed bundle
+run-20261102T224004Z-d7651699: the evidence and the outputs verify, and match the committed bundle
 
 $ uv run provr verify $R2
-run-20261102T195605Z-d482c7ba: the evidence and the outputs verify, and match the committed bundle
+run-20261102T224021Z-3bf0d5f0: the evidence and the outputs verify, and match the committed bundle
 ```
 
 **What happened:** `provr verify` checked the chain of events, the payloads and the outputs. Then it read the events and the manifest from the commit that `bundle.json` names, and compared them with the run folder. To reach that commit, it needs the provcat configuration, from `PROVCAT_CONFIG` or `--config`.
@@ -371,7 +373,7 @@ So a checker who does not trust the folder passes the commit with `--bundle`. Th
 $ BUNDLE=$(uv run python tours/provrun/field.py $TOUR_DIR/r1.json pinned)
 
 $ uv run provr verify $R1 --bundle "$BUNDLE" --require-bundle
-run-20261102T195556Z-88d8d7ec: the evidence and the outputs verify, and match the committed bundle
+run-20261102T224004Z-d7651699: the evidence and the outputs verify, and match the committed bundle
 ```
 
 ## Step 9: Keep the evidence in SQLite
@@ -392,11 +394,11 @@ Ask which runs read the report, and which experiments there are. Then ask what t
 
 ```
 $ uv run prove --store $S runs --reading data://acme/demo/dev/reports/report.txt
-run-20261102T195619Z-143ab2e0
-run-20261102T195624Z-4f8fba83
+run-20261102T224043Z-e6ed9133
+run-20261102T224050Z-406f3eaf
 
 $ uv run prove --store $S experiments
-acme/demo/dev/revenue-question  created by you@example.com at 2026-11-02T19:56:19.325242Z
+acme/demo/dev/revenue-question  created by you@example.com at 2026-11-02T22:40:43.723950Z
 
 $ uv run prove --store $S access $Q
    2 granted  mounted_snapshot   data://acme/demo/dev/reports/report.txt  in the allow list; org and environment match
@@ -461,6 +463,15 @@ $ uv run python tours/provrun/event.py $R4 run_created telemetry
       "sending": false,
       "url": "http://collector.example:4318",
       "variable": "OTEL_EXPORTER_OTLP_ENDPOINT"
+    },
+    {
+      "destination": null,
+      "kind": "mlflow",
+      "note": "matches no mlflow destination of the policy; nothing is copied",
+      "receives": null,
+      "sending": false,
+      "url": "postgresql://db.example:5432",
+      "variable": "MLFLOW_TRACKING_URI"
     }
   ],
   "imported_before": [],
@@ -483,14 +494,13 @@ $ uv run python tours/provrun/event.py $R4 run_created telemetry
 - `run_created` names the policy by its SHA-256, so the run says which policy it ran under.
 - provrun left the variables as you set them. They are your configuration. `variables` records where each one points. The database URI keeps only its scheme, host and port, so the password is not recorded. The header, which holds a token, is recorded by its name only.
 - provrun set `LITELLM_MODE=PRODUCTION` for the run, so that LiteLLM read no `.env` file, and put `DEV` back after it. `overridden` records your value.
-- The policy approves no destination, so provrun sent the run's spans nowhere. `destinations` records the collector that the variable names, and that nothing went to it. A `telemetry_blocked` event says so too:
+- The policy approves no destination, so provrun sent the run's spans nowhere, and copied nothing into MLflow. `destinations` records the collector and the MLflow database that the variables name, and that nothing went to either. A `telemetry_blocked` event for each says so too:
 
 ```
 $ uv run prove telemetry $PROVRUN_RUNS/$R4
-   1 2026-11-02T19:56:33.087145Z blocked destination   OTEL_EXPORTER_OTLP_ENDPOINT: matches no otlp destination of the policy; nothing is sent
+   1 2026-11-02T22:41:00.519122Z blocked destination   OTEL_EXPORTER_OTLP_ENDPOINT: matches no otlp destination of the policy; nothing is sent
+   2 2026-11-02T22:41:00.519258Z blocked destination   MLFLOW_TRACKING_URI: matches no mlflow destination of the policy; nothing is copied
 ```
-
-- provrun sends nothing to MLflow yet. That waits for Phase 4 of [provevi's plan](provevi-plan.md).
 
 A run file can narrow the policy in a `telemetry` section, but never widen it. Add a host that the policy does not allow:
 
@@ -527,20 +537,20 @@ Run it, and list what the run turned off with `prove telemetry`.
 $ uv run python tours/provrun/quiet.py > $TOUR_DIR/quiet.out 2> $TOUR_DIR/quiet.err
 
 $ cat $TOUR_DIR/quiet.out
-run-20261102T195647Z-e039d455 completed
+run-20261102T224119Z-b9b5dfdb completed
 callbacks after the run: 1
 the LiteLLM logger logs at: DEBUG
 
 $ R5=$(head -1 $TOUR_DIR/quiet.out | cut -d" " -f1)
 
 $ uv run prove telemetry $PROVRUN_RUNS/$R5
-   1 2026-11-02T19:56:47.740780Z blocked litellm.callbacks   removed __main__.<lambda> from litellm.success_callback
-   2 2026-11-02T19:56:47.740872Z blocked logging litellm  raised the logger 'LiteLLM' from DEBUG to WARNING
-   3 2026-11-02T19:56:47.740940Z blocked logging litellm  raised the logger 'LiteLLM Router' from DEBUG to WARNING
-   4 2026-11-02T19:56:47.740991Z blocked logging litellm  raised the logger 'LiteLLM Proxy' from DEBUG to WARNING
-   5 2026-11-02T19:56:47.741041Z blocked logging anthropic  raised the logger 'anthropic' from DEBUG to WARNING
-   6 2026-11-02T19:56:47.741089Z blocked logging openai  raised the logger 'openai' from DEBUG to WARNING
-   7 2026-11-02T19:56:47.741133Z blocked logging botocore  raised the logger 'botocore' from DEBUG to WARNING
+   1 2026-11-02T22:41:19.310981Z blocked litellm.callbacks   removed __main__.<lambda> from litellm.success_callback
+   2 2026-11-02T22:41:19.311116Z blocked logging litellm  raised the logger 'LiteLLM' from DEBUG to WARNING
+   3 2026-11-02T22:41:19.311216Z blocked logging litellm  raised the logger 'LiteLLM Router' from DEBUG to WARNING
+   4 2026-11-02T22:41:19.311297Z blocked logging litellm  raised the logger 'LiteLLM Proxy' from DEBUG to WARNING
+   5 2026-11-02T22:41:19.311371Z blocked logging anthropic  raised the logger 'anthropic' from DEBUG to WARNING
+   6 2026-11-02T22:41:19.311443Z blocked logging openai  raised the logger 'openai' from DEBUG to WARNING
+   7 2026-11-02T22:41:19.311510Z blocked logging botocore  raised the logger 'botocore' from DEBUG to WARNING
 ```
 
 Each line gives the sequence number of a `telemetry_blocked` event, its time, the word `blocked`, what was blocked, the library, and the detail. The callback has no library, because it is the program's own.
@@ -554,15 +564,15 @@ The run is one trace. Print the type, the span ID and the parent span ID of each
 
 ```
 $ uv run python tours/provrun/spans.py $R5
-run_created b7f61521ecc50c64 None
-context_resolved 3e5f95e9dabbbf4a b7f61521ecc50c64
-snapshot_materialized cf528e13564aad23 b7f61521ecc50c64
-input_staged 7092a4bd3a0866e1 b7f61521ecc50c64
-model_called 7cf767d323943ceb b7f61521ecc50c64
-input_verified 1c3aaa34f1381a21 b7f61521ecc50c64
-output_artifact_created 569f28ce62873d66 b7f61521ecc50c64
-run_completed b7f61521ecc50c64 None
-trace IDs: e9ab5d23aaebcf22dcc30930a0726ec2
+run_created a909b9f8cff023d2 None
+context_resolved 294f8a32872ca1ed a909b9f8cff023d2
+snapshot_materialized ae3e68aca3437e5b a909b9f8cff023d2
+input_staged f989377ef613b5f1 a909b9f8cff023d2
+model_called df89e1eac8128dac a909b9f8cff023d2
+input_verified fbdbc1359fb6dc06 a909b9f8cff023d2
+output_artifact_created c5c298915218c019 a909b9f8cff023d2
+run_completed a909b9f8cff023d2 None
+trace IDs: 31e521753eb5398df983d1c489f76830
 ```
 
 `run_created` and `run_completed` hold the span ID of the run's root span. Each step's parent is that span, and every event with a span holds the same trace ID.
@@ -634,19 +644,294 @@ $ cat $TOUR_DIR/collector.log
 - The collector receives names only, so `model_called` came without its token counts. Its `gen_ai.usage.*` attributes stayed in the evidence.
 - provrun's sender ignored the proxy, which does not exist, and went straight to the collector. `redirects` records which proxy variables were set, by name only.
 
-## Step 13: Call a real model (needs ANTHROPIC_API_KEY)
+## Step 13: Copy a run into MLflow
 
-This step runs only with `--online`. It needs `ANTHROPIC_API_KEY` in the environment, and it costs a few cents. It writes a copy of the run file with a real model and no `settings`, runs it, and prints the answer.
+MLflow is a place to look at runs, with a web viewer. A policy can approve an MLflow destination. This one has no endpoint, so it names the SQLite evidence store's own file, and MLflow there receives names only:
+
+```
+$ cat $TOUR_DIR/mlflow.yaml
+# The policy of Step 13: it approves LiteLLM, and one MLflow destination with
+# no endpoint, which is the SQLite evidence store's own file. MLflow there
+# gets names only: no token counts, prompts or answers.
+version: 1
+libraries:
+  litellm:
+    versions: "==1.83.0"
+destinations:
+  own:
+    kind: mlflow
+    receives: names
+hosts:
+  - api.openai.com
+```
+
+Run the file under it, with the evidence in a new SQLite store. Then print the `mlflow` part of the summary that `provr run` printed:
+
+```
+$ M=sqlite:///$TOUR_DIR/mlflow-evidence.db
+
+$ PROVRUN_TELEMETRY_POLICY=$TOUR_DIR/mlflow.yaml uv run provr --store $M run $TOUR_DIR/run.yaml > $TOUR_DIR/r7.json
+
+$ uv run python tours/provrun/field.py $TOUR_DIR/r7.json mlflow
+{
+  "destination": "own",
+  "receives": "names",
+  "copied": true,
+  "tracking_uri": "sqlite:////tmp/provrun-tour/mlflow-evidence.db",
+  "experiment_id": "1",
+  "mlflow_run_id": "8b98d520a6fc4602a123be383e8b9a8d",
+  "trace_id": "tr-264afdee126d9782ae0a97a967b374cc",
+  "spans": 7
+}
+```
+
+Print the spans of the copy, each with the names of its attributes:
+
+```
+$ uv run python tours/provrun/mlflow_spans.py $TOUR_DIR/r7.json
+run gen_ai.agent.name gen_ai.operation.name mlflow.spanType mlflow.traceRequestId provrun.component provrun.run_id provrun.step
+context_resolved mlflow.traceRequestId provrun.component provrun.run_id provrun.step
+snapshot_materialized mlflow.traceRequestId provrun.component provrun.run_id provrun.step
+input_staged mlflow.traceRequestId provrun.component provrun.run_id provrun.step
+model_called gen_ai.operation.name gen_ai.request.model mlflow.llm.model mlflow.spanType mlflow.traceRequestId provrun.component provrun.run_id provrun.step
+input_verified mlflow.traceRequestId provrun.component provrun.run_id provrun.step
+output_artifact_created mlflow.traceRequestId provrun.component provrun.run_id provrun.step
+```
+
+**What happened:**
+- MLflow got nothing while the run went on. When the run was sealed, provrun called provevi's `copy_run` in a process of its own. It read the run back from the store and checked its chain. Then it wrote one MLflow run and one trace into the store's file.
+- The trace has a span for each step that has one, and the run's own span first.
+- The destination receives names only, so `model_called` has its model's name but not its token counts. The prompt and the answer stay in the evidence.
+- `uv run prove --store $M ui` would open MLflow's viewer on the file, as [provevi's page](provevi.md#copy-a-run-into-mlflow) says.
+
+Now set `MLFLOW_TRACKING_URI` to another file, which the policy does not approve:
+
+```
+$ PROVRUN_TELEMETRY_POLICY=$TOUR_DIR/mlflow.yaml MLFLOW_TRACKING_URI=sqlite:///$TOUR_DIR/elsewhere.db \
+  uv run provr --store $M run $TOUR_DIR/run.yaml > $TOUR_DIR/r8.json
+
+$ R8=$(uv run python tours/provrun/field.py $TOUR_DIR/r8.json run_id)
+
+$ uv run python tours/provrun/event.py $R8 telemetry_blocked detail
+MLFLOW_TRACKING_URI: matches no mlflow destination of the policy; nothing is copied
+
+$ ls $TOUR_DIR/elsewhere.db || echo "no copy"
+ls: /tmp/provrun-tour/elsewhere.db: No such file or directory
+no copy
+```
+
+The run gives no copy to the place that the policy does not approve. The event names the variable, and records no path of the file.
+
+## Step 14: Call a real model (needs ANTHROPIC_API_KEY)
+
+This step runs only with `--online`. It needs `ANTHROPIC_API_KEY` in the environment, and it costs a few cents. It runs a real model twice, once with LiteLLM and once as a PydanticAI agent with tools. Both runs go under a policy with two places, and with three variables set.
+
+Write a copy of the run file with Claude Haiku and no `settings`. Then look at the policy, which `start.sh` wrote with the collector's port:
 
 ```
 $ sed -e "s|openai/gpt-4o-mini|anthropic/claude-haiku-5-5|" -e "/settings:/,\$d" $TOUR_DIR/run.yaml > $TOUR_DIR/real.yaml
 
-$ uv run provr run $TOUR_DIR/real.yaml > $TOUR_DIR/r7.json
-
-$ cat $PROVRUN_RUNS/$(uv run python tours/provrun/field.py $TOUR_DIR/r7.json run_id)/output/response.txt
+$ cat $TOUR_DIR/online.yaml
+version: 1
+libraries:
+  litellm:
+    versions: "==1.83.0"
+destinations:
+  collector:
+    kind: otlp
+    receives: usage
+    endpoint: http://127.0.0.1:4318/v1/traces
+  own:
+    kind: mlflow
+    receives: usage
+hosts:
+  - api.anthropic.com
+  - 127.0.0.1
 ```
 
-The model reads the restated report, so it should answer 45 million. The event `model_called` records the real token counts. The examples `claude-run.yaml` and `claude-agent.yaml` in `packages/provrun/examples` do the same with a local file, and the second runs an agent with tools.
+It approves the collector and a copy in MLflow, both with token counts. Set the variables: the policy, the collector, and a Logfire token that the policy does not approve. Keep the evidence in a new SQLite store, and note how many lines the collector has logged so far:
+
+```
+$ export PROVRUN_TELEMETRY_POLICY=$TOUR_DIR/online.yaml OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$TOUR_OTLP_PORT LOGFIRE_TOKEN=pylf_v1_us_example-token
+
+$ O=sqlite:///$TOUR_DIR/online.db
+
+$ N=$(wc -l < $TOUR_DIR/collector.log)
+```
+
+Run the file, and read the answer and the model call:
+
+```
+$ uv run provr --store $O run $TOUR_DIR/real.yaml > $TOUR_DIR/r9.json
+
+$ R9=$(uv run python tours/provrun/field.py $TOUR_DIR/r9.json run_id)
+
+$ cat $PROVRUN_RUNS/$R9/output/response.txt; echo
+Revenue in 2025 was 45 million, after a restatement.
+
+$ uv run python tours/provrun/event.py $R9 model_called model input_tokens output_tokens finish_reason
+anthropic/claude-haiku-5-5
+62
+23
+stop
+```
+
+The model read the restated report. `model_called` records the model, the real token counts and why the model stopped.
+
+Look at what was blocked, what the collector got, and the copy in MLflow. Then verify the run:
+
+```
+$ uv run prove telemetry $PROVRUN_RUNS/$R9
+   1 2026-11-02T22:42:06.909446Z blocked destination   LOGFIRE_TOKEN: matches no logfire destination of the policy; nothing is sent
+
+$ tail -n +$((N + 1)) $TOUR_DIR/collector.log
+/v1/traces context_resolved ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces snapshot_materialized ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces input_staged ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces model_called ['gen_ai.operation.name', 'gen_ai.request.model', 'gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens', 'provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces input_verified ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces output_artifact_created ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces run ['gen_ai.agent.name', 'gen_ai.operation.name', 'provrun.component', 'provrun.run_id', 'provrun.step']
+
+$ uv run python tours/provrun/field.py $TOUR_DIR/r9.json mlflow
+{
+  "destination": "own",
+  "receives": "usage",
+  "copied": true,
+  "tracking_uri": "sqlite:////tmp/provrun-tour/online.db",
+  "experiment_id": "1",
+  "mlflow_run_id": "4342bf59dca34bbebe3bcccc28be6461",
+  "trace_id": "tr-dac16b0c726306a44cbe1f8f1c12a41f",
+  "spans": 7
+}
+
+$ uv run provr --store $O verify $R9
+run-20261102T224206Z-45187a05: the evidence and the outputs verify, and match the committed bundle
+```
+
+**What happened:**
+- Logfire got nothing, because the policy approves no Logfire place. The event says so.
+- The collector got a span for each step, with the token counts, because it receives `usage`.
+- MLflow got a copy of the sealed run, in the store's own file.
+- The run verifies, with a real model's answer in its evidence.
+
+Now run an agent with tools. `tours/provrun/agent.yaml` asks the same question of a PydanticAI agent. It must find the fact with `grep_file`, note the line with `add_note`, and write its answer to a file:
+
+```
+$ cat $TOUR_DIR/agent.yaml
+# The agent of Step 14: a real PydanticAI agent with tools, on the tour's report.
+run:
+  org: acme
+  domain: demo
+  env: dev
+  actor: you@example.com
+  bundle_scheme: run
+agent:
+  name: revenue-agent
+  backend: pydantic-ai
+  model: anthropic:claude-haiku-5-5
+  instructions: >-
+    Answer from the inputs only. Use grep_file to find the facts. Record the
+    line you used with add_note. Write the answer to /output/answer.txt.
+  prompt: What was revenue in 2025?
+  inputs:
+    - data://acme/demo/dev/reports/report.txt
+  tools: [grep_file, add_note]
+  settings:
+    max_tokens: 1000
+  limits:
+    request_limit: 10
+
+$ N=$(wc -l < $TOUR_DIR/collector.log)
+
+$ uv run provr --store $O run $TOUR_DIR/agent.yaml > $TOUR_DIR/r10.json
+
+$ R10=$(uv run python tours/provrun/field.py $TOUR_DIR/r10.json run_id)
+
+$ cat $PROVRUN_RUNS/$R10/output/answer.txt
+Revenue in 2025 was 45 million (after a restatement). Source: /input/report.txt, line 1.
+```
+
+List the events of the run, with the tool of each tool call:
+
+```
+$ uv run python tours/provrun/types.py $R10
+0 run_created 
+1 telemetry_blocked 
+2 access_requested 
+3 access_granted 
+4 context_resolved 
+5 snapshot_materialized 
+6 input_staged 
+7 sandbox_started 
+8 prompt_rendered 
+9 telemetry_blocked 
+10 model_called 
+11 tool_called grep_file
+12 model_called 
+13 note_added 
+14 tool_called add_note
+15 tool_called write_file
+16 model_called 
+17 trace_imported 
+18 sandbox_completed 
+19 input_verified 
+20 output_artifact_created 
+21 output_artifact_created 
+22 run_completed 
+```
+
+The agent called the model three times. It searched the report, noted the line, and wrote the answer with the filesystem tool `write_file`. `trace_imported` holds PydanticAI's whole message history. Look at what was blocked, what the collector got, and the copy, and verify the run:
+
+```
+$ uv run prove telemetry $PROVRUN_RUNS/$R10
+   1 2026-11-02T22:42:25.064639Z blocked destination   LOGFIRE_TOKEN: matches no logfire destination of the policy; nothing is sent
+   9 2026-11-02T22:42:31.803022Z blocked opentelemetry.span com-anthropic-sdk-python  a span from com.anthropic.sdk.python, which the policy does not approve
+
+$ tail -n +$((N + 1)) $TOUR_DIR/collector.log
+/v1/traces context_resolved ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces snapshot_materialized ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces input_staged ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces model_called ['gen_ai.operation.name', 'gen_ai.request.model', 'gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens', 'provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces tool_called ['gen_ai.operation.name', 'gen_ai.tool.name', 'provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces model_called ['gen_ai.operation.name', 'gen_ai.request.model', 'gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens', 'provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces tool_called ['gen_ai.operation.name', 'gen_ai.tool.name', 'provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces tool_called ['gen_ai.operation.name', 'gen_ai.tool.name', 'provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces model_called ['gen_ai.operation.name', 'gen_ai.request.model', 'gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens', 'provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces input_verified ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces output_artifact_created ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces output_artifact_created ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces run ['gen_ai.agent.name', 'gen_ai.operation.name', 'provrun.component', 'provrun.run_id', 'provrun.step']
+
+$ uv run python tours/provrun/field.py $TOUR_DIR/r10.json mlflow
+{
+  "destination": "own",
+  "receives": "usage",
+  "copied": true,
+  "tracking_uri": "sqlite:////tmp/provrun-tour/online.db",
+  "experiment_id": "2",
+  "mlflow_run_id": "c527b3eca90a440386f2c868f691f03e",
+  "trace_id": "tr-ba603b0371ea52c5a49ba060ebd2ed06",
+  "spans": 13
+}
+
+$ uv run provr --store $O verify $R10
+run-20261102T224225Z-8e0c9702: the evidence and the outputs verify, and match the committed bundle
+```
+
+**What happened:**
+- Logfire got nothing again.
+- The Anthropic SDK made a span of its own, under the name `com.anthropic.sdk.python`. The policy does not approve it, so provrun kept it out of the evidence, and sent it nowhere.
+- The collector got the run's spans, each tool call among them.
+- The run verifies, and its copy is in MLflow too, with its 13 spans.
+
+Unset the variables:
+
+```
+$ unset PROVRUN_TELEMETRY_POLICY OTEL_EXPORTER_OTLP_ENDPOINT LOGFIRE_TOKEN
+```
+
+The examples `claude-run.yaml` and `claude-agent.yaml` in `packages/provrun/examples` run the same two on a local file, with no store and no policy.
 
 ## Where each step lives in the code
 
@@ -664,5 +949,6 @@ The model reads the restated report, so it should answer 45 million. The event `
 | The library entry and its errors | `packages/provrun/src/provrun/runner.py`, `spec.py` and `errors.py` |
 | Apply the telemetry policy | `packages/provrun/src/provrun/telemetry.py`, with the policy in `packages/provevi/src/provevi/telemetry.py` |
 | Send the spans to approved places | `packages/provrun/src/provrun/destinations.py` |
+| Copy a sealed run into MLflow | `Routes.copy` in `packages/provrun/src/provrun/destinations.py`, which calls `packages/provevi/src/provevi/mlflow_copy.py` |
 | The commands | `packages/provrun/src/provrun/cli.py`; `provr verify` calls `packages/provevi/src/provevi/cli.py` |
 | The tour | `tours/provrun/run.sh`, `start.sh` and `stop.sh`, checked by `packages/provrun/tests/test_tour.py` |

@@ -51,7 +51,6 @@ import sys
 import threading
 import warnings
 from collections.abc import Iterator, Mapping
-from importlib import metadata
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,7 +59,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from provevi import ProveviError
-from provevi.telemetry import BLOCKED, TelemetryPolicy, blocked_data
+from provevi.telemetry import BLOCKED, TelemetryPolicy, blocked_data, distribution_of
 
 from .errors import RunSettingError
 
@@ -303,35 +302,10 @@ def providers() -> _Providers:
 @functools.cache
 def _distribution(module: str) -> str | None:
     """The distribution that installed module, the name pip knows it by, such
-    as opentelemetry-sdk for opentelemetry.sdk.trace."""
-    top = module.split(".")[0]
-    if not top:
-        return None
-    try:
-        names = metadata.packages_distributions().get(top, [])
-    except Exception:  # a broken install elsewhere; the module still has a name
-        return top
-    if len(names) == 1:
-        return names[0]
-    # A namespace package, such as opentelemetry, comes from many
-    # distributions; the one whose files hold the module installed it.
-    # The longest path wins, so mlflow.sklearn goes to the one that ships it,
-    # not to the first that ships mlflow/__init__.py.
-    parts = module.split(".")
-    held = {}
-    for name in names:
-        try:
-            held[name] = {str(f).replace("\\", "/") for f in metadata.files(name) or ()}
-        except Exception:  # a broken install names no files
-            held[name] = set()
-    for n in range(len(parts), 0, -1):
-        stem = "/".join(parts[:n])
-        for name in names:
-            if f"{stem}.py" in held[name] or f"{stem}/__init__.py" in held[name]:
-                return name
-    # Not installed by a distribution, or not found: the module name, as a
-    # program may name its own.
-    return names[0] if names else top
+    as opentelemetry-sdk for opentelemetry.sdk.trace. It is provevi's
+    distribution_of, cached, so that the copy in MLflow names a library as
+    provrun does."""
+    return distribution_of(module)
 
 
 def _library_of(obj: Any) -> str | None:
@@ -724,8 +698,9 @@ class Telemetry:
         return t
 
     @contextmanager
-    def applied(self) -> Iterator[Telemetry]:
-        """Set the environment and the providers for the length of the run."""
+    def applied(self, store: Any = None) -> Iterator[Telemetry]:
+        """Set the environment and the providers for the length of the run.
+        store is the run's evidence store, None for the file store."""
         try:
             _enter_environment(self)
             p = providers()
@@ -739,7 +714,7 @@ class Telemetry:
                 self.found(problem)
             from .destinations import Routes
 
-            self.routes = Routes.read(self, _users_environment())
+            self.routes = Routes.read(self, _users_environment(), store)
             if p.foreign:
                 self.problems.append(f"the global {', '.join(p.foreign)} provider was set by someone else "
                                      "before provrun")

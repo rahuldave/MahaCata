@@ -6,7 +6,7 @@ This page lists provevi's commands, stores, tables, policy keys, exit codes and 
 
 provevi stores, reads and checks the evidence of provrun's runs. Its command is `prove`. Phases 1, 2 and 4 of [the plan](provevi-plan.md) are built. Phase 1 gave the package, the `file` store and the checks. Phase 2 gave the `sqlite` store, which answers questions across runs. Phase 4 gave the copy in MLflow, for MLflow's viewer.
 
-Of Phase 3, provevi's part is built. It reads and checks the telemetry policy. provrun applies steps 2 to 10. They record the telemetry variables, own the providers, turn off each library's own telemetry, and find what cannot be turned off. Step 9 sends provrun's spans to approved destinations, using provevi's rule that matches a variable to a destination. Its MLflow destination waits for Phase 4.
+Of Phase 3, provevi's part is built. It reads and checks the telemetry policy. provrun applies steps 2 to 10. They record the telemetry variables, own the providers, turn off each library's own telemetry, and find what cannot be turned off. Step 9 sends provrun's spans to approved destinations, using provevi's rule that matches a variable to a destination. For MLflow, provrun calls Phase 4's copy when a run is sealed.
 
 Experiments as catalog objects and the span receiver come in later phases.
 
@@ -283,6 +283,8 @@ Some variables would send the copy somewhere the policy did not approve. The cop
 
 Variables that change which servers the copy trusts are refused too. They are `MLFLOW_TRACKING_INSECURE_TLS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `MLFLOW_TRACKING_SERVER_CERT_PATH`, and `MLFLOW_TRACKING_AUTH`, which loads a plugin.
 
+`refuse_redirects(url, environ)` makes this check alone, and raises `ProveviError` naming the variables. provrun calls it as a run starts, so that the run records a copy that would be refused.
+
 macOS and Windows can name a proxy in the system settings, with no variable set. The copy sets `NO_PROXY` to `*` while it runs, so MLflow's HTTP client uses no proxy.
 
 It writes whole spans through MLflow's store, so MLflow adds nothing of its own, such as the user name or the git commit. MLflow's usage telemetry is off. MLflow prices a model call with LiteLLM if it can import it, and importing LiteLLM fetches a price table from the network. So the copy keeps LiteLLM out, and MLflow uses the price table that it ships.
@@ -334,7 +336,7 @@ $ uv run prove --store $S ui --port 5088
 MLflow's viewer on /private/tmp/provevi-mlflow/evidence.db: http://127.0.0.1:5088
 ```
 
-provrun does not make the copy at the end of a run yet. Until it does, run `prove mlflow` after the run.
+provrun makes the copy itself when a run is sealed, if the policy approves an MLflow place, as [provrun's page](provrun.md#copy-a-sealed-run-into-mlflow) says. `prove mlflow` makes the copy again, or makes it for a run with no approved place at the time.
 
 ## The command `prove`
 

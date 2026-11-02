@@ -88,7 +88,7 @@ On macOS `/tmp` is a link to `/private/tmp`, and `find_run` gives the real path.
 | `RunFile.load(path)` | Reads and checks a run file. A missing or bad part raises `RunFileError`. |
 | `run_file(rf, catalog=..., runs_root=..., mode=..., bundle_scheme=...)` | Runs it, as a coroutine. It also takes `broker`, `resolver`, `stager`, `backend` and `store`, which replace the defaults, and `policy`, the telemetry policy or its file. Without `store`, it opens the run file's store. `bundle_scheme=False` writes no bundle through the catalog, even if the run file sets a scheme. |
 | `run_file_sync(rf, ...)` | The same, for a program with no event loop running. |
-| `outcome.to_dict()` | The summary that `provr run` prints. |
+| `outcome.to_dict()` | The summary that `provr run` prints. It has `mlflow` only when the policy approves an MLflow place, as [below](#copy-a-sealed-run-into-mlflow). |
 | `find_run(run, root, ids_only=False)` | The absolute folder of a run, from its ID or its path. A run ID under `root` comes before a folder in the working directory. With `ids_only=True`, only a run ID is taken, so a name from a user cannot reach another folder. A missing run raises `RunNotFound`. |
 | `read_events(folder)` | The events in the evidence folder of a run, as `provr show` prints them. |
 | `run_agent(agent, catalog=..., org=..., ...)` | Runs an agent spec with the run settings given one by one. |
@@ -218,7 +218,7 @@ A run in the `dev` environment is lenient by default, and a run in any other env
 
 The libraries that a run loads can record or send data by themselves, such as LiteLLM's callbacks or MLflow's autolog. In a controlled run, the evidence must be the only record, unless the operator approves another. The operator writes a telemetry policy, which [provevi's page](provevi.md#check-a-telemetry-policy) describes. Phase 3 of [provevi's plan](provevi-plan.md) gives all the steps.
 
-provrun does steps 2 to 10, but for step 9's MLflow destination. The steps record the telemetry variables and own the providers. They turn off MLflow, LiteLLM's callbacks, PydanticAI's instrumentation and the loggers' debug levels. They find what cannot be turned off, and check again during the run. Step 9 keeps a run's spans and sends them to the places the policy approves. Its MLflow destination waits for Phase 4.
+provrun does steps 2 to 10. The steps record the telemetry variables and own the providers. They turn off MLflow, LiteLLM's callbacks, PydanticAI's instrumentation and the loggers' debug levels. They find what cannot be turned off, and check again during the run. Step 9 keeps a run's spans and sends them to the places the policy approves. It copies a sealed run into MLflow, through the copy of Phase 4.
 
 **Where the policy comes from.** In order:
 
@@ -336,7 +336,7 @@ As each run starts, provrun reads the variables that name a place:
 |---|---|---|
 | `otlp` | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT`, with the protocol, headers, timeout and certificate variables | The traces address, by the OpenTelemetry rules that provevi's `otlp_traces_target` gives. Nothing if `OTEL_SDK_DISABLED` is true or `OTEL_TRACES_EXPORTER` is `none`. |
 | `logfire` | `LOGFIRE_TOKEN`, and `LOGFIRE_BASE_URL` | The base URL, or else the region in the token, `us` or `eu`. The token is the only header provrun adds, besides the protocol's own. Nothing if the user set `LOGFIRE_SEND_TO_LOGFIRE` to `false`. |
-| `mlflow` | `MLFLOW_TRACKING_URI` | Not built. It waits for Phase 4. |
+| `mlflow` | `MLFLOW_TRACKING_URI`, or with it unset the sqlite store's own file | No span while the run goes on. A copy of the sealed run, [below](#copy-a-sealed-run-into-mlflow). |
 
 A place gets spans only when the policy has a destination of its kind at that endpoint. provevi's `match_destination` decides this. A place with no match gets nothing, and the run writes `telemetry_blocked` with the path `destination`.
 
@@ -370,6 +370,30 @@ provrun sends OTLP over HTTP itself, with protobuf. Its sender reads no variable
 provrun sends the spans in batches while the run goes on. It sends the rest when the run ends, after the run's own span has ended, to all places at once.
 
 The run's end waits up to about ten seconds in all, however many places there are, and holds up the event loop while it waits. The `OTEL_BSP_*` variables do not change the batches. A request that started before the run's end, and a gRPC call, keep their own timeout, from `OTEL_EXPORTER_OTLP_TIMEOUT`. A place that cannot be reached gives a warning with the number of spans lost. The run does not fail, and its evidence does not record the loss, because the evidence is closed by then.
+
+### Copy a sealed run into MLflow
+
+MLflow gets a copy of the run, not its spans as they end. The place is the policy's `mlflow` destination that matches `MLFLOW_TRACKING_URI`. With the variable unset, a destination with no endpoint names the sqlite evidence store's own file. With neither, a run copies nothing.
+
+As the run starts, provrun matches the place, and records it under `destinations` in `run_created`. A place that the policy does not approve is a `telemetry_blocked` event, and gets nothing.
+
+So is an approved place that a variable could move. For an http or https place, that is a proxy variable or one that changes which servers the copy trusts, such as `REQUESTS_CA_BUNDLE`. For a Postgres or MySQL place, it is one of that database's variables, such as `PGHOST`. provevi's `refuse_redirects` gives the list.
+
+The event names the variable, and records only the scheme, host and port of its URL, so no password or local path. A file store has no file for MLflow's tables, so a run with the file store and no variable copies nothing, and warns.
+
+When the run is sealed, provrun calls provevi's `copy_run` in a process of its own, with the user's variables. The copy changes variables and loaded modules while it works, and these do not reach another run of the program.
+
+It reads the run back from the store and checks its chain. Then it writes one MLflow run and one trace, cut to the level the destination receives. [provevi's page](provevi.md#copy-a-run-into-mlflow) gives its rules. A failed run is copied too. A cancelled or interrupted run is not.
+
+The summary of `provr run`, and `outcome.mlflow`, say where the copy went:
+
+```json
+"mlflow": {"destination": "own", "receives": "names", "copied": true,
+           "tracking_uri": "sqlite:////tmp/provrun-tour/mlflow-evidence.db", "experiment_id": "1",
+           "mlflow_run_id": "...", "trace_id": "tr-...", "spans": 7}
+```
+
+The run's end waits for the copy, for 120 seconds at most, `COPY_SECONDS` in `provrun.destinations`. Unless you set them, MLflow retries a server twice, and waits 20 seconds for each answer. A copy that fails, or takes too long, gives a warning, and the summary has `"copied": false` with the error. The run does not fail, because its evidence is sealed by then. `prove mlflow RUN` makes the copy again, once the cause is fixed. Step 13 of [the tour](provrun-tour.md) makes a copy.
 
 ## The stub broker
 
@@ -408,7 +432,7 @@ If the store for bundles is `file`, which has no commits, provrun writes the bun
 | LiteLLM can print a warning that a logging coroutine was never awaited. | Ignore it. It comes from LiteLLM's logging, after the run ends. |
 | PydanticAI printed a banner about Logfire in a terminal if a program imported it before a run. | Set `PYDANTIC_AI_NO_BANNER=1`. A run sets it before the backend loads PydanticAI. |
 | provrun does not guard the network. A run can reach any host the machine can. | Control egress with the firewall or the container that runs provrun. |
-| provrun does not yet send its spans to MLflow. | It waits for Phase 4 of [provevi's plan](provevi-plan.md). |
+| A copy into MLflow that fails is a warning only, and the evidence does not record it. | Read the summary's `mlflow` part, and run `prove mlflow RUN` again once the cause is fixed. |
 | A span that a place did not get is a warning only, because the run's evidence is closed when the last spans are sent. | Watch the warnings, or the place's own logs. |
 | A library is known by the name of its tracer. Code that names its tracer after an approved library has its spans kept and sent as that library's. | Approve only libraries whose code you run. A container is the boundary for the rest. |
 | A library's span made in a thread that lost the run's context starts a new trace. It goes to no run, so it is neither kept nor sent. | None yet. |

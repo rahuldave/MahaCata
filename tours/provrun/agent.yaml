@@ -1,0 +1,22 @@
+# The agent of Step 14: a real PydanticAI agent with tools, on the tour's report.
+run:
+  org: acme
+  domain: demo
+  env: dev
+  actor: you@example.com
+  bundle_scheme: run
+agent:
+  name: revenue-agent
+  backend: pydantic-ai
+  model: anthropic:claude-haiku-5-5
+  instructions: >-
+    Answer from the inputs only. Use grep_file to find the facts. Record the
+    line you used with add_note. Write the answer to /output/answer.txt.
+  prompt: What was revenue in 2025?
+  inputs:
+    - data://acme/demo/dev/reports/report.txt
+  tools: [grep_file, add_note]
+  settings:
+    max_tokens: 1000
+  limits:
+    request_limit: 10

@@ -1,6 +1,5 @@
 """Whole runs through run_agent, with fake models, so no network and no keys."""
 import asyncio
-import json
 from types import SimpleNamespace
 
 import pytest

@@ -685,3 +685,15 @@ def test_a_copy_into_postgres(store):
         assert client.get_run(again.mlflow_run_id).data.tags[RUN_TAG] == RUN
     finally:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=60)
+
+
+def test_the_redirect_check_reads_the_variables_it_is_given(monkeypatch):
+    from provevi.mlflow_copy import refuse_redirects
+
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    with pytest.raises(ProveviError, match="HTTPS_PROXY"):
+        refuse_redirects("https://mlflow.example", {"HTTPS_PROXY": "http://proxy.example:3128"})
+    refuse_redirects("https://mlflow.example", {})
+    refuse_redirects("sqlite:///tmp/m.db", {"HTTPS_PROXY": "http://proxy.example:3128", "PGHOST": "db"})
+    with pytest.raises(ProveviError, match="PGHOST"):
+        refuse_redirects("postgresql://db.example/m", {"PGHOST": "elsewhere"})

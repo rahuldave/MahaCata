@@ -49,11 +49,11 @@ agent:
 ```
 $ uv run provr run $TOUR_DIR/run.yaml | tee $TOUR_DIR/r1.json
 {
-  "run_id": "run-20261102T195556Z-88d8d7ec",
+  "run_id": "run-20261102T224004Z-d7651699",
   "status": "completed",
-  "folder": "/tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec",
-  "bundle": "run://acme/demo/dev/run-20261102T195556Z-88d8d7ec",
-  "pinned": "local-s3://runs/main/acme/demo/dev/run-20261102T195556Z-88d8d7ec?at=commit:8f206c3924a18eaa16044cc1c55f55b9d3f595ace09b1d8cae242974cd4e7df9",
+  "folder": "/tmp/provrun-tour/runs/run-20261102T224004Z-d7651699",
+  "bundle": "run://acme/demo/dev/run-20261102T224004Z-d7651699",
+  "pinned": "local-s3://runs/main/acme/demo/dev/run-20261102T224004Z-d7651699?at=commit:2c12c5e026ede88e9f12a86a480f06d1a772b97cd475329e0dce9fe801f62f5d",
   "note": "",
   "error": null
 }
@@ -67,8 +67,8 @@ A run never reads a file that can change under it. provcat pins each input to it
 
 ```
 $ uv run python tours/provrun/modes.py $TOUR_DIR/runs/$R1/input $TOUR_DIR/runs/$R1/input/report.txt
-dr-xr-xr-x /tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/input
--r--r--r-- /tmp/provrun-tour/runs/run-20261102T195556Z-88d8d7ec/input/report.txt
+dr-xr-xr-x /tmp/provrun-tour/runs/run-20261102T224004Z-d7651699/input
+-r--r--r-- /tmp/provrun-tour/runs/run-20261102T224004Z-d7651699/input/report.txt
 ```
 
 The evidence ties the URI to the version and the bytes:
@@ -77,12 +77,12 @@ The evidence ties the URI to the version and the bytes:
 $ uv run python tours/provrun/event.py $R1 snapshot_materialized
 {
   "kind": "file",
-  "parent_span_id": "c9fca02628b8d4aa",
-  "pinned": "local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:331f10c3-64f3-43f3-966a-75fb58398960",
+  "parent_span_id": "dd5aca3e4559ab69",
+  "pinned": "local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:ff132f17-7295-4220-8667-de2e7316bae0",
   "sha256": "205cfa28c510eeba46bd4bc49acc2fb13f7645f66bab5ff5f0c3bda90d26f0b2",
-  "span_id": "ce0da8a7d4e73d5c",
-  "started_at": "2026-11-02T19:55:56.301512Z",
-  "trace_id": "13a2ee8f025050d4cb2cefd70147b8cd"
+  "span_id": "4b14991141c42f4d",
+  "started_at": "2026-11-02T22:40:04.463245Z",
+  "trace_id": "95d933aadf4041b35d3c2f51143a38b9"
 }
 ```
 
@@ -123,7 +123,7 @@ The evidence names the pinned URI of each input. A run file with that URI as its
 
 ```
 $ echo "$PINNED"
-local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:331f10c3-64f3-43f3-966a-75fb58398960
+local-s3://data/main/acme/demo/dev/reports/report.txt?at=version:ff132f17-7295-4220-8667-de2e7316bae0
 ```
 
 ```
@@ -137,7 +137,7 @@ Revenue in 2025 was 42 million.
 
 ```
 $ uv run provr verify $R1
-run-20261102T195556Z-88d8d7ec: the evidence and the outputs verify, and match the committed bundle
+run-20261102T224004Z-d7651699: the evidence and the outputs verify, and match the committed bundle
 ```
 
 ```
@@ -156,11 +156,11 @@ A run with `--store sqlite:///...` also writes each event as a row of one SQLite
 
 ```
 $ uv run prove --store $S runs --reading data://acme/demo/dev/reports/report.txt
-run-20261102T195619Z-143ab2e0
-run-20261102T195624Z-4f8fba83
+run-20261102T224043Z-e6ed9133
+run-20261102T224050Z-406f3eaf
 
 $ uv run prove --store $S experiments
-acme/demo/dev/revenue-question  created by you@example.com at 2026-11-02T19:56:19.325242Z
+acme/demo/dev/revenue-question  created by you@example.com at 2026-11-02T22:40:43.723950Z
 
 $ uv run prove --store $S access $Q
    2 granted  mounted_snapshot   data://acme/demo/dev/reports/report.txt  in the allow list; org and environment match
@@ -183,20 +183,20 @@ A library such as LiteLLM can log prompts, call callbacks, or send traces of its
 
 ```
 $ cat $TOUR_DIR/quiet.out
-run-20261102T195647Z-e039d455 completed
+run-20261102T224119Z-b9b5dfdb completed
 callbacks after the run: 1
 the LiteLLM logger logs at: DEBUG
 ```
 
 ```
 $ uv run prove telemetry $PROVRUN_RUNS/$R5
-   1 2026-11-02T19:56:47.740780Z blocked litellm.callbacks   removed __main__.<lambda> from litellm.success_callback
-   2 2026-11-02T19:56:47.740872Z blocked logging litellm  raised the logger 'LiteLLM' from DEBUG to WARNING
-   3 2026-11-02T19:56:47.740940Z blocked logging litellm  raised the logger 'LiteLLM Router' from DEBUG to WARNING
-   4 2026-11-02T19:56:47.740991Z blocked logging litellm  raised the logger 'LiteLLM Proxy' from DEBUG to WARNING
-   5 2026-11-02T19:56:47.741041Z blocked logging anthropic  raised the logger 'anthropic' from DEBUG to WARNING
-   6 2026-11-02T19:56:47.741089Z blocked logging openai  raised the logger 'openai' from DEBUG to WARNING
-   7 2026-11-02T19:56:47.741133Z blocked logging botocore  raised the logger 'botocore' from DEBUG to WARNING
+   1 2026-11-02T22:41:19.310981Z blocked litellm.callbacks   removed __main__.<lambda> from litellm.success_callback
+   2 2026-11-02T22:41:19.311116Z blocked logging litellm  raised the logger 'LiteLLM' from DEBUG to WARNING
+   3 2026-11-02T22:41:19.311216Z blocked logging litellm  raised the logger 'LiteLLM Router' from DEBUG to WARNING
+   4 2026-11-02T22:41:19.311297Z blocked logging litellm  raised the logger 'LiteLLM Proxy' from DEBUG to WARNING
+   5 2026-11-02T22:41:19.311371Z blocked logging anthropic  raised the logger 'anthropic' from DEBUG to WARNING
+   6 2026-11-02T22:41:19.311443Z blocked logging openai  raised the logger 'openai' from DEBUG to WARNING
+   7 2026-11-02T22:41:19.311510Z blocked logging botocore  raised the logger 'botocore' from DEBUG to WARNING
 ```
 
 When the run ends, provrun puts the callback and the logger levels back.
@@ -215,7 +215,8 @@ A run is one OpenTelemetry trace, with a span for each step. The variables that 
 
 ```
 $ uv run prove telemetry $PROVRUN_RUNS/$R4
-   1 2026-11-02T19:56:33.087145Z blocked destination   OTEL_EXPORTER_OTLP_ENDPOINT: matches no otlp destination of the policy; nothing is sent
+   1 2026-11-02T22:41:00.519122Z blocked destination   OTEL_EXPORTER_OTLP_ENDPOINT: matches no otlp destination of the policy; nothing is sent
+   2 2026-11-02T22:41:00.519258Z blocked destination   MLFLOW_TRACKING_URI: matches no mlflow destination of the policy; nothing is copied
 ```
 
 A place it approves gets the run's spans. This collector receives names only, so `model_called` comes without its token counts:
@@ -233,6 +234,50 @@ $ cat $TOUR_DIR/collector.log
 
 provrun's sender ignores the proxy variables, so no variable sends the spans elsewhere. `run_created` records which proxy variables were set, by name only.
 
+## Copy a run into MLflow
+
+MLflow gives a viewer for runs. A policy can approve an MLflow place, here the SQLite evidence store's own file, which receives names only. MLflow gets nothing while the run goes on. When the run is sealed, provrun copies it from the evidence, cut to that level, and the summary of `provr run` says where it went:
+
+```
+$ PROVRUN_TELEMETRY_POLICY=$TOUR_DIR/mlflow.yaml uv run provr --store $M run $TOUR_DIR/run.yaml > $TOUR_DIR/r7.json
+
+$ uv run python tours/provrun/field.py $TOUR_DIR/r7.json mlflow
+{
+  "destination": "own",
+  "receives": "names",
+  "copied": true,
+  "tracking_uri": "sqlite:////tmp/provrun-tour/mlflow-evidence.db",
+  "experiment_id": "1",
+  "mlflow_run_id": "8b98d520a6fc4602a123be383e8b9a8d",
+  "trace_id": "tr-264afdee126d9782ae0a97a967b374cc",
+  "spans": 7
+}
+```
+
+The copy's trace has a span for each step. `model_called` has the model's name, and no token counts:
+
+```
+$ uv run python tours/provrun/mlflow_spans.py $TOUR_DIR/r7.json
+run gen_ai.agent.name gen_ai.operation.name mlflow.spanType mlflow.traceRequestId provrun.component provrun.run_id provrun.step
+context_resolved mlflow.traceRequestId provrun.component provrun.run_id provrun.step
+snapshot_materialized mlflow.traceRequestId provrun.component provrun.run_id provrun.step
+input_staged mlflow.traceRequestId provrun.component provrun.run_id provrun.step
+model_called gen_ai.operation.name gen_ai.request.model mlflow.llm.model mlflow.spanType mlflow.traceRequestId provrun.component provrun.run_id provrun.step
+input_verified mlflow.traceRequestId provrun.component provrun.run_id provrun.step
+output_artifact_created mlflow.traceRequestId provrun.component provrun.run_id provrun.step
+```
+
+A place that the policy does not approve gets no copy, and the run records that, without the file's path:
+
+```
+$ uv run python tours/provrun/event.py $R8 telemetry_blocked detail
+MLFLOW_TRACKING_URI: matches no mlflow destination of the policy; nothing is copied
+
+$ ls $TOUR_DIR/elsewhere.db || echo "no copy"
+ls: /tmp/provrun-tour/elsewhere.db: No such file or directory
+no copy
+```
+
 ## Use it from a program
 
 `provr` only reads its arguments, calls provrun's library and prints. A program can call the same functions, such as `RunFile.load` and `run_file_sync`, and gets the outcome back:
@@ -244,18 +289,99 @@ print(outcome.run_id, outcome.status)
 
 ```
 $ cat $TOUR_DIR/quiet.out
-run-20261102T195647Z-e039d455 completed
+run-20261102T224119Z-b9b5dfdb completed
 callbacks after the run: 1
 the LiteLLM logger logs at: DEBUG
 ```
 
 [The reference](provrun.md) lists the functions, and the errors that they raise.
 
+## Run a real model
+
+The examples above use a mock answer. These ran with Claude Haiku, under a policy that approves a collector and a copy in MLflow, with token counts. A Logfire token was set too, which the policy does not approve. One model call with LiteLLM read the report:
+
+```text
+$ cat $PROVRUN_RUNS/$R9/output/response.txt; echo
+Revenue in 2025 was 45 million, after a restatement.
+
+$ uv run python tours/provrun/event.py $R9 model_called model input_tokens output_tokens finish_reason
+anthropic/claude-haiku-5-5
+62
+23
+stop
+
+$ uv run prove telemetry $PROVRUN_RUNS/$R9
+   1 2026-11-02T22:42:06.909446Z blocked destination   LOGFIRE_TOKEN: matches no logfire destination of the policy; nothing is sent
+
+$ tail -n +$((N + 1)) $TOUR_DIR/collector.log
+/v1/traces context_resolved ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces snapshot_materialized ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces input_staged ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces model_called ['gen_ai.operation.name', 'gen_ai.request.model', 'gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens', 'provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces input_verified ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces output_artifact_created ['provrun.component', 'provrun.run_id', 'provrun.step']
+/v1/traces run ['gen_ai.agent.name', 'gen_ai.operation.name', 'provrun.component', 'provrun.run_id', 'provrun.step']
+```
+
+The collector got the run's spans with their token counts. MLflow got a copy, and Logfire got nothing.
+
+A PydanticAI agent with tools found the fact with `grep_file`, noted the line it used, and wrote its answer:
+
+```text
+$ cat $PROVRUN_RUNS/$R10/output/answer.txt
+Revenue in 2025 was 45 million (after a restatement). Source: /input/report.txt, line 1.
+
+$ uv run python tours/provrun/types.py $R10
+0 run_created 
+1 telemetry_blocked 
+2 access_requested 
+3 access_granted 
+4 context_resolved 
+5 snapshot_materialized 
+6 input_staged 
+7 sandbox_started 
+8 prompt_rendered 
+9 telemetry_blocked 
+10 model_called 
+11 tool_called grep_file
+12 model_called 
+13 note_added 
+14 tool_called add_note
+15 tool_called write_file
+16 model_called 
+17 trace_imported 
+18 sandbox_completed 
+19 input_verified 
+20 output_artifact_created 
+21 output_artifact_created 
+22 run_completed 
+```
+
+The Anthropic SDK made a span of its own, which the policy does not approve. provrun kept it out, and recorded that:
+
+```text
+$ uv run prove telemetry $PROVRUN_RUNS/$R10
+   1 2026-11-02T22:42:25.064639Z blocked destination   LOGFIRE_TOKEN: matches no logfire destination of the policy; nothing is sent
+   9 2026-11-02T22:42:31.803022Z blocked opentelemetry.span com-anthropic-sdk-python  a span from com.anthropic.sdk.python, which the policy does not approve
+```
+
+Both runs verify:
+
+```text
+$ uv run provr --store $O verify $R9
+run-20261102T224206Z-45187a05: the evidence and the outputs verify, and match the committed bundle
+```
+
+```text
+$ uv run provr --store $O verify $R10
+run-20261102T224225Z-8e0c9702: the evidence and the outputs verify, and match the committed bundle
+```
+
 ## Where the examples come from
 
 | Examples | Where they ran |
 |---|---|
-| Every example on this page | The tour's script, `bash tours/provrun/run.sh`, with moto and a small collector. |
-| A real model | The tour's script with `--online`, or `packages/provrun/examples/claude-run.yaml` and `claude-agent.yaml`. They need `ANTHROPIC_API_KEY`. |
+| Every example on this page but "Run a real model" | The tour's script, `bash tours/provrun/run.sh`, with moto and a small collector. |
+| "Run a real model" | Step 14 of the tour's script, `bash tours/provrun/run.sh --online`, with Claude Haiku. It needs `ANTHROPIC_API_KEY`, and the tests do not run it. `packages/provrun/examples/claude-run.yaml` and `claude-agent.yaml` run the same on a local file. |
 
 The run IDs, times, version IDs and hashes differ on each run.
