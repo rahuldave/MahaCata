@@ -74,9 +74,9 @@ In a controlled environment, the evidence must be the only record of a run, unle
 
 The code goes into provrun, in a new module, because it acts on the process that runs the agent. provevi checks the policy and records what the module blocked.
 
-**Status: provevi's part is built, and so are steps 2 to 8 and step 10 in provrun.** [provevi's page](provevi.md) describes the policy, `prove policy` and `prove telemetry`. [provrun's page](provrun.md#control-of-library-telemetry) describes how a run finds the policy, records the variables and owns the providers. It also describes how a run turns off each library's own telemetry and checks during the run. 
+**Status: provevi's part is built, and so are steps 2 to 10 in provrun, but for step 9's MLflow destination.** [provevi's page](provevi.md) describes the policy, `prove policy` and `prove telemetry`. [provrun's page](provrun.md#control-of-library-telemetry) describes how a run finds the policy, records the variables and owns the providers. It also describes how a run turns off each library's own telemetry, checks during the run, and sends its spans. 
 
-Step 9 is not built. provevi's parts for it, the rule that matches a variable to a destination and the decision on `hosts`, are built. Its MLflow destination waits for Phase 4.
+Step 9 is built for the `otlp` and `logfire` destinations, on provevi's rule that matches a variable to a destination. Its MLflow destination waits for Phase 4.
 
 **A change of design, on 2026-11-02.** The telemetry variables are configuration, not a leak. `OTEL_EXPORTER_OTLP_ENDPOINT` and its headers name the org's collector. `MLFLOW_TRACKING_URI` names a tracking server, or a database such as Postgres. `LOGFIRE_TOKEN` names a Logfire project.
 
@@ -115,7 +115,7 @@ So a run keeps them, records them, and sends provrun's own spans where they poin
 **Open:**
 
 - **Decided on 2026-11-02: matching a destination to a variable.** `TelemetryPolicy.match_destination(kind, url)` matches by kind, then by endpoint, after `normal_endpoint` puts both in one form. An `mlflow` endpoint may be a database URL, such as `postgresql://` or `sqlite:///`. For traces, `otlp_traces_target(environ)` gives the protocol and the address, by the OpenTelemetry rules, and provrun makes the exporter of that protocol. `normal_endpoint` refuses a URL that two parsers could read as two places, and such a URL matches nothing. A URL with no match gets nothing, and provrun writes `telemetry_blocked` with the path `destination`. [provevi's page](provevi.md#check-a-telemetry-policy) gives the rule.
-- **Open: variables that redirect a matched URL.** `HTTPS_PROXY`, `grpc_proxy`, `PGHOSTADDR` and `PGSERVICE` can send a matched URL to another place. provrun clears them for its exporters, or the firewall stops them; step 9 decides which.
+- **Decided on 2026-11-02: variables that redirect a matched URL.** `HTTPS_PROXY`, `grpc_proxy` and the other proxy variables can send a matched URL to another place. provrun's senders ignore them and connect straight to the matched place. `run_created` records each one that was set, by name only, under `redirects`. `PGHOSTADDR` and `PGSERVICE` are recorded too, and step 9's MLflow destination must keep them from moving a matched database.
 - **Decided on 2026-11-02: the `hosts` list stays.** provevi checks each destination's endpoint against it, and it is a record for the firewall. It does not limit a run's connections.
 - **Decided on 2026-11-02: `prove telemetry RUN` lists `telemetry_problem` events** as well as `telemetry_blocked` events.
 

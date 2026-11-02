@@ -4,7 +4,7 @@ title: provevi
 
 provevi stores, reads and checks the evidence of provrun's runs. Its command is `prove`. Phases 1 and 2 of [the plan](provevi-plan.md) are built. Phase 1 gave the package, the `file` store and the checks. Phase 2 gave the `sqlite` store, which answers questions across runs.
 
-Of Phase 3, provevi's part is built. It reads and checks the telemetry policy. So far provrun applies steps 2 to 8 and step 10. They record the telemetry variables, own the providers, turn off each library's own telemetry, and find what cannot be turned off. Step 9, which sends provrun's spans to approved destinations, is not built in provrun. provevi's part of it, the rule that matches a variable to a destination, is built.
+Of Phase 3, provevi's part is built. It reads and checks the telemetry policy. provrun applies steps 2 to 10. They record the telemetry variables, own the providers, turn off each library's own telemetry, and find what cannot be turned off. Step 9 sends provrun's spans to approved destinations, using provevi's rule that matches a variable to a destination. Its MLflow destination waits for Phase 4.
 
 The copy in MLflow, experiments as catalog objects and the span receiver come in later phases.
 
@@ -187,7 +187,7 @@ Before the match, `normal_endpoint` puts both URLs in one form. It lowercases th
 - a driver such as `+x` on an `http` or `https` scheme;
 - a sqlite URL with a relative path.
 
-Some variables send a matched URL somewhere else. `HTTPS_PROXY` sends it through a proxy, and `PGHOSTADDR` makes Postgres connect to another address. provrun must clear them for its exporters, or the firewall must stop them.
+Some variables send a matched URL somewhere else. `HTTPS_PROXY` sends it through a proxy, and `PGHOSTADDR` makes Postgres connect to another address. provrun's senders ignore the proxy variables, and a run records which were set. [provrun's page](provrun.md#control-of-library-telemetry) says how.
 
 A policy endpoint holds no user and no password, because the policy holds no secrets. Its host must be in `hosts`.
 

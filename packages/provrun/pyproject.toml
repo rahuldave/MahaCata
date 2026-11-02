@@ -23,6 +23,12 @@ pydantic-ai = [
     "pydantic-ai-slim>=2.64.0",
     "pydantic-ai-filesystem-sandbox>=0.9.0",
 ]
+# provrun sends OTLP over HTTP itself, with this encoder and requests.
+otlp = [
+    "opentelemetry-exporter-otlp-proto-common>=1.30.0",
+    "requests>=2.32.0",
+]
+otlp-grpc = ["opentelemetry-exporter-otlp-proto-grpc>=1.35.0"]  # channel_options
 
 [project.scripts]
 provr = "provrun.cli:main"

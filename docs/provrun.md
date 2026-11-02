@@ -218,7 +218,7 @@ A run in the `dev` environment is lenient by default, and a run in any other env
 
 The libraries that a run loads can record or send data by themselves, such as LiteLLM's callbacks or MLflow's autolog. In a controlled run, the evidence must be the only record, unless the operator approves another. The operator writes a telemetry policy, which [provevi's page](provevi.md#check-a-telemetry-policy) describes. Phase 3 of [provevi's plan](provevi-plan.md) gives all the steps.
 
-So far provrun does steps 2 to 8 and step 10. They record the telemetry variables and own the providers. They turn off MLflow, LiteLLM's callbacks, PydanticAI's instrumentation and the loggers' debug levels. They find what cannot be turned off, and check again during the run. Step 9, which sends provrun's spans to the destinations the variables name, is not built yet.
+provrun does steps 2 to 10, but for step 9's MLflow destination. The steps record the telemetry variables and own the providers. They turn off MLflow, LiteLLM's callbacks, PydanticAI's instrumentation and the loggers' debug levels. They find what cannot be turned off, and check again during the run. Step 9 keeps a run's spans and sends them to the places the policy approves. Its MLflow destination waits for Phase 4.
 
 **Where the policy comes from.** In order:
 
@@ -230,7 +230,7 @@ A run file cannot name the policy file, because the operator owns it. The run fi
 
 **The environment.** The telemetry variables are the user's configuration. `OTEL_EXPORTER_OTLP_ENDPOINT` and its headers name a collector. `MLFLOW_TRACKING_URI` names a tracking server or a database. `LOGFIRE_TOKEN` names a Logfire project.
 
-So a run leaves them as they are, credentials included. In step 9 of the plan, provrun will send its own spans where they point, when the policy approves. Libraries do not act on them, because the steps below turn the libraries' own telemetry off.
+So a run leaves them as they are, credentials included. provrun sends the run's spans where they point, when the policy approves, as "Where a run's spans go" below says. Libraries do not act on them, because the steps below turn the libraries' own telemetry off.
 
 Before the backend loads its library, provrun sets only these settings. None of them names a destination:
 
@@ -299,6 +299,8 @@ When the last run that is going on ends, LiteLLM's lists get back what they held
 | `overridden` | The user's value of each setting that the run changed. |
 | `problems` | The problems found, as below. |
 | `imported_before` | The libraries the program imported before the run. |
+| `destinations` | Each place that the variables name, and whether the run sends to it, as below. |
+| `redirects` | The proxy and Postgres variables that were set, by name only, as below. |
 
 **Problems.** A problem is something that sends past the policy, or may, and that provrun cannot turn off. As a run starts, a problem fails a strict run before the run folder is made. In lenient mode, the run warns, and `run_created` lists it under `problems`.
 
@@ -321,7 +323,53 @@ A problem found during a run is written as a `telemetry_problem` event, with the
 
 The checks look at the whole process. A problem that one run causes, such as a `logfire.configure()`, is a problem for every open run. It fails each strict one.
 
-`prove telemetry RUN` lists only the `telemetry_blocked` events. Read the `telemetry_problem` events in the run's `evidence/events.jsonl`.
+`prove telemetry RUN` lists the `telemetry_blocked` and the `telemetry_problem` events.
+
+**Where a run's spans go.** A run's spans are provrun's own, one for the run and one for each step. Spans also come from a library whose instrumentation the policy approves, such as PydanticAI's. The run keeps them all, and sends them only to the places that the policy approves.
+
+- **The evidence.** Each step's event holds its span's IDs and data, so provrun's own spans are in the evidence already. An approved library's span is written as a `span_recorded` event. The event holds the span's name, library, IDs, times, status and its names and usage attributes. Its bodies, such as a prompt, and its events go into the event's payload.
+- **A library that the policy does not approve.** A span from such a library, made with provrun's provider, goes nowhere. The run writes one `telemetry_blocked` event for that library, with the path `opentelemetry.span`.
+
+As each run starts, provrun reads the variables that name a place:
+
+| Kind | Variables | Where provrun sends |
+|---|---|---|
+| `otlp` | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT`, with the protocol, headers, timeout and certificate variables | The traces address, by the OpenTelemetry rules that provevi's `otlp_traces_target` gives. Nothing if `OTEL_SDK_DISABLED` is true or `OTEL_TRACES_EXPORTER` is `none`. |
+| `logfire` | `LOGFIRE_TOKEN`, and `LOGFIRE_BASE_URL` | The base URL, or else the region in the token, `us` or `eu`. The token is the only header provrun adds, besides the protocol's own. Nothing if the user set `LOGFIRE_SEND_TO_LOGFIRE` to `false`. |
+| `mlflow` | `MLFLOW_TRACKING_URI` | Not built. It waits for Phase 4. |
+
+A place gets spans only when the policy has a destination of its kind at that endpoint. provevi's `match_destination` decides this. A place with no match gets nothing, and the run writes `telemetry_blocked` with the path `destination`.
+
+A matched place gets provrun's spans, and the spans of each library that the policy lets feed that destination. Each span is cut down to the level the destination receives:
+
+- `names` keeps the names attributes;
+- `usage` adds the token counts;
+- `bodies` keeps everything.
+
+Below `bodies`, a span's events and its status message are dropped, because they can hold an exception's text. Its links and its scope keep only what the level allows. A span name can hold a prompt or a person's name. So a name of more than two plain words, or with a path or an address, becomes the library's name.
+
+provrun sends OTLP over HTTP itself, with protobuf. Its sender reads no variable of its own. So the OTLP headers never reach Logfire, and Logfire's token never reaches the collector. It does not follow a redirect from the place.
+
+**Certificates and headers.** provrun's sender ignores `REQUESTS_CA_BUNDLE`. It trusts the certificate that `OTEL_EXPORTER_OTLP_CERTIFICATE` names. It sends the client certificate that `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` and `OTEL_EXPORTER_OTLP_CLIENT_KEY` name. A headers variable cannot set `Host`, `Content-Length` or another header that would change where or how the request goes.
+
+**Protocols.** For gRPC, provrun uses OpenTelemetry's gRPC exporter, which `provrun[otlp-grpc]` installs. OpenTelemetry for Python has no `http/json` exporter, so a run with that protocol sends nothing, and warns.
+
+**Proxies.** Some variables send a connection to another place than its URL names. They are `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `grpc_proxy` and their lower-case forms. provrun's senders ignore them, so the spans go straight to the place the policy approved.
+
+`run_created` lists each one that was set under `redirects`, by name only, because a proxy URL can hold a password. The list also holds `PGHOST`, `PGHOSTADDR`, `PGSERVICE` and the other Postgres variables, which matter only for the MLflow destination. A firewall that allows only the proxy then blocks the spans, and the run warns that they were not sent.
+
+`run_created` records each place under `destinations`. For example:
+
+```json
+"destinations": [
+  {"kind": "otlp", "variable": "OTEL_EXPORTER_OTLP_ENDPOINT", "url": "http://127.0.0.1:4318",
+   "destination": "collector", "receives": "names", "sending": true, "note": ""}
+]
+```
+
+provrun sends the spans in batches while the run goes on. It sends the rest when the run ends, after the run's own span has ended, to all places at once.
+
+The run's end waits up to about ten seconds in all, however many places there are, and holds up the event loop while it waits. The `OTEL_BSP_*` variables do not change the batches. A request that started before the run's end, and a gRPC call, keep their own timeout, from `OTEL_EXPORTER_OTLP_TIMEOUT`. A place that cannot be reached gives a warning with the number of spans lost. The run does not fail, and its evidence does not record the loss, because the evidence is closed by then.
 
 ## The stub broker
 
@@ -360,7 +408,10 @@ If the store for bundles is `file`, which has no commits, provrun writes the bun
 | LiteLLM can print a warning that a logging coroutine was never awaited. | Ignore it. It comes from LiteLLM's logging, after the run ends. |
 | PydanticAI printed a banner about Logfire in a terminal if a program imported it before a run. | Set `PYDANTIC_AI_NO_BANNER=1`. A run sets it before the backend loads PydanticAI. |
 | provrun does not guard the network. A run can reach any host the machine can. | Control egress with the firewall or the container that runs provrun. |
-| provrun does not yet keep its spans as evidence or send them to the destinations the variables name. | See step 9 of Phase 3 in [provevi's plan](provevi-plan.md). |
+| provrun does not yet send its spans to MLflow. | It waits for Phase 4 of [provevi's plan](provevi-plan.md). |
+| A span that a place did not get is a warning only, because the run's evidence is closed when the last spans are sent. | Watch the warnings, or the place's own logs. |
+| A library is known by the name of its tracer. Code that names its tracer after an approved library has its spans kept and sent as that library's. | Approve only libraries whose code you run. A container is the boundary for the rest. |
+| A library's span made in a thread that lost the run's context starts a new trace. It goes to no run, so it is neither kept nor sent. | None yet. |
 | The scan for patches looks only in the libraries named above, and finds a function replaced by a wrapper. A library that changes a function in place, or patches another library, is not found. A Logfire configured with `local=True` is not found either. | The checks catch the known paths. A container is the boundary for the rest. |
 | The scan finds a patch only on a library that was loaded when the run started. `provr run` starts with no backend loaded. So a library that is loaded during the run, and patched by an import hook as it loads, is not found. Only MLflow's patches are found then, by their marks. | Load the backend's libraries before the run, in a program that calls provrun, or use a container. |
 | After a run, MLflow's autolog and tracing stay off for the rest of the process. | Turn them on again after the run, if the program needs them. |
