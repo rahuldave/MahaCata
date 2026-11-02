@@ -147,7 +147,7 @@ The decisions, agreed on 2026-10-31, are these:
 
 1. **The `file` driver replaces provrun's `JsonlSink`.** All events go through provevi. provrun owns what an event means, and provevi owns how it is stored.
 2. **Verification moves into provevi.** `provr verify` stays as a thin call into the provevi library.
-3. **The OTLP receiver is provevi's code, and a run owns its lifetime.** provrun starts a provevi receiver at the start of a run, on `localhost` at a free port, and stops it when the run is sealed.
+3. **The OTLP receiver is provevi's code, and a run owns its lifetime.** provrun starts a provevi receiver at the start of a run, on `localhost` at a free port, and stops it when the run is sealed. Changed on 2026-11-02: a run in process needs no receiver, because provrun writes its spans to the store through the store's span exporter. The receiver is for agents in another process, in Phase 6.
 
 4. **provevi's own tables are the record of runs and experiments,** and MLflow holds a copy. The section "The run record" gives the tables.
 5. **MLflow uses provrun's run IDs.** provevi writes MLflow's `runs` row with provrun's ID, and finds an MLflow experiment by its unique name.

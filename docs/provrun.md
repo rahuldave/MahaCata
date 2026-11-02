@@ -310,6 +310,8 @@ If the store for bundles is `file`, which has no commits, provrun writes the bun
 | Snapshots are never deleted. | Delete old folders under `<cache>/.provcat/snapshots` when no run uses them. |
 | LiteLLM can print a warning that a logging coroutine was never awaited. | Ignore it. It comes from LiteLLM's logging, after the run ends. |
 | PydanticAI printed a banner about Logfire in a terminal if a program imported it before a run. | Set `PYDANTIC_AI_NO_BANNER=1`. A run sets it before the backend loads PydanticAI. |
-| provrun does not yet guard the network, keep approved spans as evidence, or check for a patch that a library makes outside the paths above. | See steps 8 to 10 of Phase 3 in [provevi's plan](provevi-plan.md). |
+| provrun does not guard the network. A run can reach any host the machine can. | Control egress with the firewall or the container that runs provrun. |
+| provrun does not yet keep approved spans as evidence, send them to a destination, or check for a patch that a library makes outside the paths above. | See steps 9 and 10 of Phase 3 in [provevi's plan](provevi-plan.md). |
+| A run removes the user's `OTEL_*` and `LOGFIRE_*` variables while it runs, credentials included. The plan changes this: a run will keep and record them. | See step 2 of Phase 3 in [provevi's plan](provevi-plan.md). |
 | After a run, MLflow's autolog and tracing stay off for the rest of the process. | Turn them on again after the run, if the program needs them. |
 | Only the in-process backends exist. | Docker and Foundry backends are planned. See [provrun-plan.md](provrun-plan.md). |
