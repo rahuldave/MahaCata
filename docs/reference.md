@@ -2,7 +2,7 @@
 title: provcat reference
 ---
 
-This page lists the `provc` commands, the forms of a URI, the stores and their options, the configuration and the cache. [The tour](tour.md) shows them at work, and [the design](design.md) explains how the parts fit together.
+This page lists the `provc` commands, the forms of a URI, the stores and their options, the configuration and the cache. [What provcat does](provcat-features.md) shows them with examples, [the tour](tour.md) runs them, and [the design](design.md) explains how the parts fit together.
 
 ## Install
 
@@ -106,7 +106,7 @@ provcat reads its configuration from the first of these sources that exists:
 3. The file `provcat.yaml` in the current folder.
 4. The built-in defaults, which have the six stores and no logical schemes.
 
-A source that starts with `etcd://host:port/prefix` is etcd. Any other source is a YAML file. [packages/provcat/config/provcat.example.yaml](https://github.com/rahuldave/MahaCata/blob/main/packages/provcat/config/provcat.example.yaml) has every section, the logical schemes from the old provcat docs and one entry. A value can read the environment with `${oc.env:NAME,default}`.
+A source that starts with `etcd://host:port/prefix` is etcd. Any other source is a YAML file. [packages/provcat/config/provcat.example.yaml](https://github.com/rahuldave/MahaCata/blob/main/packages/provcat/config/provcat.example.yaml) has every section, a logical scheme for each kind of data, and one entry. A value can read the environment with `${oc.env:NAME,default}`.
 
 To copy a YAML configuration into etcd, run the command below. It copies the `${...}` references as written, so each reader fills them in from its own environment. It also deletes the sections in etcd that the file does not have.
 

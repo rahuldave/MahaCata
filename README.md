@@ -8,14 +8,13 @@ provcat writes to every store but GitHub and Hugging Face. It commits in lakeFS 
 
 The documentation is at [https://rahuldave.com/MahaCata/](https://rahuldave.com/MahaCata/). Its sources are in the folder `docs`:
 
-- [The tour of provcat](docs/tour.md) gives commands to run, with their output.
+- [What provcat does](docs/provcat-features.md) shows its features, with examples.
+- [The tour of provcat](docs/tour.md) runs provcat on your own machine, with a script.
 - [The reference](docs/reference.md) lists the commands, the forms of a URI, the stores, the configuration and the cache.
 - [Setup](docs/setup.md) shows how to install lakeFS, etcd and the tools that the tests need, and how to run the tests.
 - [The design](docs/design.md) explains how the parts fit together, and lists the known limits.
 - [Transactions](docs/transactions.md) says what a write and a commit guarantee, in lakeFS and in a bucket.
-- [The reference server](docs/reference-server.md) shows how to run the shared lakeFS that keeps orgs apart.
-
-The first commit of this repository is the provcat code as it was found in `~/Catalog/provcat`.
+- [A reference lakeFS target](docs/lakefs-target.md) sets up one lakeFS that keeps orgs apart.
 
 ## Layout
 

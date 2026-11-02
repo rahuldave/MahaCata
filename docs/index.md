@@ -14,14 +14,15 @@ provrun depends on provevi and provcat, and provevi depends on provcat. provcat 
 
 | To do this | Read |
 |---|---|
-| Follow catalog URIs through provcat, with commands to run | [A guided tour of provcat](tour.md) |
+| See what provcat does, with examples | [What provcat does](provcat-features.md) |
+| Run provcat on your own machine, step by step | [A runnable tour of provcat](tour.md) |
 | Follow one file from a store into a run and its evidence | [A guided tour of provrun](provrun-tour.md) |
 | Run agents with provrun | [provrun](provrun.md) |
 | List, show and check the evidence of runs | [provevi](provevi.md) |
 | Install lakeFS, etcd and the tools that the tests need, and run the tests | [Setup](setup.md) |
 | Learn how the parts of provcat fit together | [Design](design.md) |
 | Learn what a write and a commit guarantee | [Transactions](transactions.md) |
-| Run the shared lakeFS that keeps orgs apart | [The reference server](reference-server.md) |
+| Set up one lakeFS that keeps orgs apart | [A reference lakeFS target](lakefs-target.md) |
 | Read why provrun is built as it is | [The provrun plan](provrun-plan.md) |
 | Read how the evidence store will be built | [The provevi design](provevi-design.md) and [plan](provevi-plan.md) |
 | Look up a class or a function | [Reference](api/index.md) |

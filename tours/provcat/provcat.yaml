@@ -1,0 +1,43 @@
+# The configuration of the provcat tour. start.sh sets TOUR_DIR and starts
+# moto, a local S3 server, on TOUR_S3_PORT.
+cache:
+  root: ${oc.env:TOUR_DIR}/cache
+
+stores:
+  # Local files, confined to one folder.
+  tour-files:
+    driver: file
+    root: ${oc.env:TOUR_DIR}/files
+  # moto, which speaks the S3 protocol.
+  tour-s3:
+    driver: s3
+    endpoint_url: http://localhost:${oc.env:TOUR_S3_PORT,5055}
+
+schemes:
+  # notes://project/path -> a local file
+  notes:
+    parts: [project]
+    rest: path
+    target: "tour-files:///{project}/{path}"
+  # files://project/path[?at=branch:X]
+  # One bucket for each project. Its first folders are the branches.
+  files:
+    parts: [project]
+    rest: path
+    target: "tour-s3://tour-{project}/{ref}/{path}"
+    ref: main
+    match:
+      project: "[a-z0-9][a-z0-9-]{0,40}"
+  # code://owner/repo/branch/path -> GitHub. Only the online steps use it.
+  code:
+    parts: [org, repo, env]
+    rest: path
+    target: "github://{org}/{repo}/{path}"
+    ref: "{env}"
+    pass_selector: true
+
+entries:
+  # One name that lives somewhere else: the price list of the sales project
+  # is a local file, while the rest of files://sales is in the bucket.
+  "files://sales/prices":
+    target: "tour-files:///shared/prices.csv"
