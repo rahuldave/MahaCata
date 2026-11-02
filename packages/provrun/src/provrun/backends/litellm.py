@@ -131,13 +131,15 @@ class LiteLLMBackend(InProcessBackend):
                           data={"messages": len(messages)})
         call = self._acompletion()
         guard_otel_span()
-        telemetry.recheck()  # LiteLLM may have been loaded just now, with callbacks set
+        telemetry.recheck(getattr(ctx, "telemetry", None))  # LiteLLM may have been loaded just now, with callbacks set
         with ctx.recorder.step("model_called", self.__class__.__name__,
                                data={"model": agent.model, "settings": agent.settings}) as step:
             try:
                 response = await call(model=agent.model, messages=messages, **agent.settings)
             finally:
-                telemetry.recheck()  # a call can leave a callback in the global lists
+                telemetry.recheck(getattr(ctx, "telemetry", None), fail=False)  # a call can leave a callback in the lists
+            if getattr(ctx, "telemetry", None) is not None:
+                getattr(ctx, "telemetry", None).fail_if_found()
             text = response.choices[0].message.content or ""
             usage = getattr(response, "usage", None)
             tokens = {"input_tokens": getattr(usage, "prompt_tokens", 0) or 0,

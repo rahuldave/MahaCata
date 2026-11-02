@@ -10,6 +10,13 @@ def no_hooks(monkeypatch, tmp_path_factory):
     monkeypatch.delenv("PROVCAT_APP", raising=False)
     monkeypatch.delenv("PROVCAT_HOOKS", raising=False)
     monkeypatch.delenv("PROVRUN_TELEMETRY_POLICY", raising=False)
+    # A run records the telemetry variables, and a failed test can print them:
+    # none from the machine's own shell may reach a test.
+    import os
+
+    for key in [k for k in os.environ if k.startswith(("OTEL_", "LOGFIRE_", "MLFLOW_", "LITELLM_"))
+                or k in ("ANTHROPIC_LOG", "OPENAI_LOG")]:
+        monkeypatch.delenv(key)
     monkeypatch.setattr(hooks, "DEFAULT_FILE", tmp_path_factory.mktemp("hooks") / "none.yaml")
     hooks._forget_process_app()
     yield

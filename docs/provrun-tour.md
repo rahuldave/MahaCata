@@ -410,23 +410,30 @@ hosts:
   - api.openai.com
 ```
 
-Run the file under it, with two variables set. One names a collector for spans, and the other makes the anthropic SDK log request bodies.
+Run the file under it, with four variables set. Two name a collector for spans and its token. One names an MLflow database with its password. The last is a LiteLLM setting that provrun changes for the run.
 
 ```
 $ export PROVRUN_TELEMETRY_POLICY=/tmp/provrun-tour/policy.yaml
-$ OTEL_EXPORTER_OTLP_ENDPOINT=http://collector.example:4318 ANTHROPIC_LOG=debug \
+$ OTEL_EXPORTER_OTLP_ENDPOINT=http://collector.example:4318 \
+  OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer example-token" \
+  MLFLOW_TRACKING_URI="postgresql://mlflow:example-password@db.example:5432/mlflow" \
+  LITELLM_MODE=DEV \
     uv run provr run /tmp/provrun-tour/run.yaml --config $PROVCAT_CONFIG
-$ R4=run-20261102T125137Z-87f4e312
+$ R4=run-20261102T171847Z-c0e43607
 $ head -1 /tmp/provrun-tour/runs/$R4/evidence/events.jsonl | jq .data.telemetry
 {
   "imported_before": [],
+  "overridden": {
+    "LITELLM_MODE": "DEV"
+  },
   "policy": "408d9fe84aa3ae7943c374d9e3f5b275c22f23173f2735d72bd2082adfae1e16",
   "policy_source": "/tmp/provrun-tour/policy.yaml",
   "problems": [],
-  "removed": [
-    "ANTHROPIC_LOG",
-    "OTEL_EXPORTER_OTLP_ENDPOINT"
-  ]
+  "variables": {
+    "MLFLOW_TRACKING_URI": "postgresql://db.example:5432",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector.example:4318",
+    "OTEL_EXPORTER_OTLP_HEADERS": null
+  }
 }
 ```
 
@@ -434,8 +441,9 @@ $ head -1 /tmp/provrun-tour/runs/$R4/evidence/events.jsonl | jq .data.telemetry
 
 **What happened:**
 - `run_created` names the policy by its SHA-256, so the run says which policy it ran under.
-- provrun removed both variables before LiteLLM was loaded, and put them back after the run. It records their names, never their values.
-- As in every run, provrun's own OpenTelemetry providers made the spans, so each step event, such as `model_called`, holds a span ID.
+- provrun left the variables as you set them. They are your configuration. `variables` records where each one points. The database URI keeps only its scheme, host and port, so the password is not recorded. The header, which holds a token, is recorded by its name only.
+- provrun set `LITELLM_MODE=PRODUCTION` for the run, so that LiteLLM read no `.env` file, and put `DEV` back after it. `overridden` records your value.
+- As in every run, provrun's own OpenTelemetry providers made the spans, so each step event, such as `model_called`, holds a span ID. provrun does not yet send them to the collector or the database; step 9 of the plan will.
 
 A run file can narrow the policy in a `telemetry` section, but never widen it. Add a host that the policy does not allow:
 

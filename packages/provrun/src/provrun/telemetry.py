@@ -11,11 +11,11 @@ section can only narrow the policy.
 
 For each run, provrun:
 
-- sets the environment before the backend is imported, so that a library reads
-  the settings that keep it quiet, and removes each other ``OTEL_*`` and
-  ``LOGFIRE_*`` variable and each debug variable, credentials included. It
-  cleans the environment again as each run starts, and puts it back when the
-  last run that is going on ends;
+- sets a few settings before the backend is imported, so that a library reads
+  values that keep it quiet (``SETTINGS``), and puts them back when the last
+  run that is going on ends. It leaves every other variable as the user set
+  it, and records the telemetry variables (``variables``): where they point,
+  never a credential;
 - sets the global OpenTelemetry tracer, meter and logger providers to its own,
   once for the process. Its tracer and logger providers refuse a processor
   that provrun did not add;
@@ -24,6 +24,8 @@ For each run, provrun:
   at WARNING. It does this as each run starts and around each model call
   (``recheck``), and puts LiteLLM's lists and the logger levels back when the
   last run ends;
+- finds a configured Logfire and an OpenTelemetry auto-configuration, which
+  send past the policy and cannot be turned off;
 - builds a PydanticAI agent with instrumentation off, or sent to provrun's
   providers when the policy approves it (``pydantic_ai_instrument``), and
   takes a model out of an InstrumentedModel (``pydantic_ai_model``).
@@ -32,8 +34,8 @@ Each refusal, and each thing turned off, is written to each open run's
 evidence as ``telemetry_blocked``, with the distribution that did it.
 
 The providers stay for the rest of the process: OpenTelemetry lets a process
-set each global provider only once. MLflow's autolog and tracing stay off too. So a program that runs provrun, and sets
-its own providers later, keeps provrun's.
+set each global provider only once. MLflow's autolog and tracing stay off too.
+So a program that runs provrun, and sets its own providers later, keeps provrun's.
 """
 from __future__ import annotations
 
@@ -42,28 +44,35 @@ import importlib
 import inspect
 import logging
 import os
+import re
 import sys
 import threading
 import warnings
-from importlib import metadata
 from collections.abc import Iterator, Mapping
+from importlib import metadata
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from typing import Any
+from urllib.parse import urlsplit
 
 from provevi import ProveviError
 from provevi.telemetry import BLOCKED, TelemetryPolicy, blocked_data
 
 from .errors import RunSettingError
 
-__all__ = ["LITELLM_LISTS", "LOGGERS", "POLICY_ENV", "SETTINGS", "Telemetry", "load_policy", "providers",
-           "pydantic_ai_instrument", "pydantic_ai_model", "recheck"]
+__all__ = ["FAMILIES", "LITELLM_LISTS", "LOGGERS", "POLICY_ENV", "SETTINGS", "Telemetry", "load_policy",
+           "providers", "pydantic_ai_instrument", "pydantic_ai_model", "recheck", "variables"]
+
+#: The event type of a problem that a run found, but could not turn off.
+PROBLEM = "telemetry_problem"
 
 #: The environment variable that names the operator's policy file.
 POLICY_ENV = "PROVRUN_TELEMETRY_POLICY"
 
-#: The settings that each run sets, before any library reads them.
+#: The settings that each run sets, before any library reads them. None names
+#: a destination; each stops a fetch, a usage report or a library's own export.
 SETTINGS = {
     "LITELLM_LOCAL_MODEL_COST_MAP": "True",  # no fetch of the price table at import
     "LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS": "True",
@@ -72,20 +81,35 @@ SETTINGS = {
     "PYDANTIC_AI_NO_BANNER": "1",
     "MLFLOW_USE_DEFAULT_TRACER_PROVIDER": "true",  # MLflow keeps off provrun's provider
     "MLFLOW_DISABLE_TELEMETRY": "true",
-    "MLFLOW_TRACE_SAMPLING_RATIO": "0",
-    # Off switches for a provider or an SDK that a library makes for itself.
-    # OTEL_SDK_DISABLED is not one of them: it would stop provrun's spans too.
-    "OTEL_TRACES_EXPORTER": "none",
-    "OTEL_METRICS_EXPORTER": "none",
-    "OTEL_LOGS_EXPORTER": "none",
     "LOGFIRE_SEND_TO_LOGFIRE": "false",
     "LOGFIRE_CONSOLE": "false",
 }
-# Debug variables, which make an SDK log request bodies.
-_DEBUG = ("ANTHROPIC_LOG", "OPENAI_LOG")
+#: The families of telemetry variables that a run records.
+FAMILIES = ("OTEL_", "LOGFIRE_", "MLFLOW_", "LITELLM_")
+# The variables recorded by value; every other one is recorded by name only,
+# because it can hold a token, a header or a key.
+_BY_VALUE_ENDINGS = ("_ENDPOINT", "_URI", "_URL")
+_BY_VALUE = ("OTEL_SERVICE_NAME", "OTEL_EXPORTER_OTLP_PROTOCOL")
 # The libraries whose import reads the settings; one imported before a run read
 # the environment before provrun set it.
 _READ_AT_IMPORT = ("litellm", "pydantic_ai", "mlflow", "logfire", "anthropic", "openai")
+# Modules that are loaded only when OpenTelemetry configures itself from the
+# environment, by opentelemetry-instrument or a distro.
+_AUTO_CONFIGURATION = ("opentelemetry.instrumentation.auto_instrumentation", "opentelemetry.distro")
+# The libraries the full scan looks in for patches, and the mark of MLflow's.
+_WATCHED = ("litellm", "pydantic_ai", "openai", "anthropic", "httpx", "httpcore", "requests", "urllib3", "aiohttp")
+_GORILLA = "_gorilla_active_patch_"
+_QUALNAME = type.__dict__["__qualname__"]  # a class's own name, past any metaclass
+_CLASS_DICT = type.__dict__["__dict__"]
+_MODULE_DICT = ModuleType.__dict__["__dict__"]
+
+
+def _warn(message: str) -> None:
+    # A warning that never raises, even when warnings are errors.
+    try:
+        warnings.warn(message, stacklevel=3)
+    except Exception:
+        pass
 
 
 def load_policy(policy: TelemetryPolicy | str | Path | None = None) -> TelemetryPolicy:
@@ -103,37 +127,67 @@ def load_policy(policy: TelemetryPolicy | str | Path | None = None) -> Telemetry
         raise RunSettingError(str(e)) from e
 
 
-def _removed(environ: Mapping[str, str]) -> list[str]:
-    # Credentials go too: no library may use them. When provrun sends spans to
-    # a destination that the policy approves, provrun reads its credential.
-    return sorted(k for k in environ
-                  if (k.startswith(("OTEL_", "LOGFIRE_")) or k in _DEBUG) and k not in SETTINGS)
+def _without_secrets(value: str) -> str:
+    """Where value points, and nothing that can hold a secret. A URL with a
+    host gives its scheme, host and port: the user, password, path, query and
+    fragment are left out, because a token, a password or a local path can sit
+    in each. A URL without a host, such as sqlite:///path, gives its scheme
+    alone. An @ outside the user part, as an unescaped password with a ? or
+    a # leaves, is not recorded. A bare name of letters, such as databricks, is kept. Nothing else
+    is recorded."""
+    if re.fullmatch(r"[A-Za-z][A-Za-z-]*", value):
+        return value
+    try:
+        u = urlsplit(value)
+        port = f":{u.port}" if u.port is not None else ""
+    except ValueError:
+        return "<not recorded: not a valid URL>"
+    if not u.scheme or ("@" in value and "@" not in u.netloc) or ("@" in value and not u.hostname):
+        return "<not recorded: not a URL>"
+    if not u.hostname:  # only a URL such as sqlite:///path; alice:password is not one
+        return f"{u.scheme}:<path not recorded>" if value.startswith(f"{u.scheme}://") else "<not recorded: not a URL>"
+    host = f"[{u.hostname}]" if ":" in u.hostname else u.hostname
+    return f"{u.scheme}://{host}{port}"
+
+
+def variables(environ: Mapping[str, str]) -> dict[str, str | None]:
+    """The telemetry variables set in environ, but for provrun's settings: a
+    variable that names a place, such as an endpoint or a URI, maps to its
+    value without credentials; every other one maps to None, so that only its
+    name is recorded."""
+    out = {}
+    for key in sorted(environ):
+        if not key.startswith(FAMILIES) or key in SETTINGS:
+            continue
+        if key in _BY_VALUE:  # a protocol such as http/protobuf, or a service name
+            out[key] = environ[key] if re.fullmatch(r"[A-Za-z0-9._/-]+", environ[key]) else "<not recorded>"
+        else:
+            out[key] = _without_secrets(environ[key]) if key.endswith(_BY_VALUE_ENDINGS) else None
+    return out
 
 
 # ---- the environment, shared by the runs that are going on ------------------
 
 _lock = threading.RLock()
 _open: list[Telemetry] = []
-_saved: dict[str, str | None] = {}  # each changed variable, and its value before the first run
+_saved: dict[str, str | None] = {}  # each setting's value before the first run
 
 
 def _enter_environment(t: Telemetry) -> None:
-    # Each run cleans the environment again, so that a variable set during
-    # another run does not reach this one. The run is counted, and every
-    # value saved in one step, before anything changes, so that leaving after
-    # an interrupt puts everything back. A variable first seen while a run is
-    # going on was set during that run, so it is saved as absent.
+    # Each run sets the settings again, so that a value changed during another
+    # run does not reach this one. The run is counted, and every value saved,
+    # before anything changes, so that leaving after an interrupt puts
+    # everything back.
     with _lock:
         first = not _open
         _open.append(t)
         if first:
             _saved_at_start.update(m for m in ("litellm",) if m in sys.modules)
-        removed = _removed(os.environ)
-        _saved.update({k: (os.environ.get(k) if first else None)
-                       for k in (*removed, *SETTINGS) if k not in _saved})
-        t.removed = removed
-        for key in removed:
-            os.environ.pop(key, None)
+            for k in SETTINGS:  # a value that an interrupted end left is still the user's
+                _saved.setdefault(k, os.environ.get(k))
+        t.variables = variables(os.environ)
+        # What the user had set, before the first run, where it differs.
+        t.overridden = {k: v for k, v in _saved.items() if v is not None and v != SETTINGS[k]}
         for key, value in SETTINGS.items():
             os.environ[key] = value
 
@@ -144,10 +198,6 @@ def _leave_environment(t: Telemetry) -> None:
             return
         _open[:] = [o for o in _open if o is not t]
         if not _open:
-            # A variable that a run set, and that no later run start cleaned,
-            # goes too: it was not there before the first run.
-            for key in _removed(os.environ):
-                _saved.setdefault(key, None)
             # Each entry leaves _saved as it is put back, so an interrupt here
             # leaves only the rest for the next run's end.
             while _saved:
@@ -427,21 +477,109 @@ def _quiet_loggers() -> None:
         log.setLevel(logging.WARNING)
 
 
-def recheck(*, warn: bool = True) -> list[str]:
+def _found() -> list[str]:
+    """What sends past the policy and cannot be turned off: a configured
+    Logfire, an OpenTelemetry auto-configuration, or a global provider that
+    is not provrun's. It reads sys.modules and imports nothing."""
+    found = []
+    config = getattr(sys.modules.get("logfire._internal.config"), "GLOBAL_CONFIG", None)
+    if getattr(config, "_initialized", False) is True:
+        found.append("logfire.configure() has run, and Logfire's own exporters send past the policy")
+    for name in _AUTO_CONFIGURATION:
+        if sys.modules.get(name) is not None:
+            found.append(f"{name} is loaded, and an OpenTelemetry auto-configuration sends past the policy")
+    p = _providers
+    if p is not None and not isinstance(p, SimpleNamespace):
+        from opentelemetry import _logs, metrics, trace
+
+        for name, now, ours in (("tracer", trace.get_tracer_provider(), p.tracer),
+                                ("meter", metrics.get_meter_provider(), p.meter),
+                                ("logger", _logs.get_logger_provider(), p.logger)):
+            if now is not ours and name not in p.foreign:
+                found.append(f"the global {name} provider was replaced during the run")
+    return found
+
+
+def recheck(telemetry: Telemetry | None = None, *, fail: bool = True) -> list[str]:
     """Turn off again what a library switched on during a run: MLflow, a
-    LiteLLM callback, a logger level. A backend calls it around each model
-    call. Returns the problems that MLflow's calls raised, after a warning
-    for each unless warn is False. Outside a run it does nothing."""
+    LiteLLM callback, a logger level. Then look for what cannot be turned
+    off, such as a configured Logfire. A backend calls it around each model
+    call. Each problem goes to each open run once, as Telemetry.found says.
+    With fail, a strict telemetry that has a problem raises RunSettingError.
+    Returns the problems. Outside a run it does nothing."""
     with _lock:
         if not _open:
             return []
+        runs = list(_open)
     problems = _quiet_mlflow()
     _quiet_litellm()
     _quiet_loggers()
-    if warn:
+    problems += _found()
+    for t in runs:
         for problem in problems:
-            warnings.warn(f"provrun: telemetry: {problem}", stacklevel=2)
+            t.found(problem)
+    if fail and telemetry is not None:
+        telemetry.fail_if_found()
     return problems
+
+
+def _watched(name: str) -> bool:
+    # A watched library's own module, but not a types module: the SDKs' hold
+    # thousands of data models, which no telemetry library patches, and which
+    # would take most of the time.
+    top, _, rest = name.partition(".")
+    return top in _WATCHED and not (rest == "types" or rest.endswith(".types") or ".types." in f".{rest}.")
+
+
+def _scan() -> tuple[list[str], dict[str, tuple[Any, bool]]]:
+    """A full scan of the watched libraries' modules for patches. It gives
+    MLflow's gorilla patches, by their markers, and each function and method
+    by its place, with the function and whether it wraps another. It reads
+    each member without running its code, so that a lazy module or proxy is
+    not loaded. It takes a few hundred milliseconds, so a run does it only at
+    its start and its end."""
+    gorilla, found = [], {}
+    for name, module in list(sys.modules.items()):
+        if module is None or not isinstance(name, str) or not _watched(name):
+            continue
+        try:  # past a module's own __getattribute__, which can load a lazy module
+            members = list(_MODULE_DICT.__get__(module).items())
+        except (TypeError, AttributeError):
+            continue
+        for attr, obj in members:
+            try:
+                keys = dict(_CLASS_DICT.__get__(obj)) if issubclass(type(obj), type) else None  # past a metaclass
+                if keys is not None and keys.get("__module__") == name:
+                    where = f"{name}.{_QUALNAME.__get__(obj)}"
+                    gorilla += [f"{where}.{k[len(_GORILLA):]}" for k in keys if k.startswith(_GORILLA)]
+                    for k, v in keys.items():
+                        _note(found, f"{where}.{k}", v)
+                else:
+                    _note(found, f"{name}.{attr}", obj)
+            except Exception:  # a member that raises when read tells nothing
+                continue
+    return sorted(set(gorilla)), found
+
+
+def _note(found: dict[str, tuple[Any, bool]], where: str, obj: Any) -> None:
+    if type(obj) in (staticmethod, classmethod):
+        obj = obj.__func__
+    if callable(obj):
+        found[where] = (obj, inspect.getattr_static(obj, "__wrapped__", None) is not None)
+
+
+def _scan_problems(baseline: dict[str, tuple[Any, bool]] | None) -> tuple[list[str], dict[str, tuple[Any, bool]]]:
+    """The problems of a scan: each MLflow patch, and, against baseline, each
+    function that was there at the start and was replaced by a wrapper. A
+    function first seen during the run, as a module loads, is not one. The
+    baseline holds the functions themselves, so that a new one cannot take
+    the address of one that was freed."""
+    gorilla, found = _scan()
+    problems = [f"MLflow's patch on {where} is still on" for where in gorilla]
+    if baseline is not None:
+        problems += [f"{where} was replaced by a wrapper during the run" for where, (obj, wraps) in sorted(found.items())
+                     if wraps and where in baseline and baseline[where][0] is not obj]
+    return problems, found
 
 
 def _restore_libraries() -> None:
@@ -532,11 +670,18 @@ class Telemetry:
 
     policy: TelemetryPolicy
     mode: str
-    removed: list[str] = field(default_factory=list)
+    variables: dict[str, str | None] = field(default_factory=dict)
+    overridden: dict[str, str] = field(default_factory=dict)
     problems: list[str] = field(default_factory=list)
     imported_before: list[str] = field(default_factory=list)
     recorder: Any = None  # the run's EvidenceRecorder, once the run is open
     pending: list[tuple[str, str | None, str]] = field(default_factory=list)  # blocked before it was open
+    seen: set[str] = field(default_factory=set)  # each problem, reported once
+    failed: list[str] = field(default_factory=list)  # in strict mode, problems found during the run
+    baseline: dict[str, tuple[Any, bool]] | None = None  # each function at the run's start
+    recorded: int | None = None  # how many problems run_created's record holds
+    ended: bool = False  # the end checks have run
+    checked: bool = False  # the start's check is past; a problem now fails or warns as it is found
 
     @classmethod
     def prepare(cls, policy: TelemetryPolicy, section: Any, mode: str) -> Telemetry:
@@ -561,8 +706,14 @@ class Telemetry:
         try:
             _enter_environment(self)
             p = providers()
-            # What this finds waits in pending until the run's evidence is open.
-            self.problems.extend(_mlflow_usage_off() + recheck(warn=False))
+            # What this finds before the run is open goes into run_created's
+            # problems, through found; what it blocks waits in pending.
+            for problem in [*_mlflow_usage_off(), *recheck(fail=False)]:
+                self.found(problem)
+            # After the recheck, which takes MLflow's patches off.
+            scanned, self.baseline = _scan_problems(None)
+            for problem in scanned:
+                self.found(problem)
             if p.foreign:
                 self.problems.append(f"the global {', '.join(p.foreign)} provider was set by someone else "
                                      "before provrun")
@@ -571,27 +722,91 @@ class Telemetry:
                 if self.mode == "strict":
                     raise RunSettingError(message)
                 warnings.warn(f"provrun: {message}", stacklevel=3)
+            self.checked = True
             yield self
         finally:
             _leave_environment(self)
             for path, library, detail in self.pending:  # the run never opened its evidence
-                warnings.warn(f"provrun: {path}: {detail}", stacklevel=3)
+                _warn(f"provrun: {path}: {detail}")
             self.pending.clear()
 
     def record(self) -> dict:
         """What run_created records: the policy, and what this run changed and found."""
+        with _lock:
+            self.recorded = len(self.problems)
+            problems = list(self.problems)
         return {"policy": self.policy.digest(), "policy_source": self.policy.source,
-                "removed": list(self.removed), "problems": list(self.problems),
+                "variables": dict(self.variables), "overridden": dict(self.overridden),
+                "problems": problems,
                 "imported_before": list(self.imported_before)}
+
+    def found(self, problem: str) -> None:
+        """A problem found during the run. It is written as a telemetry_problem
+        event; a strict run then fails at its next check, and a lenient one
+        warns. Each problem counts once. Before the start's check, it goes
+        into run_created's problems, and that check fails or warns."""
+        with _lock:
+            if problem in self.seen:
+                return
+            self.seen.add(problem)
+            if self.recorder is None:  # run_created records it, or attach writes it
+                self.problems.append(problem)
+                if not self.checked:
+                    return
+            if self.mode == "strict":
+                self.failed.append(problem)
+            if self.recorder is None:
+                if self.mode != "strict":
+                    _warn(f"provrun: telemetry: {problem}")
+                return
+        self._write(problem)
+
+    def _write(self, problem: str, *, warn: bool = True) -> None:
+        # Never raises into a library's own call, even when warnings are
+        # errors. A problem that cannot be recorded is always a warning.
+        note = None
+        if self.recorder is not None and not self.recorder.closed:
+            try:
+                self.recorder.emit(PROBLEM, "telemetry", data={"problem": problem})
+            except Exception as e:
+                note = f"; not recorded: {e}"
+        else:
+            note = "; not recorded: the run's evidence is closed"
+        if note is not None or (warn and self.mode != "strict"):
+            _warn(f"provrun: telemetry: {problem}{note or ''}")
+
+    def fail_if_found(self) -> None:
+        """Raise RunSettingError if a strict run found a problem."""
+        if self.failed:
+            raise RunSettingError("telemetry: " + "; ".join(self.failed))
+
+    def end(self, *, fail: bool = True) -> None:
+        """The checks at the run's end: a last recheck, and the full scan,
+        which finds a function wrapped during the run. Each runs once. With
+        fail, a strict run with a problem raises RunSettingError; a run that
+        has failed already passes fail=False, to keep its own error."""
+        if not self.ended:
+            self.ended = True
+            recheck(fail=False)
+            problems, _ = _scan_problems(self.baseline)
+            for problem in problems:
+                self.found(problem)
+        if fail:
+            self.fail_if_found()
 
     def attach(self, recorder: Any) -> None:
         """Write the run's telemetry_blocked events to recorder from now on,
-        starting with those found before the run's evidence was open."""
+        starting with those found before the run's evidence was open. A
+        problem found after run_created's record was taken is written as a
+        telemetry_problem event."""
         with _lock:
             self.recorder = recorder
             pending, self.pending = self.pending, []
+            late = self.problems[self.recorded:] if self.recorded is not None else []
         for path, library, detail in pending:
             self.blocked(path, library=library, detail=detail)
+        for problem in late:  # found failed or warned already
+            self._write(problem, warn=False)
 
     def blocked(self, path: str, *, library: str | None = None, detail: str = "") -> None:
         """Write a telemetry_blocked event. Before the run's evidence is open,
