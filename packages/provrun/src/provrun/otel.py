@@ -14,10 +14,14 @@ import contextlib
 from collections.abc import Iterator
 
 from opentelemetry import trace
+from opentelemetry.context import Context
 
 # The release of the semantic conventions whose GenAI names provrun uses. It is
 # a note for readers, not a schema URL: the GenAI names have no release now.
 NAMES_FROM = "1.37.0"
+
+#: The status of a span whose run failed.
+ERROR = trace.StatusCode.ERROR
 
 _tracer = trace.get_tracer("provrun")
 
@@ -48,6 +52,17 @@ def span(step: str, run_id: str, component: str, parent: trace.Span | None = Non
         attributes["gen_ai.operation.name"] = _OPERATION[step]
     context = trace.set_span_in_context(parent) if parent is not None else None
     with _tracer.start_as_current_span(step, context=context, attributes=attributes) as s:
+        yield s
+
+
+@contextlib.contextmanager
+def run(run_id: str, agent: str) -> Iterator[trace.Span]:
+    """The root span of one run, current while the run goes on, so that each
+    top-level step is its child. It starts a new trace, even inside a span of
+    the caller's, so that a run is one trace of its own."""
+    attributes = {"provrun.run_id": run_id, "provrun.step": "run", "provrun.component": "runner",
+                  "gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": agent}
+    with _tracer.start_as_current_span("run", context=Context(), attributes=attributes) as s:
         yield s
 
 

@@ -55,8 +55,11 @@ def spans(monkeypatch):
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-    from provrun import otel
+    from provrun import otel, telemetry
 
+    # A run makes provrun's providers on first use and points otel at them, so
+    # they are made first, or the first run would replace this tracer.
+    telemetry.providers()
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))

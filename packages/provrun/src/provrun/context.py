@@ -31,7 +31,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import provevi
 from provevi import EvidenceStore, default_runs_root, verify_against
@@ -118,14 +118,19 @@ class RunContext:
     catalog: Catalog | None = None
     bundle_scheme: str | None = None  # the provcat scheme for run URIs, for example "run"
     status: str = "open"
+    trace: dict = field(default_factory=dict)  # the trace and span IDs of the run's root span
+    telemetry: Any = None  # the run's provrun.telemetry.Telemetry, when run_agent runs it
     _tokens: list = field(default_factory=list, repr=False)
 
     @classmethod
     def open(cls, *, org: str, domain: str, env: str, actor: str, broker: Broker, resolver: Resolver,
              catalog: Catalog | None = None, runs_root: Path | None = None, mode: str | None = None,
              bundle_scheme: str | None = None, run_id: str | None = None,
-             data: dict | None = None, store: EvidenceStore | None = None) -> RunContext:
-        """Make the run ID and the run folder, and write run_created. The
+             data: dict | None = None, store: EvidenceStore | None = None,
+             trace: dict | None = None) -> RunContext:
+        """Make the run ID and the run folder, and write run_created. trace
+        holds the trace and span IDs of the run's root span, which run_created
+        and the event that ends the run record. The
         evidence mode is lenient in dev and strict in every other environment,
         unless mode says otherwise. The evidence goes through store, a
         provevi store, by default the file store. A bad setting raises
@@ -142,9 +147,11 @@ class RunContext:
         for sub in ("output", "input", "scratch"):
             (folder / sub).mkdir()
         recorder = EvidenceRecorder(run_id, actor, folder / "evidence", mode=evidence_mode(env, mode), store=store)
-        ctx = cls(run_id, org, domain, env, actor, folder, recorder, broker, resolver, catalog, bundle_scheme)
+        ctx = cls(run_id, org, domain, env, actor, folder, recorder, broker, resolver, catalog, bundle_scheme,
+                  trace=dict(trace or {}))
         recorder.emit("run_created", "RunContext", refs=[ctx.run_uri],
-                      data={"org": org, "domain": domain, "env": env, "mode": recorder.mode, **(data or {})})
+                      data={"org": org, "domain": domain, "env": env, "mode": recorder.mode, **(data or {}),
+                            **ctx.trace})
         return ctx
 
     @property
@@ -172,10 +179,10 @@ class RunContext:
         lost = None
         try:
             if error is None:
-                self.recorder.emit("run_completed", "RunContext", refs=[self.run_uri])
+                self.recorder.emit("run_completed", "RunContext", refs=[self.run_uri], data=dict(self.trace))
             else:
                 self.recorder.emit("run_failed", "RunContext", refs=[self.run_uri],
-                                   data={"error": f"{error.__class__.__name__}: {error}"})
+                                   data={"error": f"{error.__class__.__name__}: {error}", **self.trace})
         except EvidenceError as e:
             lost = e  # the manifest records it; close the evidence and write the bundle anyway
             self.status = "failed"

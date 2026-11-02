@@ -4,7 +4,7 @@ title: provevi
 
 provevi stores, reads and checks the evidence of provrun's runs. Its command is `prove`. Phases 1 and 2 of [the plan](provevi-plan.md) are built. Phase 1 gave the package, the `file` store and the checks. Phase 2 gave the `sqlite` store, which answers questions across runs.
 
-Of Phase 3, provevi's part is built. It reads and checks the telemetry policy. So far provrun applies two of its steps, the environment and the providers. The copy in MLflow, experiments as catalog objects and the span receiver come in later phases.
+Of Phase 3, provevi's part is built. It reads and checks the telemetry policy. So far provrun applies steps 2 to 7. They set the environment and the providers, and turn off MLflow, LiteLLM's callbacks, PydanticAI's instrumentation and the loggers' debug levels. The copy in MLflow, experiments as catalog objects and the span receiver come in later phases.
 
 ## Terms
 

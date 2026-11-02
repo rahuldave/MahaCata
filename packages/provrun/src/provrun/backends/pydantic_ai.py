@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from .. import otel
+from .. import otel, telemetry
 from . import InProcessBackend, RunResult
 
 if TYPE_CHECKING:
@@ -86,7 +86,11 @@ def evidence_capability(ctx: RunContext):
                                    data={"model": request_context.model.model_name,
                                          "streamed": bool(request_context.streaming)}) as step:
                 model_span = otel.current()
-                response = await handler(request_context)
+                telemetry.recheck()
+                try:
+                    response = await handler(request_context)
+                finally:
+                    telemetry.recheck()
                 usage = response.usage
                 if response.model_name:
                     step.data["answered_by"] = response.model_name  # a FallbackModel names the one that answered
@@ -169,9 +173,15 @@ class PydanticAIBackend(InProcessBackend):
             raise ValueError("the pydantic-ai backend runs in_process tools only")
         if tools:
             toolsets.append(FunctionToolset([t.fn for t in tools]))
-        model = self._model if self._model is not None else infer_model(agent.model)
+        model = telemetry.pydantic_ai_model(self._model if self._model is not None else infer_model(agent.model),
+                                            ctx.telemetry)
         pa = Agent(model, instructions=agent.instructions or None, deps_type=RunDeps, toolsets=toolsets,
                    capabilities=[evidence_capability(ctx)], retries=agent.limits.get("retries", 2))
+        # Set after the agent is made: MLflow's autolog patches Agent.__init__ to
+        # turn instrumentation on. The agent's own value wins over instrument_all.
+        tel = ctx.telemetry
+        pa.instrument = telemetry.pydantic_ai_instrument(tel.policy if tel is not None else
+                                                         telemetry.TelemetryPolicy.deny_all())
         listing = ", ".join(i.agent_path for i in run.inputs) or "none"
         prompt = (f"[Inputs, read-only: {listing}]\n[Write results under {run.agent_output}; "
                   f"work under {run.agent_scratch}]\n\n{agent.prompt}")
