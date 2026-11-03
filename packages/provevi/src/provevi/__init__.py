@@ -22,7 +22,7 @@ from .runs import default_runs_root, find_run, list_runs
 from .sqlite import SCHEMA_VERSION, SqliteRecord, SqliteRunWriter, SqliteStore
 from .telemetry import (BLOCKED, LEVELS, MLFLOW_DATABASES, PROBLEM, Destination, Library, TelemetryPolicy,
                         attributes_for, blocked_data, distribution_of, normal_endpoint, otlp_traces_target, plain_name,
-                        plain_span_name, split_body)
+                        plain_span_name, span_libraries, split_body)
 from .store import (EvidenceStore, FileRunWriter, FileStore, FolderRecord, JsonlSink, PayloadStore, RunRecord,
                     RunWriter, Sink, check_store_uri, open_store)
 
@@ -33,5 +33,5 @@ __all__ = [
     "default_runs_root", "find_run", "list_runs", "now", "open_store", "read_events", "sha256_bytes", "verify",
     "verify_against", "verify_bundle", "verify_outputs", "verify_run", "verify_store_copy",
     "BLOCKED", "LEVELS", "MLFLOW_DATABASES", "PROBLEM", "Destination", "Library", "TelemetryPolicy", "attributes_for",
-    "blocked_data", "distribution_of", "normal_endpoint", "otlp_traces_target", "plain_name", "plain_span_name", "split_body",
+    "blocked_data", "distribution_of", "normal_endpoint", "otlp_traces_target", "plain_name", "plain_span_name", "span_libraries", "split_body",
 ]

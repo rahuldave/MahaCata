@@ -560,6 +560,14 @@ def test_a_library_span_of_a_namespace_package_is_found_by_its_distribution(tmp_
     assert copy_run(s, RUN, policy, environ={}).spans == 4
 
 
+def test_a_library_span_whose_library_cannot_be_shown_stays_out(tmp_path):
+    s = run_with_a_library_span(tmp_path, library="opentelemetry.instrumentation.nothere")
+    policy = TelemetryPolicy.from_dict({"version": 1,
+                                        "libraries": {"opentelemetry-sdk": {"versions": ">=1", "telemetry": ["own"]}},
+                                        "destinations": {"own": {"kind": "mlflow", "receives": "names"}}})
+    assert copy_run(s, RUN, policy, environ={}).spans == 3
+
+
 @pytest.mark.parametrize("policy", [feeding("bodies", feeds=()), own("bodies")])
 def test_a_library_span_stays_out_when_the_policy_does_not_let_it_feed_the_place(tmp_path, policy):
     s = run_with_a_library_span(tmp_path)
