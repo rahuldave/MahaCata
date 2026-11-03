@@ -15,6 +15,7 @@ start returns at once and result waits for the task. It writes
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
@@ -33,6 +34,32 @@ class RunResult:
     duration: float
     usage: dict[str, int] = field(default_factory=dict)
     data: dict[str, Any] = field(default_factory=dict)
+
+
+class Pieces:
+    """The pieces of one streamed model request: when the first came, and the
+    text so far. If the request fails partway, its ``step_failed`` holds the
+    text that was already handed on, so the evidence has all that a viewer saw."""
+
+    def __init__(self):
+        self.started, self.first_ms, self.text = time.monotonic(), None, []
+
+    def add(self, piece: str) -> None:
+        if self.first_ms is None:
+            self.first_ms = round((time.monotonic() - self.started) * 1000)
+        self.text.append(piece)
+
+    def record(self, data: dict) -> None:
+        """Put the time to the first piece, if any came, into a step's data."""
+        if self.first_ms is not None:
+            data["first_token_ms"] = self.first_ms
+
+    def failed(self, step) -> None:
+        """Put what came before a failure into the step that failed."""
+        self.record(step.data)
+        step.data["pieces"] = len(self.text)
+        if self.text:
+            step.payload = json.dumps({"partial_response": "".join(self.text)}, ensure_ascii=False)
 
 
 @dataclass

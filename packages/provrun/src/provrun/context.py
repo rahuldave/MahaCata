@@ -120,7 +120,15 @@ class RunContext:
     status: str = "open"
     trace: dict = field(default_factory=dict)  # the trace and span IDs of the run's root span
     telemetry: Any = None  # the run's provrun.telemetry.Telemetry, when run_agent runs it
+    on_text: Any = None  # called with each piece of a streamed reply, as it comes
+    pieces: Any = None  # the pieces of the model request in hand, a provrun.backends.Pieces
     _tokens: list = field(default_factory=list, repr=False)
+
+    def text(self, piece: str) -> None:
+        """Hand on a piece of a streamed reply, as it comes, to ``on_text``.
+        The evidence does not record pieces: it records each whole response."""
+        if self.on_text is not None and piece:
+            self.on_text(piece)
 
     @classmethod
     def open(cls, *, org: str, domain: str, env: str, actor: str, broker: Broker, resolver: Resolver,

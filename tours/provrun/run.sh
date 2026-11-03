@@ -121,8 +121,16 @@ show 'R8=$(uv run python tours/provrun/field.py $TOUR_DIR/r8.json run_id)'
 show 'uv run python tours/provrun/event.py $R8 telemetry_blocked detail'
 show 'ls $TOUR_DIR/elsewhere.db || echo "no copy"'
 
+step "Step 14: Ask for the reply in pieces"
+show '{ cat $TOUR_DIR/run.yaml; echo "  stream: true"; } > $TOUR_DIR/stream.yaml'
+show 'tail -3 $TOUR_DIR/stream.yaml'
+show 'uv run provr run $TOUR_DIR/stream.yaml > $TOUR_DIR/r11.json'
+show 'R11=$(uv run python tours/provrun/field.py $TOUR_DIR/r11.json run_id)'
+show 'uv run python tours/provrun/event.py $R11 model_called streamed input_tokens output_tokens finish_reason'
+show 'cat $PROVRUN_RUNS/$R11/output/response.txt; echo'
+
 if [ "${1:-}" = "--online" ]; then
-  step "Step 14: Call a real model (needs ANTHROPIC_API_KEY)"
+  step "Step 15: Call a real model (needs ANTHROPIC_API_KEY)"
   show 'sed -e "s|openai/gpt-4o-mini|anthropic/claude-haiku-5-5|" -e "/settings:/,\$d" $TOUR_DIR/run.yaml > $TOUR_DIR/real.yaml'
   show 'cat $TOUR_DIR/online.yaml'
   show 'export PROVRUN_TELEMETRY_POLICY=$TOUR_DIR/online.yaml OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$TOUR_OTLP_PORT LOGFIRE_TOKEN=pylf_v1_us_example-token'
@@ -148,7 +156,7 @@ if [ "${1:-}" = "--online" ]; then
   show 'uv run provr --store $O verify $R10'
   show 'unset PROVRUN_TELEMETRY_POLICY OTEL_EXPORTER_OTLP_ENDPOINT LOGFIRE_TOKEN'
 
-  step "Step 15: Stream a real model in your own agent (needs ANTHROPIC_API_KEY)"
+  step "Step 16: Stream a real model in your own agent (needs ANTHROPIC_API_KEY)"
   show 'sed -n "/^model = /,/^    print()/p" tours/provrun/streamed.py'
   show 'uv run python tours/provrun/streamed.py $TOUR_DIR/streamed'
 fi

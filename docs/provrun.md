@@ -136,6 +136,15 @@ A run file has two sections:
 | `tools` | Tool names, for the `pydantic-ai` backend. `grep_file` and `add_note` are built in. |
 | `settings` | Model settings, for example `temperature`. |
 | `limits` | `timeout` in seconds, `request_limit` and `retries`. |
+| `stream` | `true` asks the model for its reply in pieces, as "Streamed replies" below says. The default is `false`. |
+
+### Streamed replies
+
+With `stream: true`, each backend asks for the reply in pieces. LiteLLM gets chunks, and PydanticAI gets text events, as the model makes them. The run hands each piece to `RunContext.text`, which passes it to `on_text` when one is set. provrun sets none yet; the live feed, which is not built yet, will set it.
+
+The evidence does not record the pieces. It records each whole response once, as `model_called`, with `streamed` set, as for a run that does not stream. When the reply has text, the data also holds `first_token_ms`, the milliseconds from the request to the first piece. A reply with only a tool call has none. LiteLLM sends the token counts in the stream's last chunk, so provrun asks for them with `stream_options`. The outputs, the seal and the MLflow copy wait for the whole reply.
+
+A stream can fail partway, after some pieces were handed on. Then its `step_failed` holds `pieces`, the number handed on, and a payload with the text so far, under `partial_response`. So the evidence holds all that a viewer of the run saw. [Step 14 of the tour](provrun-tour.md#step-14-ask-for-the-reply-in-pieces) streams a run.
 
 ## What a run does
 
@@ -156,13 +165,13 @@ If a step raises an error, provrun writes `step_failed` with the error, and the 
 
 In the PydanticAI backend, one PydanticAI capability writes `model_called` and `tool_called`. A capability is PydanticAI's hook on each step of an agent run. It records:
 
-- each model request, streamed or not, as `model_called`, with `streamed` and `answered_by` in its data. Behind a fallback model, `answered_by` names the model that answered;
+- each model request, streamed or not, as `model_called`, with `streamed` and `answered_by` in its data. In a run with `stream: true`, a request that returned text also has `first_token_ms`. Behind a fallback model, `answered_by` names the model that answered;
 - each call of a function tool as `tool_called`, also for a tool that another capability adds;
 - a call that waits for approval as `tool_called` with `deferred` set, and again when it runs;
 - the output tool, when the agent answers through one, as `tool_called` with `output_tool` set;
 - each tool that the provider ran itself, such as a web search, as `tool_called` with `provider_run` set and confidence `parsed`. provrun sees only the provider's account of such a call.
 
-The backend gives text output and no provider tools, so its runs have neither of the last two. Other code can pass the capability, `evidence_capability`, to its own agent, and stream; Step 15 of the [tour](provrun-tour.md) streams Claude Haiku this way. A run file cannot ask for a streamed reply. In a streamed request, the output tool's event comes before the `model_called` that asked for it.
+The backend gives text output and no provider tools, so its runs have neither of the last two. Other code can pass the capability, `evidence_capability`, to its own agent, and stream; Step 16 of the [tour](provrun-tour.md) streams Claude Haiku this way. In a streamed request, the output tool's event comes before the `model_called` that asked for it.
 
 Each `model_called` event lists the tool calls that the model asked for, under `tool_calls`. The list includes a call to an unknown tool, or a call with bad arguments. PydanticAI refuses such a call before the tool runs, so it has no `tool_called` event.
 
