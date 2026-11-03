@@ -159,7 +159,7 @@ A commit records the version of every file in a folder. Commit the orders, then 
 $ FIRST=$(uv run provc commit files://sales/orders -m "first day" --meta source=till)
 
 $ echo "$FIRST"
-tour-s3://tour-sales/main/orders?at=commit:819ea816ccdbf97b0575420fc1a72626cd47bbc14c6eba9820ef59fa6fb7de12
+tour-s3://tour-sales/main/orders?at=commit:0537ea725a5756b72794cdfdcb4a8f2ae9ab7932a133b8a2e3351f4e8c3973ac
 
 $ printf 'order,region,amount\n1,east,30\n2,west,15\n' > $TOUR_DIR/day1.csv
 
@@ -190,17 +190,34 @@ The name reads the new file. The commit still reads the file as it was. `$FIRST`
 
 ## Step 4: Pin a name to a fixed version
 
-`pin` turns a name into a URI that always reads the same bytes.
+`pin` turns a name into a URI that always reads the same bytes. The name itself can read a fixed version too, with `?at=`.
 
 ```
 $ uv run provc pin files://sales/orders/day1.csv
-tour-s3://tour-sales/main/orders/day1.csv?at=version:549fce9b-7d43-4d2d-9dfd-b6badd667f35
+tour-s3://tour-sales/main/orders/day1.csv?at=version:09adc054-a05a-4659-b76a-b5e8306feeec
 
 $ uv run provc pin files://sales/orders
-tour-s3://tour-sales/main/orders?at=commit:819ea816ccdbf97b0575420fc1a72626cd47bbc14c6eba9820ef59fa6fb7de12
+tour-s3://tour-sales/main/orders?at=commit:0537ea725a5756b72794cdfdcb4a8f2ae9ab7932a133b8a2e3351f4e8c3973ac
+
+$ VERSION=$(uv run provc pin files://sales/orders/day1.csv); VERSION=${VERSION#*version:}
+
+$ uv run provc cat "files://sales/orders/day1.csv?at=version:$VERSION"
+order,region,amount
+1,east,30
+2,west,15
+
+$ uv run provc cat "files://sales/orders/day1.csv?at=commit:$ID"
+order,region,amount
+1,east,30
+2,west,12
+
+$ uv run provc cat 'files://sales/orders/day1.csv?at=tag:v1' || true
+provc: files://sales/orders/day1.csv?at=tag:v1: files goes to a bucket, which has no tags; use commit: or version:
 ```
 
 The file pins to its version ID in the bucket, which names this version of the object and no other. The folder pins to its newest commit, the one from Step 3. That commit does not hold the change of Step 3, so run `provc commit` first to pin what the name reads now.
+
+`$VERSION` holds the version ID that `pin` printed, and `$ID` holds the commit of Step 3. Through the name, the version reads the file as it is now, and the commit reads it as it was. provcat passes `?at=` on to the bucket, on the scheme's default branch. A bucket has no tags, so provcat refuses `tag:`.
 
 ## Step 5: Make a branch
 
@@ -255,7 +272,8 @@ $ uv run provc fetch files://sales/orders
 
 $ find $TOUR_DIR/cache -type f -not -path '*/.provcat/*' | sort
 /tmp/provcat-tour/cache/tour-s3/tour-sales/main/orders/day1.csv
-/tmp/provcat-tour/cache/tour-s3@commit-819ea816ccdbf97b0575420fc1a72626cd47bbc14c6eba9820ef59fa6fb7de12/tour-sales/main/orders/day1.csv
+/tmp/provcat-tour/cache/tour-s3@commit-0537ea725a5756b72794cdfdcb4a8f2ae9ab7932a133b8a2e3351f4e8c3973ac/tour-sales/main/orders/day1.csv
+/tmp/provcat-tour/cache/tour-s3@version-09adc054-a05a-4659-b76a-b5e8306feeec/tour-sales/main/orders/day1.csv
 
 $ uv run provc --offline cat files://sales/orders/day1.csv
 order,region,amount
@@ -268,7 +286,7 @@ order,region,amount
 2,west,12
 ```
 
-The cache keeps the live folder and the commit apart, so the commit's file never changes. Offline, the name reads the copy it fetched last, and the commit reads its own copy.
+The cache keeps the live folder, the commit and the version apart, so a fixed version's file never changes. The read of the commit in Step 3 put the commit there, and Step 4 put the version. A read through the name and a read through the physical URI share one copy. Offline, the name reads the copy it fetched last, and the commit reads its own copy.
 
 ## Step 8: Give a program a snapshot
 
@@ -276,7 +294,7 @@ A snapshot is a read-only copy of one pinned version, in a folder named by the S
 
 ```
 $ uv run python tours/provcat/snapshot.py "$FIRST"
-pinned: tour-s3://tour-sales/main/orders?at=commit:819ea816ccdbf97b0575420fc1a72626cd47bbc14c6eba9820ef59fa6fb7de12
+pinned: tour-s3://tour-sales/main/orders?at=commit:0537ea725a5756b72794cdfdcb4a8f2ae9ab7932a133b8a2e3351f4e8c3973ac
 digest: feb1e4a1980a1b554363cd5e3f80fecc1c43050d0d8ffe90373e495070880597
 day1.csv 0o444
 ```

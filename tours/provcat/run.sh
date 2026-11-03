@@ -34,6 +34,10 @@ show 'uv run provc cat "tour-s3://tour-sales/main/orders/day1.csv?at=commit:$ID"
 step "Step 4: Pin a name to a fixed version"
 show uv run provc pin files://sales/orders/day1.csv
 show uv run provc pin files://sales/orders
+show 'VERSION=$(uv run provc pin files://sales/orders/day1.csv); VERSION=${VERSION#*version:}'
+show 'uv run provc cat "files://sales/orders/day1.csv?at=version:$VERSION"'
+show 'uv run provc cat "files://sales/orders/day1.csv?at=commit:$ID"'
+show "uv run provc cat 'files://sales/orders/day1.csv?at=tag:v1' || true"
 
 step "Step 5: Make a branch"
 show uv run provc branch "'files://sales?at=branch:dev'" --from main
