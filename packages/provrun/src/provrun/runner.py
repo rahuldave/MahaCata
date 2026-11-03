@@ -96,15 +96,20 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
     telemetry problem in strict mode. Any later error fails the run, and the
     outcome holds it."""
     tel = Telemetry.prepare(load_policy(policy), telemetry, evidence_mode(env, mode))
-    with tel.applied(store):
-        # The environment is set now, before the backend imports its library.
-        outcome = await _run_agent(agent, tel, catalog=catalog, org=org, domain=domain, env=env, actor=actor,
-                                   allow=allow, broker=broker, resolver=resolver, stager=stager, backend=backend,
-                                   runs_root=runs_root, mode=mode, bundle_scheme=bundle_scheme, store=store)
+    try:
+        with tel.applied(store, close=False):
+            # The environment is set now, before the backend imports its library.
+            outcome = await _run_agent(agent, tel, catalog=catalog, org=org, domain=domain, env=env, actor=actor,
+                                       allow=allow, broker=broker, resolver=resolver, stager=stager,
+                                       backend=backend, runs_root=runs_root, mode=mode,
+                                       bundle_scheme=bundle_scheme, store=store)
+    finally:
+        if tel.routes is not None:
+            # Sending the last spans can take seconds, so it goes in a thread too.
+            await _off_loop(tel.routes.close)
     if tel.routes is not None and tel.routes.mlflow is not None:
         # The run is sealed, and the user's variables are back.
-        outcome.mlflow = await asyncio.to_thread(tel.routes.copy, outcome.run_id, store,
-                                                 outcome.folder / "evidence")
+        outcome.mlflow = await _off_loop(tel.routes.copy, outcome.run_id, store, outcome.folder / "evidence")
     return outcome
 
 
@@ -141,23 +146,54 @@ async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org:
     return outcome
 
 
+async def _in_thread(fn, *args) -> tuple[asyncio.Future, bool]:
+    """Run a blocking step in a thread, so a server's other requests go on
+    meanwhile, and give back its finished future and whether a cancel came.
+    A thread cannot be stopped, so a cancel waits for the step to end: no
+    later step, such as sealing the run, overlaps it."""
+    task = asyncio.ensure_future(asyncio.to_thread(fn, *args))  # to_thread carries the current run and span
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+    return task, cancelled
+
+
+async def _off_loop(fn, *args):
+    """A blocking step in a thread; a cancel goes on once the step has ended."""
+    task, cancelled = await _in_thread(fn, *args)
+    if cancelled:
+        task.exception()  # the step's own error, if any, gives way to the cancel
+        raise asyncio.CancelledError
+    return task.result()
+
+
+def _snapshots(ctx: RunContext, agent: AgentSpec) -> list:
+    out = []
+    for i in agent.inputs:
+        grant = ctx.broker.request(ctx, i.uri, i.mode, purpose=agent.name)
+        out.append((input_name(i.uri, i.name), ctx.resolver.snapshot(ctx, grant)))
+    return out
+
+
 async def _steps(ctx: RunContext, agent: AgentSpec, stager: Stager | None,
                  backend: Backend) -> tuple[RunOutcome, BaseException | None]:
     stager = stager or InProcessStager()
     outcome = RunOutcome(ctx.run_id, "failed", ctx.folder, Bundle(ctx.folder))
     error = None
     run = None
+    cancelled = False
     try:
-        snapshots = []
-        for i in agent.inputs:
-            grant = ctx.broker.request(ctx, i.uri, i.mode, purpose=agent.name)
-            snapshots.append((input_name(i.uri, i.name), ctx.resolver.snapshot(ctx, grant)))
-        run = stager.stage(ctx, snapshots)
+        # Fetching, staging, checking and sealing block, so each runs in a thread.
+        snapshots = await _off_loop(_snapshots, ctx, agent)
+        run = await _off_loop(stager.stage, ctx, snapshots)
         outcome.result = await backend.run(ctx, agent, run)
         if ctx.telemetry is not None:
             ctx.telemetry.end()  # the full scan; a strict run with a problem fails here
-        stager.verify_inputs(ctx, run)
-        outcome.artifacts = Outputter().collect(ctx, run)
+        await _off_loop(stager.verify_inputs, ctx, run)
+        outcome.artifacts = await _off_loop(Outputter().collect, ctx, run)
     except BaseException as e:  # the run failed; its evidence says why
         error = e
         if ctx.telemetry is not None and isinstance(e, Exception):
@@ -170,13 +206,17 @@ async def _steps(ctx: RunContext, agent: AgentSpec, stager: Stager | None,
                     pass
         if run is not None and outcome.artifacts is None:
             # Record what a failed run left in output/, so the bundle holds no file the evidence lacks.
-            try:
-                outcome.artifacts = Outputter().collect(ctx, run)
-            except Exception:
-                pass
-    outcome.bundle = ctx.finish(error)
+            # A cancel here waits too, and is passed on once the run is sealed.
+            collected, cancelled = await _in_thread(Outputter().collect, ctx, run)
+            if not collected.exception():
+                outcome.artifacts = collected.result()
+    sealed, cancelled_sealing = await _in_thread(ctx.finish, error)
+    outcome.bundle = sealed.result()
     outcome.status = ctx.status
     outcome.error = error
+    if cancelled or cancelled_sealing:
+        # The run is sealed with its own error, or none; the cancel goes on to the caller.
+        raise asyncio.CancelledError
     return outcome, error
 
 

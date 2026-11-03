@@ -278,11 +278,12 @@ def test_a_foreign_global_provider_fails_a_strict_run(catalog, runs, monkeypatch
 def test_overlapping_runs_under_two_policies(catalog, runs, tmp_path, monkeypatch):
     monkeypatch.setenv("LITELLM_LOG", "DEBUG")
     seen = []
-    gate = asyncio.Event()
+    gate, hold = asyncio.Event(), asyncio.Event()
 
     async def slow(**kw):
         seen.append(watched())
         await gate.wait()
+        await hold.wait()  # still going while the second run ends, whatever the threads take
         return reply()
 
     async def quick(**kw):
@@ -298,7 +299,8 @@ def test_overlapping_runs_under_two_policies(catalog, runs, tmp_path, monkeypatc
         first = asyncio.create_task(one(LiteLLMBackend(slow)))
         await asyncio.sleep(0.05)
         second = await one(LiteLLMBackend(quick), policy=policy_file(tmp_path))
-        assert os.environ["LITELLM_LOG"] == "ERROR"  # the first run is still going on
+        assert not first.done() and os.environ["LITELLM_LOG"] == "ERROR"  # the first run is still going on
+        hold.set()
         return await first, second
 
     a, b = asyncio.run(go())
