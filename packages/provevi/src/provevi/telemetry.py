@@ -171,6 +171,33 @@ def distribution_of(module: str) -> str | None:
     return names[0] if names else top
 
 
+# What a plain name may not hold: a URL, a user and password, a setting such
+# as token=..., or a path from the root.
+_NOT_PLAIN = re.compile(r"://|^[^/@]*:[^/@]*@|=|^/")
+# A span name below bodies: one word, or two, such as "chat gpt-4o".
+_SPAN_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,200}( [A-Za-z0-9_.:-]{1,200})?")
+
+
+def plain_name(value: Any) -> bool:
+    """True if value is a name, as the levels say, that holds no URL, no user
+    and password, no setting such as ``token=x`` and no path from ``/``. A
+    secret or a path can pass the levels' test of a name, so a place below
+    bodies should get only plain names. A name such as ``ns:model@tag`` looks
+    like ``user:password@host``, so it is not plain. A number and a yes or no
+    are plain, as they are names; an empty list is not."""
+    if not _is_name(value) or (isinstance(value, (list, tuple)) and not value):
+        return False
+    texts = [value] if isinstance(value, str) else list(value) if isinstance(value, (list, tuple)) else []
+    return not any(_NOT_PLAIN.search(t) for t in texts)
+
+
+def plain_span_name(name: Any) -> bool:
+    """True if name is a span name that a place below bodies may get: one or
+    two words of name characters, such as ``chat gpt-4o``, each a plain name."""
+    return (isinstance(name, str) and _SPAN_NAME.fullmatch(name) is not None
+            and all(plain_name(w) for w in name.split(" ")))
+
+
 def split_body(attributes: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     """The attributes in two parts: those an event may keep, which are names
     and usage, and the bodies, which the evidence keeps as a payload."""
@@ -402,6 +429,20 @@ class TelemetryPolicy:
             for h in hosts:
                 if not self._covers(h):
                     problems.append(f"host {h!r} is not allowed by the policy")
+            # A destination on a host that the section cut goes too, as it
+            # would send past the run's hosts; its libraries no longer feed it.
+            cut = {n for n, d in destinations.items()
+                   if d.endpoint is not None and _endpoint_problem(d.name, d.kind, d.endpoint, hosts) is not None}
+            # One that the section names itself is a mistake, not a cut.
+            named = set(section.get("destinations") or {}) if isinstance(section.get("destinations"), dict) else set()
+            for spec in (section.get("libraries") or {}).values() if isinstance(section.get("libraries"), dict) else ():
+                if isinstance(spec, dict) and isinstance(spec.get("telemetry"), list):
+                    named.update(d for d in spec["telemetry"] if isinstance(d, str))
+            for n in sorted(cut & named):
+                problems.append(f"destination {n!r} sends to a host that the section cuts from hosts")
+            destinations = {n: d for n, d in destinations.items() if n not in cut}
+            libraries = {n: Library(n, lib.versions, tuple(d for d in lib.telemetry if d in destinations))
+                         for n, lib in libraries.items()}
         if problems:
             raise ProveviError(f"{source}: " + "; ".join(problems))
         return TelemetryPolicy(libraries, destinations, hosts, f"{self.source}, narrowed by {source}")

@@ -171,7 +171,13 @@ An attribute that provevi does not know counts as a body, so a new attribute nev
 
 provevi also checks each value. A `names` attribute must hold one word of at most 200 characters, with no space. A `usage` attribute must hold numbers. Any other value counts as a body, because it may hold text from a prompt. `attributes_for(attributes, level)` gives what a destination receives. `split_body(attributes)` takes the bodies out of a span's attributes, so that the evidence keeps them in a payload, not in the event.
 
-**Narrow the policy for one run.** `policy.narrow(section)` reads a run file's `telemetry` section. The section has the keys `libraries`, `destinations` and `hosts`, and each one replaces the policy's list with a smaller one. A destination can receive a lower level, and a library can feed fewer destinations. The section cannot change versions, kinds or endpoints. If the section would widen the policy in any way, `narrow` raises `ProveviError`.
+A secret or a path can pass the test of a name, such as `https://user:password@host` or `token=x`. `plain_name(value)` is stricter. It refuses a URL, a user and password, a setting with `=` and a path from `/`. It also refuses a name such as `ns:model@tag`, which looks like `user:password@host`. A number and a yes or no are plain.
+
+`plain_span_name(name)` takes one or two plain words, such as `chat gpt-4o`. The copy in MLflow uses both below `bodies`.
+
+**Narrow the policy for one run.** `policy.narrow(section)` reads a run file's `telemetry` section. The section has the keys `libraries`, `destinations` and `hosts`, and each one replaces the policy's list with a smaller one. A destination can receive a lower level, and a library can feed fewer destinations. The section cannot change versions, kinds or endpoints.
+
+A destination whose endpoint is on a host that the section cuts is dropped too, and no library feeds it. A destination that the section names itself, in `destinations` or in a library's `telemetry`, is refused instead, because the section contradicts itself. If the section would widen the policy in any way, `narrow` raises `ProveviError`.
 
 **Match a variable to a destination.** A run finds its destinations in the user's variables, such as `OTEL_EXPORTER_OTLP_ENDPOINT` and `MLFLOW_TRACKING_URI`. `policy.match_destination(kind, url)` gives the destination of that kind whose endpoint is the URL, or `None`. provrun sends nothing to a URL with no match, and writes `telemetry_blocked` with the path `destination`.
 

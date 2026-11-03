@@ -119,7 +119,8 @@ def test_narrowing_keeps_what_the_section_leaves_out():
 
 def test_narrowing_can_remove_and_lower():
     n = policy().narrow({"destinations": {"logfire": {"receives": "names"}},
-                         "libraries": {"pydantic-ai": {}}, "hosts": ["api.anthropic.com", "s3.amazonaws.com"]})
+                         "libraries": {"pydantic-ai": {}},
+                         "hosts": ["api.anthropic.com", "s3.amazonaws.com", "logfire-us.pydantic.dev"]})
     assert n.destinations["logfire"].receives == "names" and "collector" not in n.destinations
     assert set(n.libraries) == {"pydantic-ai"} and n.library("pydantic-ai").telemetry == ("logfire",)
     assert n.allows_host("s3.amazonaws.com") and not n.allows_host("ec2.amazonaws.com")
@@ -529,3 +530,48 @@ def test_the_traces_target_follows_the_otel_rules(env, want):
 def test_an_unknown_otlp_protocol_is_refused():
     with pytest.raises(ProveviError, match="not one of"):
         otlp_traces_target({"OTEL_EXPORTER_OTLP_ENDPOINT": "https://a.example", "OTEL_EXPORTER_OTLP_PROTOCOL": "udp"})
+
+
+@pytest.mark.parametrize("value, plain", [("openai/gpt-4o-mini", True), ("claude-sonnet@20240620", True),
+                                         ("bedrock/arn:aws:bedrock:x@y", True), (["a", "b"], True), (3, True),
+                                         ("https://u:secret@h.example/v1", False), ("u:secret@h.example", False),
+                                         ("ns:model@tag", False), ("token=abc", False), ("/home/someone/x", False),
+                                         (["a", "https://h.example/x"], False), ("two words", False), ({}, False), ([], False), (True, True)])
+def test_a_plain_name_holds_no_url_password_setting_or_path(value, plain):
+    from provevi import plain_name
+
+    assert plain_name(value) is plain
+
+
+@pytest.mark.parametrize("name, plain", [("agent run", True), ("chat gpt-4o", True), ("one", True),
+                                         ("three words here", False), ("host:token@x", False),
+                                         ("chat https://h", False), ("", False), (None, False)])
+def test_a_plain_span_name_is_one_or_two_plain_words(name, plain):
+    from provevi import plain_span_name
+
+    assert plain_span_name(name) is plain
+
+
+def test_narrowing_hosts_drops_each_destination_on_a_host_it_cut():
+    policy = TelemetryPolicy.from_dict({"version": 1, "hosts": ["api.openai.com", "mlflow.example"],
+                                        "libraries": {"pydantic-ai": {"versions": ">=1", "telemetry": ["srv", "own"]}},
+                                        "destinations": {"srv": {"kind": "mlflow", "receives": "usage",
+                                                                 "endpoint": "https://mlflow.example"},
+                                                         "own": {"kind": "mlflow", "receives": "usage"}}})
+    narrowed = policy.narrow({"hosts": ["api.openai.com"]})
+    assert set(narrowed.destinations) == {"own"}
+    assert narrowed.match_destination("mlflow", "https://mlflow.example") is None
+    assert [d.name for d in narrowed.destinations_for("pydantic-ai")] == ["own"]
+    assert TelemetryPolicy.from_dict(narrowed.to_dict()).digest() == narrowed.digest()
+
+
+
+@pytest.mark.parametrize("section", [{"hosts": ["api.openai.com"], "destinations": {"srv": None}},
+                                     {"hosts": ["api.openai.com"], "libraries": {"pydantic-ai": {"telemetry": ["srv"]}}}])
+def test_narrowing_refuses_a_destination_it_names_on_a_host_it_cuts(section):
+    policy = TelemetryPolicy.from_dict({"version": 1, "hosts": ["api.openai.com", "mlflow.example"],
+                                        "libraries": {"pydantic-ai": {"versions": ">=1", "telemetry": ["srv"]}},
+                                        "destinations": {"srv": {"kind": "mlflow", "receives": "usage",
+                                                                 "endpoint": "https://mlflow.example"}}})
+    with pytest.raises(ProveviError, match="'srv' sends to a host that the section cuts"):
+        policy.narrow(section)

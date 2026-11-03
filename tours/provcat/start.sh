@@ -84,4 +84,4 @@ _tour_start || _tour_rc=$?
 if [ "$_tour_rc" -ne 0 ] && [ -n "$_provcat_tour_mine" ]; then source tours/provcat/stop.sh; fi
 unset _provcat_tour_mine
 unset -f _tour_start
-eval "unset _tour_rc; (exit $_tour_rc)"
+eval "unset _tour_rc; return $_tour_rc"
