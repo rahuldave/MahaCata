@@ -59,13 +59,16 @@ from .checks import verify
 from .errors import ProveviError
 from .events import EvidenceEvent, sha256_bytes
 from .store import EvidenceStore, FileStore
-from .telemetry import TelemetryPolicy, attributes_for, normal_endpoint, plain_name, plain_span_name, \
-    span_libraries
+from .telemetry import TelemetryPolicy, attributes_for, normal_endpoint, plain_attribute, plain_name, \
+    plain_span_name, span_libraries
 
 #: The MLflow minor release that the copy is tested against.
 MLFLOW_TESTED = "3.17"
 #: The MLflow run tag that holds provrun's run ID.
 RUN_TAG = "provrun.run_id"
+#: The MLflow run tag that a copy has until it is whole. A copy that was
+#: stopped part way, as provrun stops one that takes too long, keeps it.
+UNFINISHED_TAG = "provevi.copy.unfinished"
 
 # Set before MLflow is imported: no usage telemetry, no note to agents, and
 # no links printed to standard output.
@@ -349,21 +352,23 @@ def _write(client, events: list[EvidenceEvent], record, level: str, sqlite_file:
         experiment_id = client.create_experiment(experiment, artifact_location=place)
     else:
         experiment_id = exp.experiment_id
-    replaced = _delete_earlier(client, experiment_id, created.run_id)
+    trace = created.data.get("trace_id") or ending.data.get("trace_id")
+    known = f"tr-{trace}" if isinstance(trace, str) else None  # the ID that the copy gives the trace
+    replaced = _delete_earlier(client, experiment_id, created.run_id, known)
 
     tags = {RUN_TAG: created.run_id, "provrun.org": data.get("org"), "provrun.domain": data.get("domain"),
             "provrun.env": data.get("env"), "provrun.actor": created.actor, "provrun.mode": data.get("mode")}
     tags = {k: str(v) for k, v in tags.items() if v is not None and _keep(v, level)}
+    tags[UNFINISHED_TAG] = "true"  # until the copy is whole; a killed copy keeps it
     run = client.create_run(experiment_id, start_time=_ns(created.time) // 1_000_000, tags=tags,
                             run_name=created.run_id)
     mlflow_run_id = run.info.run_id
-    trace = created.data.get("trace_id") or ending.data.get("trace_id")
     try:
         return _fill(client, experiment_id, mlflow_run_id, events, record, level, replaced)
     except BaseException:
         # Leave no part of a copy: the trace has a known ID, as it may not be
         # linked to the run yet.
-        _remove(client, experiment_id, mlflow_run_id, f"tr-{trace}" if isinstance(trace, str) else None)
+        _remove(client, experiment_id, mlflow_run_id, known)
         raise
 
 
@@ -376,7 +381,8 @@ def _fill(client, experiment_id: str, mlflow_run_id: str, events: list[EvidenceE
     params = {k: v if isinstance(v, str) else json.dumps(v, sort_keys=True) for k, v in params.items()}
     from mlflow.entities import Dataset, DatasetInput, Param
 
-    client.log_batch(mlflow_run_id, params=[Param(k, v) for k, v in sorted(params.items()) if _keep(v, level)],
+    kept = [Param(k, v) for k, v in sorted(params.items()) if level == "bodies" or plain_attribute(k, v)]
+    client.log_batch(mlflow_run_id, params=kept,
                      metrics=_metrics(events, created.time) if level != "names" else [])
     datasets = [_dataset(e, Dataset, level) for e in events if e.type == "input_staged" and e.refs]
     if datasets:
@@ -386,19 +392,36 @@ def _fill(client, experiment_id: str, mlflow_run_id: str, events: list[EvidenceE
     assessed = _write_assessments(client, trace_id, record, events, level) if trace_id else 0
     status = "FINISHED" if ending.type == "run_completed" else "FAILED"
     client.set_terminated(mlflow_run_id, status=status, end_time=_ns(ending.time) // 1_000_000)
+    client.delete_tag(mlflow_run_id, UNFINISHED_TAG)
     return {"experiment_id": experiment_id, "mlflow_run_id": mlflow_run_id, "trace_id": trace_id, "spans": n,
             "assessments": assessed, "replaced": replaced}
 
 
-def _delete_earlier(client, experiment_id: str, run_id: str) -> list[str]:
+def _delete_earlier(client, experiment_id: str, run_id: str, trace_id: str | None = None) -> list[str]:
     """Delete the copies of run_id made before, with their traces. run_id
-    holds no quote, as copy_run checks, and each match is checked again."""
+    holds no quote, as copy_run checks, and each match is checked again. A
+    copy killed before it linked its trace to its run leaves the trace alone,
+    so trace_id, the ID that the copy gives the trace, is deleted too."""
     earlier = [r for r in client.search_runs([experiment_id], filter_string=f"tags.`{RUN_TAG}` = '{run_id}'")
                if r.data.tags.get(RUN_TAG) == run_id]
     for r in earlier:
         traces = client.search_traces(locations=[experiment_id], run_id=r.info.run_id)
         _remove(client, experiment_id, r.info.run_id, *[t.info.trace_id for t in traces])
+    if trace_id and _trace_of(client, trace_id, run_id):
+        with contextlib.suppress(Exception):
+            client.delete_traces(experiment_id, trace_ids=[trace_id])
     return [r.info.run_id for r in earlier]
+
+
+def _trace_of(client, trace_id: str, run_id: str) -> bool:
+    """Whether the trace trace_id is a copy of run_id: its run span names
+    run_id. Spans that reached MLflow another way keep the same ID, and stay."""
+    try:
+        trace = client.get_trace(trace_id)
+    except Exception:
+        return False
+    return trace is not None and any(s.attributes.get("provrun.run_id") == run_id
+                                     and s.attributes.get("provrun.step") == "run" for s in trace.data.spans)
 
 
 def _remove(client, experiment_id: str, mlflow_run_id: str, *trace_ids: str | None) -> None:
@@ -660,7 +683,7 @@ def _proto(trace: str, span: str, parent: str | None, name: str, start: int, end
         p.parent_span_id = bytes.fromhex(parent)
     kept = {k: v for k, v in attrs.items() if v is not None}
     for k, v in attributes_for(kept, level).items():
-        if level != "bodies" and isinstance(v, (str, list, tuple)) and not plain_name(v):
+        if level != "bodies" and isinstance(v, (str, list, tuple)) and not plain_attribute(k, v):
             continue  # a value that the policy calls a name, but holds a URL, a setting or a path
         p.attributes.append(KeyValue(key=k, value=value(v)))
     for e in span_events:

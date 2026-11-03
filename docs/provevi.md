@@ -171,11 +171,13 @@ An attribute that provevi does not know counts as a body, so a new attribute nev
 
 provevi also checks each value. A `names` attribute must hold one word of at most 200 characters, with no space. A `usage` attribute must hold numbers. Any other value counts as a body, because it may hold text from a prompt. `attributes_for(attributes, level)` gives what a destination receives. `split_body(attributes)` takes the bodies out of a span's attributes, so that the evidence keeps them in a payload, not in the event.
 
-A secret or a path can pass the test of a name, such as `https://user:password@host` or `token=x`. `plain_name(value)` is stricter. It refuses a URL, and a user and password in either order, such as `user:password@host` or `user@host:password`. It refuses a setting with `=`, a path from `/`, and a `.` or `..` segment.
+A secret or a path can pass the test of a name, such as `https://user:password@host` or `token=x`. `plain_name(value)` is stricter. It refuses a URL, and a user and password in either order, such as `user:password@host` or `user@host:password`. It refuses a setting with `=`, a path from `/`, and a `.` or `..` segment. It refuses a path with more than one `/`, such as `tmp/a/b`, though `openai/gpt-4o-mini` stays plain.
+
+Some model names have more than one `/`, such as `openrouter/meta-llama/llama-3-70b` or a Vertex model's path. So `plain_name(value, declared=[...])` lets a text in `declared` have more, though it must pass every other test. `plain_attribute(key, value)` declares the value when its key names a model, such as `gen_ai.request.model`. The keys are in `MODEL_KEYS`. The copy in MLflow checks each setting and attribute with `plain_attribute`.
 
 `plain_name` also refuses a common API key or token, by its start and the run of characters after it. Examples are `sk-…` keys, Stripe's `sk_live_…`, GitHub's `ghp_…`, Slack's `xoxb-…`, AWS's `AKIA…`, Hugging Face's `hf_…` and JSON web tokens, `eyJ…`. A name such as `hf_transfer` or `sk-learn` is too short to be a key, so it stays plain. A shape test cannot catch every secret, so a secret written as a plain word still passes. It also refuses a name such as `ns:model@tag`, which looks like `user:password@host`. A number and a yes or no are plain.
 
-`plain_span_name(name)` takes one or two plain words, such as `chat gpt-4o`. The copy in MLflow uses both below `bodies`, and so do provrun's senders.
+`plain_span_name(name)` takes one or two plain words, such as `chat gpt-4o`. The copy in MLflow uses both below `bodies`, and so do provrun's senders. provrun's senders still check attributes with `plain_name`, so they leave out a model's name that has more than one `/`.
 
 **Narrow the policy for one run.** `policy.narrow(section)` reads a run file's `telemetry` section. The section has the keys `libraries`, `destinations` and `hosts`, and each one replaces the policy's list with a smaller one. A destination can receive a lower level, and a library can feed fewer destinations. The section cannot change versions, kinds or endpoints.
 
@@ -277,7 +279,7 @@ The destination that matches gives the level. A place that no destination matche
 
 | Level | What the copy holds |
 |---|---|
-| `names` | The experiment, the run with its tags, the settings that are names, but no name that holds a URL, a password, a setting such as `token=` or a path from `/`. A name such as `ns:model@tag` looks like `user:password@host`, so it stays out too, each input's SHA-256, and the spans with their names, models and IDs. A part of the experiment's name that is not a name, such as an agent called with free text, shows as `agent`. An input whose name is not a name is called `input`. |
+| `names` | The experiment, the run with its tags, the settings that are names, but no name that holds a URL, a password, a setting such as `token=`, a path from `/` or a path with more than one `/`, though a model's name may have more. A name such as `ns:model@tag` looks like `user:password@host`, so it stays out too. The copy holds each input's SHA-256, and the spans with their names, models and IDs. A part of the experiment's name that is not a name, such as an agent called with free text, shows as `agent`. An input whose name is not a name is called `input`. |
 | `usage` | Also the token counts on the spans, and the counts of tokens and calls as the run's metrics. |
 | `bodies` | Also every other setting, each input's URIs, each step's data and URIs, the request and response of each model call, and the events that had no span, as events of the root span. |
 
@@ -290,6 +292,8 @@ The store's assessments of the run and of its spans go onto the trace. Below `bo
 - the scope's own name counts only if a library of that name is installed, because any code can call its scope `litellm`. A name with a dot, such as `pydantic.ai`, is a module path, so it does not count this way;
 - the library whose files hold the scope's module counts, such as `pydantic-ai-slim` for `pydantic_ai`. A made-up module, such as `pydantic_ai.evil`, is held by no library;
 - when Python cannot read what is installed, no name counts.
+
+A scope is still a label that code picks. Any code in the run can call its tracer `pydantic_ai`, and its spans then count as PydanticAI's. So to approve a library is to approve any code in the run that uses its name. That code already runs in the run's own process, so the policy cannot keep it from the run's data.
 
 `span_libraries` reads the installed packages once in a process, because reading them takes most of a second. It does not see a library that is installed or removed after that. `distribution_of` reads them on each call.
 
@@ -310,6 +314,10 @@ It writes whole spans through MLflow's store, so MLflow adds nothing of its own,
 A SQLite file is put in WAL mode before MLflow opens it, with or without a driver such as `sqlite+pysqlite`. The copy puts back the MLflow variables that it sets. MLflow's artifacts go in a folder next to the SQLite file, not in the current folder.
 
 If a copy fails part way, it deletes its run and its trace, as a rebuild deletes the first copy. An experiment that it made stays, empty. A database that cannot be reached gives an error, with no password in it. A store makes one copy at a time. The copy holds a lock file next to the store's file, or in the runs root for the `file` store.
+
+A copy that is killed cannot delete anything, as when provrun stops a copy that takes too long. So the run has the tag `provevi.copy.unfinished` from the moment it is made. The copy removes the tag when the run is whole, after it marks the run `FINISHED` or `FAILED`. A run that keeps the tag is part of a copy. A new copy of the same run into the same experiment deletes it.
+
+The killed copy may also leave a trace that it did not link to its run yet. The next copy deletes that trace if the trace's run span names the same run. A copy at another level can go to another experiment, when a part of the experiment's name is not a name. Such a copy leaves the killed copy in place.
 
 **Copy again to rebuild.** A second copy of the same run deletes the first, with its trace, and writes it again. So the copy can be deleted and rebuilt from the evidence at any time.
 
