@@ -2,6 +2,7 @@
 import asyncio
 import gzip
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -579,14 +580,15 @@ def test_below_bodies_a_value_that_is_not_plain_is_left_out():
     assert destinations._cut(span, "bodies") is span
 
 
-def test_a_scope_s_names_are_read_once(monkeypatch):
-    # Reading the installed packages takes most of a second; a run asks for each span.
-    calls = []
-    destinations._span_libraries.cache_clear()
-    monkeypatch.setattr(destinations, "span_libraries", lambda scope: calls.append(scope) or ("lib",))
-    try:
-        for _ in range(3):
-            assert destinations._names("some.scope") == ["lib"]
-    finally:
-        destinations._span_libraries.cache_clear()
-    assert calls == ["some.scope"]
+def test_a_scope_s_names_are_quick_after_the_first():
+    # Reading the installed packages takes most of a second; a run asks for
+    # each span, so provevi reads them once.
+    from provevi import span_libraries
+
+    destinations._names("pydantic_ai")
+    hits = span_libraries.cache_info().hits
+    started = time.monotonic()
+    for _ in range(100):
+        assert destinations._names("pydantic_ai") == ["pydantic-ai", "pydantic-ai-slim"]
+    assert time.monotonic() - started < 0.5
+    assert span_libraries.cache_info().hits - hits == 100
