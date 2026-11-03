@@ -26,7 +26,7 @@ import asyncio
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from provcat import Catalog
 from provevi import EvidenceStore
@@ -81,7 +81,7 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
                     backend: Backend | None = None, runs_root: Path | None = None,
                     mode: str | None = None, bundle_scheme: str | None = None,
                     store: EvidenceStore | None = None, policy: TelemetryPolicy | str | Path | None = None,
-                    telemetry: dict | None = None) -> RunOutcome:
+                    telemetry: dict | None = None, feed: Any = None) -> RunOutcome:
     """Run agent once. With no broker, a StubBroker allows the inputs of the
     spec and the URIs in allow. The evidence goes through store, a provevi
     store, by default the file store in the run folder.
@@ -94,7 +94,8 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
     A bad setting, a telemetry section that widens the policy, or an unknown
     backend raises RunSettingError before the run folder is made; so does a
     telemetry problem in strict mode. Any later error fails the run, and the
-    outcome holds it."""
+    outcome holds it. feed, a provrun.live.LiveFeed, gets each event and each
+    piece of a streamed reply as they come; start_run makes one."""
     tel = Telemetry.prepare(load_policy(policy), telemetry, evidence_mode(env, mode))
     try:
         with tel.applied(store, close=False):
@@ -102,7 +103,7 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
             outcome = await _run_agent(agent, tel, catalog=catalog, org=org, domain=domain, env=env, actor=actor,
                                        allow=allow, broker=broker, resolver=resolver, stager=stager,
                                        backend=backend, runs_root=runs_root, mode=mode,
-                                       bundle_scheme=bundle_scheme, store=store)
+                                       bundle_scheme=bundle_scheme, store=store, feed=feed)
     finally:
         if tel.routes is not None:
             # Sending the last spans can take seconds, so it goes in a thread too.
@@ -115,7 +116,7 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
 
 async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org: str, domain: str, env: str,
                      actor: str, allow, broker, resolver, stager, backend, runs_root, mode, bundle_scheme,
-                     store) -> RunOutcome:
+                     store, feed=None) -> RunOutcome:
     if backend is None:
         try:
             backend = load_backend(agent.backend)
@@ -135,8 +136,11 @@ async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org:
                               runs_root=runs_root, mode=mode, bundle_scheme=bundle_scheme, store=store,
                               run_id=run_id, trace=trace,
                               data={"agent": agent.name, "backend": agent.backend, "spec": agent.to_dict(),
-                                    "telemetry": tel.record()})
+                                    "telemetry": tel.record()},
+                              sinks=[feed] if feed is not None else None)
         ctx.telemetry = tel
+        if feed is not None:
+            ctx.on_text = feed.text
         tel.attach(ctx.recorder, trace.get("trace_id"))
         outcome, error = await _steps(ctx, agent, stager, backend)
         if error is not None:
@@ -224,7 +228,7 @@ async def run_file(rf: RunFile, *, catalog: Catalog, runs_root: Path | None = No
                    bundle_scheme: str | Literal[False] | None = None, **parts) -> RunOutcome:
     """Run a checked run file. bundle_scheme, when given, takes the place of
     the run file's; False writes no bundle through the catalog. The other
-    keyword arguments (broker, resolver, stager, backend, store, policy) go
+    keyword arguments (broker, resolver, stager, backend, store, policy, feed) go
     to run_agent, with the run file's telemetry section. Without store, the run file's store setting opens one, and
     without that the file store is used."""
     s = rf.settings

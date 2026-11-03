@@ -135,14 +135,15 @@ class RunContext:
              catalog: Catalog | None = None, runs_root: Path | None = None, mode: str | None = None,
              bundle_scheme: str | None = None, run_id: str | None = None,
              data: dict | None = None, store: EvidenceStore | None = None,
-             trace: dict | None = None) -> RunContext:
+             trace: dict | None = None, sinks: list | None = None) -> RunContext:
         """Make the run ID and the run folder, and write run_created. trace
         holds the trace and span IDs of the run's root span, which run_created
         and the event that ends the run record. The
         evidence mode is lenient in dev and strict in every other environment,
         unless mode says otherwise. The evidence goes through store, a
         provevi store, by default the file store. A bad setting raises
-        RunSettingError before the folder is made."""
+        RunSettingError before the folder is made. sinks get each evidence
+        line too, from run_created on, such as a live feed."""
         for name, value in (("org", org), ("domain", domain), ("env", env)):
             check_segment(name, value)
         if mode is not None and mode not in MODES:
@@ -154,7 +155,8 @@ class RunContext:
         folder.mkdir(parents=True, exist_ok=False)
         for sub in ("output", "input", "scratch"):
             (folder / sub).mkdir()
-        recorder = EvidenceRecorder(run_id, actor, folder / "evidence", mode=evidence_mode(env, mode), store=store)
+        recorder = EvidenceRecorder(run_id, actor, folder / "evidence", mode=evidence_mode(env, mode), store=store,
+                                    sinks=sinks)
         ctx = cls(run_id, org, domain, env, actor, folder, recorder, broker, resolver, catalog, bundle_scheme,
                   trace=dict(trace or {}))
         recorder.emit("run_created", "RunContext", refs=[ctx.run_uri],
