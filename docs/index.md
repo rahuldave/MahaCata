@@ -8,12 +8,13 @@ MahaCata holds three Python packages that work together.
 - **provrun** runs agents and model calls on data that provcat resolves. It asks a broker for each input, stages provcat's read-only snapshots of them and runs the agent. It records the evidence of the run as a chain of hashed events.
 - **provevi** stores, reads and checks the evidence of runs. Its command is `prove`. Phases 1, 2 and 4 of its seven are built. They give a SQLite store that answers questions across runs, and a copy of each run in MLflow, for MLflow's viewer. Part of Phase 3 is built too. provevi checks the telemetry policy, and provrun applies most of it. [What provevi does](provevi-features.md) shows it with examples, and [its tour](provevi-tour.md) runs them. [The design](provevi-design.md) and [the plan](provevi-plan.md) say what comes next.
 
-provrun depends on provevi and provcat, and provevi depends on provcat. provcat depends on neither.
+provrun depends on provevi and provcat, and provevi depends on provcat. provcat depends on neither. [What MahaCata does](overview.md) follows one file through all three.
 
 ## Start here
 
 | To do this | Read |
 |---|---|
+| See how the three packages work together, with one example from each | [What MahaCata does](overview.md) |
 | See what provcat does, with examples | [What provcat does](provcat-features.md) |
 | Run provcat on your own machine, step by step | [A runnable tour of provcat](tour.md) |
 | See what provrun does, with examples | [What provrun does](provrun-features.md) |
