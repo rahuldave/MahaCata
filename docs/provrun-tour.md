@@ -85,6 +85,7 @@ Add `--online` to run Steps 15 and 16 too, which call a real model. The script s
 | `tours/provrun/collector.py` | The collector of Step 12. |
 | `tours/provrun/mlflow.yaml` | The telemetry policy of Step 13, with an MLflow destination. |
 | `tours/provrun/agent.yaml` | The PydanticAI agent of Step 15, which needs a real model. |
+| `tours/provrun/follow.py` | The program of Step 14 that follows a run's live feed. |
 | `tours/provrun/streamed.py` | The streamed PydanticAI agent of Step 16, which needs a real model, or `PROVRUN_TOUR_MODEL=test`. |
 | `tours/provrun/field.py`, `event.py`, `spans.py`, `types.py`, `mlflow_spans.py`, `modes.py`, `drop_event.py` | Small helpers that print one field of a run's output or evidence, or change the evidence. |
 
@@ -757,6 +758,28 @@ Revenue in 2025 was 42 million.
 - LiteLLM's `mock_response` sent the reply in pieces, as a model does, so this step needs no key.
 - `model_called` says `streamed`, with the tokens in and out from the stream's last chunk, and why the model stopped. It also holds `first_token_ms`, the milliseconds to the first piece, which differs on each run, so the step does not print it.
 - `response.txt` holds the whole reply, as for a run that does not stream.
+
+A program can watch a run as it goes, through the run's live feed. The script `follow.py` starts the same run with `start_run`, and prints each item of the feed as it comes:
+
+```
+$ uv run python tours/provrun/follow.py $TOUR_DIR/stream.yaml
+1 event run_created
+2 event access_requested
+3 event access_granted
+4 event context_resolved
+5 event snapshot_materialized
+6 event input_staged
+7 event sandbox_started
+8 event prompt_rendered
+9 event model_called
+10 event sandbox_completed
+11 event input_verified
+12 event output_artifact_created
+13 event run_completed
+14 done completed
+```
+
+Each event of the run is one item, in order, and the last item says how the run ended. The feed shows the `names` level, so it holds no text and no event data. [provrun's page](provrun.md#watch-a-run-as-it-goes) says how a server sends the feed on.
 
 ## Step 15: Call a real model (needs ANTHROPIC_API_KEY)
 

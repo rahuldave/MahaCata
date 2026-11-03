@@ -248,6 +248,30 @@ stop
 
 The data also holds `first_token_ms`, the milliseconds to the first piece. A stream that fails partway records the text it had handed on. [provrun's page](provrun.md#streamed-replies) says more.
 
+## Watch a run as it goes
+
+A program, such as a web server, can show a run as it goes. `start_run` starts the run and gives its live feed, one item per event and a last item for the end:
+
+```
+$ uv run python tours/provrun/follow.py $TOUR_DIR/stream.yaml
+1 event run_created
+2 event access_requested
+3 event access_granted
+4 event context_resolved
+5 event snapshot_materialized
+6 event input_staged
+7 event sandbox_started
+8 event prompt_rendered
+9 event model_called
+10 event sandbox_completed
+11 event input_verified
+12 event output_artifact_created
+13 event run_completed
+14 done completed
+```
+
+[provrun's page](provrun.md#watch-a-run-as-it-goes) shows the code, and what each item holds.
+
 ## Copy a run into MLflow
 
 MLflow gives a viewer for runs. A policy can approve an MLflow place, here the SQLite evidence store's own file, which receives names only. MLflow gets nothing while the run goes on. When the run is sealed, provrun copies it from the evidence, cut to that level, and the summary of `provr run` says where it went:

@@ -117,6 +117,36 @@ These settings in provrun affect the whole process:
 - When the LiteLLM backend first calls LiteLLM, it sets `litellm.suppress_debug_info`, so LiteLLM prints nothing on stdout. This also applies to the program's own LiteLLM calls.
 - Before each LiteLLM call, the backend sets the environment variable `USE_OTEL_LITELLM_REQUEST_SPAN` to `true`, so that LiteLLM's tracing does not write onto provrun's span. A value that is already set is kept, with a warning if it is not `true`.
 
+### Watch a run as it goes
+
+A program that shows a run as it goes, such as a web server, starts it with `start_run` and follows its live feed:
+
+```python
+from provcat import Catalog
+from provrun import RunFile, start_run
+
+live = start_run(RunFile.load("run.yaml"), catalog=Catalog.open())  # in a running event loop
+async for item in live.follow():
+    ...  # send each item on, such as to a browser
+outcome = await live.result()
+```
+
+`start_run` takes the same arguments as `run_file`. It starts the run as a task, and returns at once. The feed gives numbered items in the order the run made them:
+
+- `{"n": 1, "type": "event", "event": "run_created", "seq": 0, "time": ..., "component": ...}` for each evidence event;
+- `{"n": 8, "type": "text", "text": "Revenue "}` for each piece of a streamed reply, at the `bodies` level only;
+- `{"n": 14, "type": "done", "status": "completed", "run_id": ...}` last. The status says how the run's task ended, as `completed`, `failed` or `cancelled`. The run ID is `null` for a run that ended before it opened.
+
+For now the feed shows only the `names` level. An event shows its type, number and time, and its component when that is a plain name. The feed holds no event data and no text pieces. The run's telemetry policy will set the level, once provevi can name a live viewer in it. [Step 14 of the tour](provrun-tour.md#step-14-ask-for-the-reply-in-pieces) follows a run.
+
+Each viewer gets the items from the first, unless it is dropped. `follow(after=n)` starts after item `n`, so a viewer that comes back gets what it missed. A viewer that stops following only stops. The run goes on, and its evidence is sealed as always.
+
+A viewer that falls behind by more than 1000 items is dropped. It gets each item it was given, then `{"type": "dropped"}`, so `follow(after=n)`, with `n` the last item it got, goes on with no gap. The run never waits for a viewer, and an error in the feed never fails a run.
+
+`live.cancel()` cancels the run. A run that has opened ends with `run_failed`, unless it was being sealed. A run being sealed ends as it was, and its feed shows the end event and then `cancelled`. `live.result()` then raises `CancelledError`. A run cancelled before it opened leaves no run folder and no evidence.
+
+The feed lives only as long as the program. The evidence is the lasting record.
+
 ## The run file
 
 A run file has two sections:
@@ -140,7 +170,7 @@ A run file has two sections:
 
 ### Streamed replies
 
-With `stream: true`, each backend asks for the reply in pieces. LiteLLM gets chunks, and PydanticAI gets text events, as the model makes them. The run hands each piece to `RunContext.text`, which passes it to `on_text` when one is set. provrun sets none yet; the live feed, which is not built yet, will set it.
+With `stream: true`, each backend asks for the reply in pieces. LiteLLM gets chunks, and PydanticAI gets text events, as the model makes them. The run hands each piece to `RunContext.text`, which passes it to `on_text` when one is set. A run's live feed sets it, as "Watch a run as it goes" above says.
 
 The evidence does not record the pieces. It records each whole response once, as `model_called`, with `streamed` set, as for a run that does not stream. When the reply has text, the data also holds `first_token_ms`, the milliseconds from the request to the first piece. A reply with only a tool call has none. LiteLLM sends the token counts in the stream's last chunk, so provrun asks for them with `stream_options`. The outputs, the seal and the MLflow copy wait for the whole reply.
 
