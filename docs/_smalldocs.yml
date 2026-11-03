@@ -13,6 +13,8 @@ website:
     left:
       - href: index.md
         text: Home
+      - href: overview.md
+        text: Overview
       - href: provcat-features.md
         text: provcat
       - href: provrun-features.md
@@ -28,6 +30,7 @@ website:
     style: floating
     contents:
       - index.md
+      - overview.md
       - section: provcat
         contents:
           - provcat-features.md
