@@ -34,7 +34,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from .. import otel, telemetry
-from . import InProcessBackend, RunResult
+from . import InProcessBackend, Pieces, RunResult
 
 if TYPE_CHECKING:
     from ..context import RunContext
@@ -52,6 +52,27 @@ def _needs():
 
 def _dump(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, default=str)
+
+
+def _stream_handler(ctx: RunContext):
+    """A PydanticAI event stream handler: it hands each piece of text to the
+    run as it comes, and keeps it with the model request it belongs to."""
+    from pydantic_ai.messages import PartDeltaEvent, PartStartEvent, TextPart, TextPartDelta
+
+    async def handle(run_ctx, events) -> None:
+        async for event in events:
+            piece = None
+            if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
+                piece = event.part.content
+            elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
+                piece = event.delta.content_delta
+            if piece:
+                pieces = getattr(ctx, "pieces", None)
+                if pieces is not None:
+                    pieces.add(piece)
+                ctx.text(piece)
+
+    return handle
 
 
 def evidence_capability(ctx: RunContext):
@@ -85,10 +106,19 @@ def evidence_capability(ctx: RunContext):
             with ctx.recorder.step("model_called", "PydanticAIBackend",
                                    data={"model": request_context.model.model_name,
                                          "streamed": bool(request_context.streaming)}) as step:
+                pieces = Pieces()
+                try:  # the backend's stream handler adds this request's pieces; a ctx with __slots__ goes without
+                    ctx.pieces = pieces
+                except AttributeError:
+                    pass
                 model_span = otel.current()
                 telemetry.recheck(getattr(ctx, "telemetry", None))
                 try:
                     response = await handler(request_context)
+                except BaseException:
+                    if request_context.streaming:
+                        pieces.failed(step)
+                    raise
                 finally:
                     telemetry.recheck(getattr(ctx, "telemetry", None), fail=False)
                 if getattr(ctx, "telemetry", None) is not None:
@@ -98,6 +128,7 @@ def evidence_capability(ctx: RunContext):
                     step.data["answered_by"] = response.model_name  # a FallbackModel names the one that answered
                 step.data.update(input_tokens=usage.input_tokens or 0, output_tokens=usage.output_tokens or 0,
                                  finish_reason=response.finish_reason)
+                pieces.record(step.data)
                 # Every tool call the model asks for, valid or not. PydanticAI checks the
                 # arguments before a tool runs, so tool_called misses a bad one.
                 step.data["tool_calls"] = [{"tool": part.tool_name, "id": part.tool_call_id}
@@ -191,6 +222,7 @@ class PydanticAIBackend(InProcessBackend):
                           payload={"instructions": agent.instructions, "prompt": prompt},
                           data={"tools": agent.tools})
         result = await pa.run(prompt, deps=RunDeps(sandbox, ctx),
+                              event_stream_handler=_stream_handler(ctx) if agent.stream else None,
                               model_settings=agent.settings or None,
                               usage_limits=UsageLimits(request_limit=agent.limits.get("request_limit", 25)))
         output = result.output if isinstance(result.output, str) else json.dumps(result.output, default=str)

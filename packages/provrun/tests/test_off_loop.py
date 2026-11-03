@@ -143,12 +143,20 @@ def test_a_cancel_while_a_failed_run_is_sealed_reaches_the_caller(catalog, runs,
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        # A time limit around a run gives its error too.
+        # A time limit around a run gives its error too. It runs out once
+        # sealing has begun, however long the steps before it take.
         started.clear()
         with pytest.raises(TimeoutError):
-            async with asyncio.timeout(0.2):
+            async with asyncio.timeout(None) as limit:
+                async def run_out():
+                    while not started:
+                        await asyncio.sleep(0.01)
+                    limit.reschedule(asyncio.get_running_loop().time())
+
+                timer = asyncio.create_task(run_out())
                 await run_agent(_agent(docs), catalog=catalog, runs_root=runs, org="acme", domain="b",
                                 env="dev", actor="t", backend=LiteLLMBackend(down))
+        await timer
 
     asyncio.run(go())
     for folder in runs.iterdir():

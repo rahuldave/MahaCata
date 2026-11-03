@@ -43,6 +43,7 @@ class AgentSpec:
     tools: list[str] = field(default_factory=list)
     settings: dict[str, Any] = field(default_factory=dict)  # model settings, for example temperature
     limits: dict[str, Any] = field(default_factory=dict)  # for example request_limit, timeout
+    stream: bool = False  # ask for the reply in pieces; the evidence still records each whole response
 
     def __post_init__(self):
         refused = sorted(k for k in self.settings if _SECRET_SETTING.search(k))
@@ -61,6 +62,8 @@ class AgentSpec:
         for k in ("name", "backend", "model", "prompt", "instructions"):
             if k in d and not isinstance(d[k], str):
                 raise TypeError(f"agent spec: {k} must be a string")
+        if not isinstance(d.get("stream", False), bool):
+            raise TypeError("agent spec: stream must be true or false")
         for k in ("settings", "limits"):
             if k in d and not isinstance(d[k], dict):
                 raise TypeError(f"agent spec: {k} must be a mapping")

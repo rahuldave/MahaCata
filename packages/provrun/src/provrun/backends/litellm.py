@@ -27,7 +27,7 @@ import warnings
 from typing import TYPE_CHECKING, Any
 
 from .. import telemetry
-from . import InProcessBackend, RunResult
+from . import InProcessBackend, Pieces, RunResult
 
 if TYPE_CHECKING:
     from ..context import RunContext
@@ -40,6 +40,25 @@ SETTINGS = frozenset({
     "mock_response",  # litellm answers with this text and calls no model; for examples and tests
 })
 TEXT_TYPES = ("text/", "application/json", "application/xml", "application/yaml")
+
+
+async def _streamed(ctx: RunContext, call, agent: AgentSpec, messages: list,
+                    pieces: Pieces) -> tuple[str, Any, Any]:
+    """Ask for the reply in pieces, hand each piece to the run as it comes,
+    and give back the whole text, the usage and why the model stopped. The
+    usage comes in the last chunk."""
+    stream = await call(model=agent.model, messages=messages, stream=True,
+                        stream_options={"include_usage": True}, **agent.settings)
+    usage, finish = None, None
+    async for chunk in stream:
+        usage = getattr(chunk, "usage", None) or usage
+        for choice in getattr(chunk, "choices", None) or []:
+            piece = getattr(getattr(choice, "delta", None), "content", None)
+            if piece:
+                pieces.add(piece)
+                ctx.text(piece)
+            finish = getattr(choice, "finish_reason", None) or finish
+    return "".join(pieces.text), usage, finish
 
 
 def _mime(name: str) -> str:
@@ -133,18 +152,29 @@ class LiteLLMBackend(InProcessBackend):
         guard_otel_span()
         telemetry.recheck(getattr(ctx, "telemetry", None))  # LiteLLM may have been loaded just now, with callbacks set
         with ctx.recorder.step("model_called", self.__class__.__name__,
-                               data={"model": agent.model, "settings": agent.settings}) as step:
+                               data={"model": agent.model, "settings": agent.settings,
+                                     "streamed": agent.stream}) as step:
+            pieces = Pieces()
             try:
-                response = await call(model=agent.model, messages=messages, **agent.settings)
+                if agent.stream:
+                    try:
+                        text, usage, finish = await _streamed(ctx, call, agent, messages, pieces)
+                    except BaseException:
+                        pieces.failed(step)
+                        raise
+                    pieces.record(step.data)
+                else:
+                    response = await call(model=agent.model, messages=messages, **agent.settings)
+                    text = response.choices[0].message.content or ""
+                    usage = getattr(response, "usage", None)
+                    finish = getattr(response.choices[0], "finish_reason", None)
             finally:
                 telemetry.recheck(getattr(ctx, "telemetry", None), fail=False)  # a call can leave a callback in the lists
             if getattr(ctx, "telemetry", None) is not None:
                 getattr(ctx, "telemetry", None).fail_if_found()
-            text = response.choices[0].message.content or ""
-            usage = getattr(response, "usage", None)
             tokens = {"input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
                       "output_tokens": getattr(usage, "completion_tokens", 0) or 0}
-            step.data.update(tokens, finish_reason=getattr(response.choices[0], "finish_reason", None))
+            step.data.update(tokens, finish_reason=finish)
             step.payload = json.dumps({"request": shown, "response": text}, ensure_ascii=False)
         (run.output_dir / "response.txt").write_text(text, encoding="utf-8")
         return RunResult(text, 0.0, usage=tokens)

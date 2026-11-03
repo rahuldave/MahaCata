@@ -234,6 +234,20 @@ $ cat $TOUR_DIR/collector.log
 
 provrun's sender ignores the proxy variables, so no variable sends the spans elsewhere. `run_created` records which proxy variables were set, by name only.
 
+## Ask for the reply in pieces
+
+A run file can ask for the reply in pieces with `stream: true` in its agent spec. The evidence still records the whole response once:
+
+```
+$ uv run python tours/provrun/event.py $R11 model_called streamed input_tokens output_tokens finish_reason
+true
+48
+10
+stop
+```
+
+The data also holds `first_token_ms`, the milliseconds to the first piece. A stream that fails partway records the text it had handed on. [provrun's page](provrun.md#streamed-replies) says more.
+
 ## Copy a run into MLflow
 
 MLflow gives a viewer for runs. A policy can approve an MLflow place, here the SQLite evidence store's own file, which receives names only. MLflow gets nothing while the run goes on. When the run is sealed, provrun copies it from the evidence, cut to that level, and the summary of `provr run` says where it went:
@@ -382,6 +396,6 @@ run-20261102T224225Z-8e0c9702: the evidence and the outputs verify, and match th
 | Examples | Where they ran |
 |---|---|
 | Every example on this page but "Run a real model" | The tour's script, `bash tours/provrun/run.sh`, with moto and a small collector. |
-| "Run a real model" | Step 14 of the tour's script, `bash tours/provrun/run.sh --online`, with Claude Haiku. It needs `ANTHROPIC_API_KEY`, and the tests do not run it. `packages/provrun/examples/claude-run.yaml` and `claude-agent.yaml` run the same on a local file. |
+| "Run a real model" | Step 15 of the tour's script, `bash tours/provrun/run.sh --online`, with Claude Haiku. It needs `ANTHROPIC_API_KEY`, and the tests do not run it. `packages/provrun/examples/claude-run.yaml` and `claude-agent.yaml` run the same on a local file. |
 
 The run IDs, times, version IDs and hashes differ on each run.

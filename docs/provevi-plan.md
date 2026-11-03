@@ -112,7 +112,7 @@ So a run keeps them, records them, and sends provrun's own spans where they poin
 
 **Done when:** MLflow, Logfire and an OpenTelemetry exporter are installed, with their variables set. Then a real PydanticAI run and a real LiteLLM run write no telemetry of their own. Their evidence records each thing that was turned off, and the variables that were set. provrun's spans reach each approved destination, and no other. For MLflow, that is the copy of Phase 4.
 
-**Checked on 2026-11-02,** with Claude Haiku, in Step 14 of [provrun's tour](provrun-tour.md#step-14-call-a-real-model-needs-anthropic_api_key). A real LiteLLM run and a real PydanticAI run had a collector, a Logfire token and the store's own MLflow file to send to. The approved collector got their spans, and MLflow got a copy of each. Logfire, which the policy does not approve, got nothing. Each run records what was blocked, and verifies. The collector is local, and Logfire was only named by a token, so no Logfire service was reached.
+**Checked on 2026-11-02,** with Claude Haiku, in Step 15 of [provrun's tour](provrun-tour.md#step-15-call-a-real-model-needs-anthropic_api_key). A real LiteLLM run and a real PydanticAI run had a collector, a Logfire token and the store's own MLflow file to send to. The approved collector got their spans, and MLflow got a copy of each. Logfire, which the policy does not approve, got nothing. Each run records what was blocked, and verifies. The collector is local, and Logfire was only named by a token, so no Logfire service was reached.
 
 **Open:**
 
@@ -122,7 +122,7 @@ So a run keeps them, records them, and sends provrun's own spans where they poin
 - **Decided on 2026-11-02: `prove telemetry RUN` lists `telemetry_problem` events** as well as `telemetry_blocked` events.
 
 - The SDKs of OpenAI and Anthropic send `X-Stainless-*` headers, with the operating system, the processor, and the Python and SDK versions, to the model provider. The research did not settle whether `default_headers` can remove them.
-- The OpenAI Agents SDK and the Claude Agent SDK are not tested yet. A streamed PydanticAI request was checked with Claude Haiku on 2026-11-03, in [Step 15 of provrun's tour](provrun-tour.md#step-15-stream-a-real-model-in-your-own-agent-needs-anthropic_api_key). A run file still cannot ask for a streamed reply.
+- The OpenAI Agents SDK and the Claude Agent SDK are not tested yet. A streamed PydanticAI request was checked with Claude Haiku on 2026-11-03, in [Step 16 of provrun's tour](provrun-tour.md#step-16-stream-a-real-model-in-your-own-agent-needs-anthropic_api_key). A run file asks for one with `stream: true`, which [Step 14](provrun-tour.md#step-14-ask-for-the-reply-in-pieces) shows.
 
 ## Phase 4: the copy in MLflow
 

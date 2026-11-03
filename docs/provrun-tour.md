@@ -44,7 +44,7 @@ Run the script. It takes about 45 seconds.
 bash tours/provrun/run.sh
 ```
 
-Add `--online` to run Steps 14 and 15 too, which call a real model. The script starts moto and a small collector, runs the steps, stops both and deletes its scratch folder.
+Add `--online` to run Steps 15 and 16 too, which call a real model. The script starts moto and a small collector, runs the steps, stops both and deletes its scratch folder.
 
 ## Or run it step by step
 
@@ -84,8 +84,8 @@ Add `--online` to run Steps 14 and 15 too, which call a real model. The script s
 | `tours/provrun/quiet.py` | The program of Step 11. |
 | `tours/provrun/collector.py` | The collector of Step 12. |
 | `tours/provrun/mlflow.yaml` | The telemetry policy of Step 13, with an MLflow destination. |
-| `tours/provrun/agent.yaml` | The PydanticAI agent of Step 14, which needs a real model. |
-| `tours/provrun/streamed.py` | The streamed PydanticAI agent of Step 15, which needs a real model, or `PROVRUN_TOUR_MODEL=test`. |
+| `tours/provrun/agent.yaml` | The PydanticAI agent of Step 15, which needs a real model. |
+| `tours/provrun/streamed.py` | The streamed PydanticAI agent of Step 16, which needs a real model, or `PROVRUN_TOUR_MODEL=test`. |
 | `tours/provrun/field.py`, `event.py`, `spans.py`, `types.py`, `mlflow_spans.py`, `modes.py`, `drop_event.py` | Small helpers that print one field of a run's output or evidence, or change the evidence. |
 
 The run file holds this:
@@ -723,7 +723,42 @@ no copy
 
 The run gives no copy to the place that the policy does not approve. The event names the variable, and records no path of the file.
 
-## Step 14: Call a real model (needs ANTHROPIC_API_KEY)
+## Step 14: Ask for the reply in pieces
+
+An agent spec with `stream: true` asks the model for its reply in pieces, and the run hands each piece on as it comes. The evidence still records each whole response once, as one `model_called`. Write a copy of the run file that streams, and look at its end:
+
+```
+$ { cat $TOUR_DIR/run.yaml; echo "  stream: true"; } > $TOUR_DIR/stream.yaml
+
+$ tail -3 $TOUR_DIR/stream.yaml
+  settings:
+    mock_response: Revenue in 2025 was 42 million.
+  stream: true
+```
+
+Run it, and read its model call:
+
+```
+$ uv run provr run $TOUR_DIR/stream.yaml > $TOUR_DIR/r11.json
+
+$ R11=$(uv run python tours/provrun/field.py $TOUR_DIR/r11.json run_id)
+
+$ uv run python tours/provrun/event.py $R11 model_called streamed input_tokens output_tokens finish_reason
+true
+48
+10
+stop
+
+$ cat $PROVRUN_RUNS/$R11/output/response.txt; echo
+Revenue in 2025 was 42 million.
+```
+
+**What happened:**
+- LiteLLM's `mock_response` sent the reply in pieces, as a model does, so this step needs no key.
+- `model_called` says `streamed`, with the tokens in and out from the stream's last chunk, and why the model stopped. It also holds `first_token_ms`, the milliseconds to the first piece, which differs on each run, so the step does not print it.
+- `response.txt` holds the whole reply, as for a run that does not stream.
+
+## Step 15: Call a real model (needs ANTHROPIC_API_KEY)
 
 This step runs only with `--online`. It needs `ANTHROPIC_API_KEY` in the environment, and it costs a few cents. It runs a real model twice, once with LiteLLM and once as a PydanticAI agent with tools. Both runs go under a policy with two places, and with three variables set.
 
@@ -820,7 +855,7 @@ Now run an agent with tools. `tours/provrun/agent.yaml` asks the same question o
 
 ```
 $ cat $TOUR_DIR/agent.yaml
-# The agent of Step 14: a real PydanticAI agent with tools, on the tour's report.
+# The agent of Step 15: a real PydanticAI agent with tools, on the tour's report.
 run:
   org: acme
   domain: demo
@@ -934,9 +969,9 @@ $ unset PROVRUN_TELEMETRY_POLICY OTEL_EXPORTER_OTLP_ENDPOINT LOGFIRE_TOKEN
 
 The examples `claude-run.yaml` and `claude-agent.yaml` in `packages/provrun/examples` run the same two on a local file, with no store and no policy.
 
-## Step 15: Stream a real model in your own agent (needs ANTHROPIC_API_KEY)
+## Step 16: Stream a real model in your own agent (needs ANTHROPIC_API_KEY)
 
-This step also runs only with `--online`, and costs less than a cent. A run file cannot ask for a streamed reply, as both backends ask for the whole reply at once. Your own code can stream, and still get provrun's evidence, by giving its PydanticAI agent provrun's capability, `evidence_capability`. The script `streamed.py` does this, with one tool. It prints the reply as it arrives, then the events that the capability wrote.
+This step also runs only with `--online`, and costs less than a cent. A run file asks for a streamed reply with `stream: true`, as Step 14 showed. Your own code can stream too, and still get provrun's evidence, by giving its PydanticAI agent provrun's capability, `evidence_capability`. The script `streamed.py` does this, with one tool. It prints the reply as it arrives, then the events that the capability wrote.
 
 The agent, and how it is run. `PROVRUN_TOUR_MODEL` can name another model, such as PydanticAI's `test`, which needs no key; the tests run the script that way:
 
