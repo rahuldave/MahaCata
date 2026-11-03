@@ -21,6 +21,7 @@ TOURS = ROOT / "tours" / "provrun"
 SCRIPT = TOURS / "run.sh"
 PAGE = ROOT / "docs" / "provrun-tour.md"
 FEATURES = ROOT / "docs" / "provrun-features.md"
+OVERVIEW = ROOT / "docs" / "overview.md"  # the overview of all three packages copies some steps
 ONLINE = "Step 14"
 PAGE_DIR = "/tmp/provrun-tour"
 PAGE_OTLP_PORT = "4318"
@@ -89,8 +90,8 @@ def _blocks(text: str) -> list[str]:
     blocks, block, fence = [], [], None
     for line in text.splitlines():
         if fence is None and line.startswith("```"):
-            fence, block = line, []
-        elif fence is not None and line == "```":
+            fence, block = line.rstrip(), []
+        elif fence is not None and line.rstrip() == "```":
             if fence == "```":
                 blocks.append("\n".join(block).strip("\n"))
             fence = None
@@ -130,15 +131,48 @@ def test_the_page_shows_the_output_of_the_script(run):
         assert shown_normal(page[title]) == ran_normal(script[title]), title
 
 
-def test_the_features_page_shows_output_of_the_script(run):
+@pytest.mark.parametrize("page_file", [FEATURES, OVERVIEW], ids=lambda p: p.name)
+def test_the_pages_that_copy_the_tour_show_output_of_the_script(run, page_file):
+    # A plain fenced block on these pages is the tour's real output; a block
+    # that is not, such as a picture, has a language, as ```text.
     done, tour_dir, port = run
     ran = _Normal(str(tour_dir), port, numbered=False)(done.stdout)
     shown = _Normal(PAGE_DIR, numbered=False)
-    page = FEATURES.read_text()
+    page = page_file.read_text()
     blocks = _blocks(page)
-    assert blocks
+    assert blocks and all(b.strip() for b in blocks)  # an empty block would match anything
     for block in blocks:
         assert shown(block) in ran, block[:200]
+
+
+def _heading_ids(page: str) -> set[str]:
+    """The IDs of a page's headings, from smalldocs' own parser, as the site makes them."""
+    from smalldocs.markdown import render, split_front_matter
+
+    meta, body = split_front_matter(page)
+    env = {"title": meta.get("title")}
+    render(body, env)
+    return {h["id"] for h in env.get("headings", [])}
+
+
+def test_the_overview_s_links_into_the_tour_land_on_a_heading():
+    # smalldocs check does not follow a link's #part into another page.
+    anchors = set(re.findall(r"provrun-tour(?:\.md|\.html|/)?#([^)\s\"'>]+)", OVERVIEW.read_text()))
+    ids = _heading_ids(PAGE.read_text())
+    assert anchors
+    assert anchors <= ids, anchors - ids
+
+
+def test_heading_ids_follow_the_site():
+    page = (
+        "## Step 14: Call it (needs ANTHROPIC_API_KEY)\n## Notes\n## Notes\n## Plain {#custom}\n"
+        "## Has [a link](x.html) and _emph_\nSetext One\n----------\n"
+        "````\n```python\n# not a heading\n```\n````\n"
+    )
+    assert _heading_ids(page) == {
+        "step-14-call-it-needs-anthropic_api_key", "notes", "notes-1", "custom",
+        "has-a-link-and-emph", "setext-one",
+    }
 
 
 def test_the_page_shows_the_online_commands_of_the_script():
