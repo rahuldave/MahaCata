@@ -147,6 +147,38 @@ A viewer that falls behind by more than 1000 items is dropped. It gets each item
 
 The feed lives only as long as the program. The evidence is the lasting record.
 
+`packages/provrun/examples/live_server.py` is a small FastAPI server that sends a run's feed to a browser, as server-sent events. The server runs only the run file it was started with, so a browser cannot name a file on the server:
+
+```
+PROVRUN_LIVE_RUN_FILE=packages/provrun/examples/file-run.yaml \
+    uv run uvicorn --app-dir packages/provrun/examples live_server:app --port 8001
+```
+
+Open `http://127.0.0.1:8001/` and press Start, or use its three routes:
+
+| Route | What it does |
+|---|---|
+| `POST /runs` | Starts a run, and gives `{"key": ...}`. |
+| `GET /runs/{key}/events` | The run's feed, one server-sent event per item. Each event's ID is the item's number, so a browser that reconnects sends `Last-Event-ID` and goes on after it. |
+| `DELETE /runs/{key}` | Cancels the run. |
+
+`file-run.yaml` does not stream. Add `stream: true` to its agent spec to stream, as Step 14 of the tour does. With such a run file, the feed began like this, and ended with the `done` item:
+
+```
+$ curl -s -X POST http://127.0.0.1:8001/runs
+{"key":"949930b3c34d4ad7bbd5c0dc3396d0e5"}
+$ curl -s -N http://127.0.0.1:8001/runs/949930b3c34d4ad7bbd5c0dc3396d0e5/events
+id: 1
+data: {"n": 1, "type": "event", "event": "run_created", "seq": 0, "time": "2026-11-03T21:36:47.739192Z", "component": "RunContext"}
+
+id: 2
+data: {"n": 2, "type": "event", "event": "access_requested", "seq": 1, "time": "2026-11-03T21:36:47.740073Z", "component": "StubBroker"}
+```
+
+The page closes its event source on the `done` item. A client that does not close it reconnects after the end, and gets an empty stream each time.
+
+The server is an example, not a service to put on a network as it is. Any client can start a run, and each run with a real model costs money. It keeps every run and all its items in memory until the process ends. It keeps them in one process, so a server with several worker processes would need each browser to reach the process that holds its run. A real server needs a sign-in, a limit on runs and a way to forget old ones.
+
 ## The run file
 
 A run file has two sections:
