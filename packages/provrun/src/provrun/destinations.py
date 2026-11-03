@@ -54,7 +54,8 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from opentelemetry.sdk.trace import SpanProcessor
-from provevi import ProveviError, attributes_for, otlp_traces_target, split_body
+from provevi import (ProveviError, attributes_for, otlp_traces_target, plain_name, plain_span_name, span_libraries,
+                     split_body)
 
 from . import otel
 
@@ -86,10 +87,6 @@ _DELAY_MILLIS = 1000
 # host behind the same address, or break the request itself.
 _REFUSED_HEADERS = {"host", "connection", "content-length", "content-type", "transfer-encoding", "te", "upgrade",
                     "keep-alive", "proxy-authorization", "proxy-connection", "trailer"}
-# A span name that a destination below bodies gets: one word, or two, of
-# name characters, such as "chat gpt-4o". Any other name, such as a path or
-# an address, may hold text.
-_SPAN_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,200}( [A-Za-z0-9_.:-]{1,200})?")
 
 
 def _warn(message: str) -> None:
@@ -298,7 +295,7 @@ class Routes:
                     first = library not in self.refused
                     self.refused.add(library)
                 if first:
-                    self.telemetry.blocked("opentelemetry.span", library=_library(library) or library,
+                    self.telemetry.blocked("opentelemetry.span", library=(names or [library])[0],
                                            detail=f"a span from {library}, which the policy does not approve")
                 return
             # The evidence holds at least what any place gets: a span that
@@ -324,7 +321,7 @@ class Routes:
         links = [{"trace_id": format(link.context.trace_id, "032x"), "span_id": format(link.context.span_id, "016x"),
                   "attributes": dict(link.attributes or {})} for link in span.links]
         name = span.name
-        if not _SPAN_NAME.fullmatch(name or ""):
+        if not plain_span_name(name):
             body["span.name"], name = name, "<in the payload>"
         if span.status.description:
             body["status.description"] = span.status.description
@@ -457,31 +454,19 @@ def _place(url: str) -> str:
 
 
 def _names(library: str) -> list[str]:
-    # The names the policy may give a library: its scope name, and the
-    # distribution of the module of that name, as pydantic-ai-slim for pydantic-ai.
-    names = [library]
-    dist = _library(library)
-    if dist and dist not in names:
-        names.append(dist)
-    return names
+    # The names the policy may know a library by, as provevi's copy in MLflow
+    # decides them. They come only from an installed package that shows the
+    # scope, such as pydantic-ai-slim for pydantic_ai; a scope that none shows
+    # has no name, so the policy approves none of its spans.
+    return list(_span_libraries(library))
 
 
 @functools.cache
-def _library(scope: str) -> str | None:
-    # The whole dotted name: a namespace package, such as opentelemetry, has
-    # many distributions, and only the longest module path tells which. A
-    # scope that names no installed module, such as com.anthropic.sdk.python,
-    # has no distribution; its first part, com, would name nothing.
-    from importlib import metadata
-
-    from .telemetry import _distribution
-
-    module = scope.replace("-", "_")
-    try:
-        installed = module.split(".")[0] in metadata.packages_distributions()
-    except Exception:  # a broken install elsewhere
-        installed = True
-    return (_distribution(module) or None) if installed else None
+def _span_libraries(scope: str) -> tuple[str, ...]:
+    # span_libraries reads every installed package's metadata, which takes
+    # most of a second, and a run asks for each span. The packages do not
+    # change while the process runs.
+    return span_libraries(scope)
 
 
 class _Sent:
@@ -639,14 +624,21 @@ def _cut(span: Any, level: str):
     if level == "bodies":
         return span
     scope = span.instrumentation_scope
-    name = span.name if _SPAN_NAME.fullmatch(span.name or "") else getattr(scope, "name", None) or "span"
+    name = span.name if plain_span_name(span.name) else getattr(scope, "name", None) or "span"
     return ReadableSpan(name=name, context=span.context, parent=span.parent, resource=span.resource,
-                        attributes=attributes_for(dict(span.attributes or {}), level), events=(),
-                        links=[Link(link.context, attributes_for(dict(link.attributes or {}), level))
-                               for link in span.links],
+                        attributes=_plain(dict(span.attributes or {}), level), events=(),
+                        links=[Link(link.context, _plain(dict(link.attributes or {}), level)) for link in span.links],
                         kind=span.kind, status=Status(span.status.status_code),
                         start_time=span.start_time, end_time=span.end_time,
                         instrumentation_scope=InstrumentationScope(scope.name, scope.version) if scope else None)
+
+
+def _plain(attributes: dict, level: str) -> dict:
+    # The attributes at level, as provevi's copy in MLflow cuts them: below
+    # bodies, a text that passes as a name but holds a URL, a user and
+    # password, a setting or a path is left out.
+    return {k: v for k, v in attributes_for(attributes, level).items()
+            if not isinstance(v, (str, list, tuple)) or plain_name(v)}
 
 
 def _jsonable(value: Any) -> Any:
