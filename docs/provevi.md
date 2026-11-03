@@ -283,6 +283,14 @@ The store's assessments of the run and of its spans go onto the trace. Below `bo
 
 **A library's spans.** provrun writes the span of an approved library, such as PydanticAI, as a `span_recorded` event. The copy makes it a span of the trace, with its own name, times and status. It does so only if the policy lets that library feed the MLflow destination. Its names and usage come from the event. With `bodies`, its other attributes and its events come from the payload.
 
+**Which library made a span.** A span names its library only by its scope, a label that its code picks, such as `pydantic-ai`. `span_libraries(scope)` gives the names that the policy may know that library by. It never guesses, so a span it cannot place goes nowhere:
+
+- the scope's own name counts only if a library of that name is installed, because any code can call its scope `litellm`. A name with a dot, such as `pydantic.ai`, is a module path, so it does not count this way;
+- the library whose files hold the scope's module counts, such as `pydantic-ai-slim` for `pydantic_ai`. A made-up module, such as `pydantic_ai.evil`, is held by no library;
+- when Python cannot read what is installed, no name counts.
+
+`distribution_of(module)` gives one name for a report, such as the library that a blocked attempt came from. It guesses when it cannot tell, so it decides nothing that the policy approves.
+
 **What the copy guards.** Before it writes, the copy checks the run's chain, as `prove verify` does, and refuses a run that does not verify. A run ID must be letters, digits, `_`, `.` and `-`, because the copy searches MLflow for it.
 
 Some variables would send the copy somewhere the policy did not approve. The copy refuses to run while one is set. For a tracking server, these are `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY`, in either case. For Postgres, they are `PGHOST`, `PGHOSTADDR`, `PGPORT`, `PGDATABASE`, `PGSERVICE`, `PGSERVICEFILE`, `PGSYSCONFDIR`, `PGSSLMODE` and `PGREQUIRESSL`. For MySQL, they are `MYSQL_HOST`, `MYSQL_TCP_PORT`, `MYSQL_UNIX_PORT` and `MYSQL_PWD`.

@@ -59,8 +59,8 @@ from .checks import verify
 from .errors import ProveviError
 from .events import EvidenceEvent, sha256_bytes
 from .store import EvidenceStore, FileStore
-from .telemetry import TelemetryPolicy, attributes_for, distribution_of, normal_endpoint, plain_name, \
-    plain_span_name
+from .telemetry import TelemetryPolicy, attributes_for, normal_endpoint, plain_name, plain_span_name, \
+    span_libraries
 
 #: The MLflow minor release that the copy is tested against.
 MLFLOW_TESTED = "3.17"
@@ -186,11 +186,9 @@ def copy_run(store: EvidenceStore, run_id: str, policy: TelemetryPolicy, *,
 
 def _feeds(policy: TelemetryPolicy, library: Any, destination: str) -> bool:
     """Whether the policy lets the library of a span feed the destination,
-    by the span's scope name or by the distribution of that module, as
-    provrun decides where to send the span."""
-    if not isinstance(library, str) or not library:
-        return False
-    names = {library, distribution_of(library.replace("-", "_"))} - {None}
+    by the names that ``span_libraries`` gives its scope, as provrun decides
+    where to send the span."""
+    names = span_libraries(library) if isinstance(library, str) else ()
     return any(d.name == destination for n in names for d in policy.destinations_for(n))
 
 

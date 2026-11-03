@@ -141,9 +141,11 @@ def attributes_for(attributes: Mapping[str, Any], level: str) -> dict[str, Any]:
 
 def distribution_of(module: str) -> str | None:
     """The distribution that installed module, the name pip knows it by, such
-    as opentelemetry-sdk for opentelemetry.sdk.trace. A module that no
-    distribution installed gives its own top name, as a program may name its
-    own; an empty name gives None."""
+    as opentelemetry-sdk for opentelemetry.sdk.trace, to name a library in a
+    report. When it cannot tell, it guesses: a module that no distribution
+    installed gives its own top name, as a program may name its own. An empty
+    name gives None. To decide what the policy approves, use
+    ``span_libraries``, which does not guess."""
     top = module.split(".")[0]
     if not top:
         return None
@@ -151,7 +153,15 @@ def distribution_of(module: str) -> str | None:
         names = metadata.packages_distributions().get(top, [])
     except Exception:  # a broken install elsewhere; the module still has a name
         return top
-    if len(names) == 1:
+    return _installed_by(module, names) or (names[0] if names else top)
+
+
+def _installed_by(module: str, names: list[str], *, strict: bool = False) -> str | None:
+    """Which of names, the distributions that ship module's top package,
+    installed module, or None if none of them can be shown to. strict asks
+    that the distribution's files hold module itself, not only a package
+    above it, as pydantic_ai holds no module pydantic_ai.evil."""
+    if len(names) == 1 and not strict:
         return names[0]
     # A namespace package, such as opentelemetry, comes from many
     # distributions. The one whose files hold the longest part of the module's
@@ -163,12 +173,41 @@ def distribution_of(module: str) -> str | None:
             held[name] = {str(f).replace("\\", "/") for f in metadata.files(name) or ()}
         except Exception:  # a broken install names no files
             held[name] = set()
-    for n in range(len(parts), 0, -1):
+    for n in range(len(parts), len(parts) - 1 if strict else 0, -1):
         stem = "/".join(parts[:n])
         for name in names:
             if f"{stem}.py" in held[name] or f"{stem}/__init__.py" in held[name]:
                 return name
-    return names[0] if names else top
+    return None
+
+
+def span_libraries(scope: str) -> tuple[str, ...]:
+    """The names that the policy may know the library of a span by, from the
+    span's scope name, such as pydantic_ai. It gives the scope name only if
+    a distribution of that name is installed and the name has no dot, and
+    the distribution whose files hold the scope's module. It does not
+    guess: a scope whose module no installed distribution holds, or any
+    scope when the installed packages cannot be read, gives no name, so the
+    policy approves none of its spans."""
+    if not isinstance(scope, str) or not scope:
+        return ()
+    module = scope.replace("-", "_")
+    try:
+        shipped = metadata.packages_distributions()
+    except Exception:  # a broken install: nothing can be shown
+        return ()
+    found = []
+    # A dotted scope is a module path; pydantic.ai would else find the
+    # distribution pydantic-ai, as its lookup reads . as -.
+    if "." not in scope:
+        try:
+            found.append(canonicalize_name(metadata.distribution(scope).metadata["Name"]))
+        except Exception:  # no distribution of that name
+            pass
+    dist = _installed_by(module, shipped.get(module.split(".")[0], []), strict=True)
+    if dist is not None and canonicalize_name(dist) not in found:
+        found.append(canonicalize_name(dist))
+    return tuple(found)
 
 
 # What a plain name may not hold: a URL, a user and password, a setting such

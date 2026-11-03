@@ -575,3 +575,48 @@ def test_narrowing_refuses_a_destination_it_names_on_a_host_it_cuts(section):
                                                                  "endpoint": "https://mlflow.example"}}})
     with pytest.raises(ProveviError, match="'srv' sends to a host that the section cuts"):
         policy.narrow(section)
+
+
+@pytest.mark.parametrize("scope, names", [("pydantic-ai", ("pydantic-ai", "pydantic-ai-slim")),
+                                          ("opentelemetry.sdk.trace", ("opentelemetry-sdk",)),
+                                          ("litellm", ("litellm",)), ("", ())])
+def test_a_span_scope_names_the_libraries_that_installed_it(scope, names):
+    from provevi import span_libraries
+
+    assert span_libraries(scope) == names
+
+
+def test_a_scope_that_copies_a_name_counts_only_if_that_library_is_installed():
+    # Gap 1: any code can call its scope litellm.
+    from provevi import span_libraries
+
+    assert span_libraries("not-installed-anywhere") == ()
+
+
+def test_a_namespace_scope_that_no_distribution_ships_names_no_library():
+    # Gap 2: distribution_of guesses the first opentelemetry distribution; the policy must not.
+    from provevi import distribution_of, span_libraries
+
+    assert distribution_of("opentelemetry.instrumentation.nothere") is not None
+    assert span_libraries("opentelemetry.instrumentation.nothere") == ()
+
+
+def test_no_scope_names_a_library_when_the_installed_packages_cannot_be_read(monkeypatch):
+    # Gap 3: distribution_of falls back to the first part of the name.
+    from importlib import metadata
+
+    from provevi import span_libraries
+
+    def broken():
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(metadata, "packages_distributions", broken)
+    assert span_libraries("litellm") == ()
+
+
+
+@pytest.mark.parametrize("scope", ["pydantic_ai.evil", "mlflow.evil.x", "pydantic.ai", "opentelemetry.sdk.evil"])
+def test_a_scope_whose_module_no_library_holds_names_no_library(scope):
+    from provevi import span_libraries
+
+    assert span_libraries(scope) == ()
