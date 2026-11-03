@@ -171,7 +171,9 @@ An attribute that provevi does not know counts as a body, so a new attribute nev
 
 provevi also checks each value. A `names` attribute must hold one word of at most 200 characters, with no space. A `usage` attribute must hold numbers. Any other value counts as a body, because it may hold text from a prompt. `attributes_for(attributes, level)` gives what a destination receives. `split_body(attributes)` takes the bodies out of a span's attributes, so that the evidence keeps them in a payload, not in the event.
 
-A secret or a path can pass the test of a name, such as `https://user:password@host` or `token=x`. `plain_name(value)` is stricter. It refuses a URL, a user and password, a setting with `=` and a path from `/`. It also refuses a name such as `ns:model@tag`, which looks like `user:password@host`. A number and a yes or no are plain.
+A secret or a path can pass the test of a name, such as `https://user:password@host` or `token=x`. `plain_name(value)` is stricter. It refuses a URL, and a user and password in either order, such as `user:password@host` or `user@host:password`. It refuses a setting with `=`, a path from `/`, and a `.` or `..` segment.
+
+`plain_name` also refuses a common API key or token, by its start and the run of characters after it. Examples are `sk-…` keys, Stripe's `sk_live_…`, GitHub's `ghp_…`, Slack's `xoxb-…`, AWS's `AKIA…`, Hugging Face's `hf_…` and JSON web tokens, `eyJ…`. A name such as `hf_transfer` or `sk-learn` is too short to be a key, so it stays plain. A shape test cannot catch every secret, so a secret written as a plain word still passes. It also refuses a name such as `ns:model@tag`, which looks like `user:password@host`. A number and a yes or no are plain.
 
 `plain_span_name(name)` takes one or two plain words, such as `chat gpt-4o`. The copy in MLflow uses both below `bodies`, and so do provrun's senders.
 
@@ -288,6 +290,8 @@ The store's assessments of the run and of its spans go onto the trace. Below `bo
 - the scope's own name counts only if a library of that name is installed, because any code can call its scope `litellm`. A name with a dot, such as `pydantic.ai`, is a module path, so it does not count this way;
 - the library whose files hold the scope's module counts, such as `pydantic-ai-slim` for `pydantic_ai`. A made-up module, such as `pydantic_ai.evil`, is held by no library;
 - when Python cannot read what is installed, no name counts.
+
+`span_libraries` reads the installed packages once in a process, because reading them takes most of a second. It does not see a library that is installed or removed after that. `distribution_of` reads them on each call.
 
 `distribution_of(module)` gives one name for a report, such as the library that a blocked attempt came from. It guesses when it cannot tell, so it decides nothing that the policy approves.
 
