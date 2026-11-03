@@ -234,3 +234,16 @@ def test_stop_stops_the_tour_that_started_after_tour_dir_changes(tmp_path):
     assert done.returncode == 0, done.stderr
     assert done.stdout == ""
     assert not tour_dir.exists()
+
+
+@pytest.mark.parametrize("shell", ["bash", "zsh", "/bin/bash"])
+@pytest.mark.parametrize("set_e", ["", "set -e; "])
+def test_a_refused_start_returns_to_the_caller(tmp_path, shell, set_e):
+    # bash 3.2, the /bin/bash of macOS, exited the caller on (exit N), even
+    # after ||; a newer bash and zsh did not.
+    if shutil.which(shell) is None:
+        pytest.skip(f"no {shell}")
+    env = {**_env(tmp_path / "t"), "TOUR_S3_PORT": "abc"}
+    done = subprocess.run([shell, "-c", set_e + 'source tours/provcat/start.sh || echo "rc=$?"; echo after'], cwd=ROOT,
+                          env=env, capture_output=True, text=True, timeout=60)
+    assert done.stdout.splitlines() == ["rc=1", "after"], done.stderr

@@ -59,7 +59,8 @@ from .checks import verify
 from .errors import ProveviError
 from .events import EvidenceEvent, sha256_bytes
 from .store import EvidenceStore, FileStore
-from .telemetry import TelemetryPolicy, _is_name, attributes_for, distribution_of, normal_endpoint
+from .telemetry import TelemetryPolicy, attributes_for, distribution_of, normal_endpoint, plain_name, \
+    plain_span_name
 
 #: The MLflow minor release that the copy is tested against.
 MLFLOW_TESTED = "3.17"
@@ -331,30 +332,10 @@ def _ns(time: str) -> int:
     return (delta.days * 86_400 + delta.seconds) * 1_000_000_000 + delta.microseconds * 1_000
 
 
-# What a name may not hold in the copy: a URL, a user and password, a
-# setting such as token=..., or a path from the root.
-_NOT_A_NAME = re.compile(r"://|^[^/@]*:[^/@]*@|=|^/")
-
-
-# A library span's name below bodies, by provrun's rule: one word, or two,
-# such as "chat gpt-4o".
-_SPAN_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,200}( [A-Za-z0-9_.:-]{1,200})?")
-
-
-def _name(value: Any) -> bool:
-    """A name, as the policy's levels say, that holds no URL, no password,
-    no setting and no path from the root, as a secret or a path could pass
-    the policy's test of a name."""
-    if not _is_name(value):
-        return False
-    texts = [value] if isinstance(value, str) else value if isinstance(value, (list, tuple)) else []
-    return not any(_NOT_A_NAME.search(t) for t in texts)
-
-
 def _keep(value: Any, level: str) -> bool:
     """Whether a value of the run, such as a tag or a param, goes into a copy
     at level. A name goes in at every level; anything else only with bodies."""
-    return level == "bodies" or _name(value)
+    return level == "bodies" or plain_name(value)
 
 
 def _write(client, events: list[EvidenceEvent], record, level: str, sqlite_file: Path | None) -> dict:
@@ -362,7 +343,7 @@ def _write(client, events: list[EvidenceEvent], record, level: str, sqlite_file:
     data = created.data
     # Each part of the experiment's name goes in below bodies only if it is a
     # name, as an agent's name may be any text.
-    experiment = "/".join(str(data.get(k, "")) if level == "bodies" or _name(data.get(k)) else k
+    experiment = "/".join(str(data.get(k, "")) if level == "bodies" or plain_name(data.get(k)) else k
                           for k in ("org", "domain", "env", "agent"))
     exp = client.get_experiment_by_name(experiment)
     if exp is None:
@@ -481,7 +462,7 @@ def _dataset(event: EvidenceEvent, Dataset, level: str):
     sha = str(event.data.get("sha256") or "")
     pinned = event.refs[1] if len(event.refs) > 1 else event.refs[0]
     name = str(event.data.get("name") or event.refs[0].rsplit("/", 1)[-1])
-    if level != "bodies" and not _name(name):
+    if level != "bodies" and not plain_name(name):
         name = "input"
     source = {"sha256": sha}
     if level == "bodies":
@@ -584,7 +565,7 @@ def _write_assessments(client, trace_id: str, record, events: list[EvidenceEvent
     for row in rows:
         if row["target_kind"] == "span" and row["target_id"] not in spans:
             continue
-        if level != "bodies" and not _name(row["name"]):
+        if level != "bodies" and not plain_name(row["name"]):
             continue  # an assessment's name is all that marks it, so one that is not a name stays out
         try:
             value = json.loads(row["value"]) if row["value"] is not None else None
@@ -593,7 +574,7 @@ def _write_assessments(client, trace_id: str, record, events: list[EvidenceEvent
         if level != "bodies" and not _value_shown(value, level):
             value = None
         who = str(row["created_by"] or "provevi")
-        if level != "bodies" and not _name(who):
+        if level != "bodies" and not plain_name(who):
             who = "provevi"
         source = str(row["source"] or "").upper()
         feedback = Feedback(name=row["name"], value=value,
@@ -610,7 +591,7 @@ def _write_assessments(client, trace_id: str, record, events: list[EvidenceEvent
 def _value_shown(value: Any, level: str) -> bool:
     """Whether an assessment's value goes in below bodies: a word or a yes or
     no at every level, and a number from usage up, as a score is a number."""
-    if isinstance(value, bool) or (isinstance(value, str) and _name(value)):
+    if isinstance(value, bool) or (isinstance(value, str) and plain_name(value)):
         return True
     return level == "usage" and isinstance(value, (int, float)) and value == value and abs(value) != float("inf")
 
@@ -635,7 +616,7 @@ def _library_proto(trace: str, e: EvidenceEvent, record, level: str):
     attrs = dict(data.get("attributes") or {})
     attrs.update({"provrun.run_id": e.run_id, "provrun.library": data.get("library")})
     name = str(data.get("name") or "span")
-    if level != "bodies" and not (_SPAN_NAME.fullmatch(name) and all(_name(w) for w in name.split(" "))):
+    if level != "bodies" and not (plain_span_name(name)):
         name = "span"
     body = _payload(record, e.payload) if level == "bodies" else None
     span_events = []
@@ -681,7 +662,7 @@ def _proto(trace: str, span: str, parent: str | None, name: str, start: int, end
         p.parent_span_id = bytes.fromhex(parent)
     kept = {k: v for k, v in attrs.items() if v is not None}
     for k, v in attributes_for(kept, level).items():
-        if level != "bodies" and isinstance(v, (str, list, tuple)) and not _name(v):
+        if level != "bodies" and isinstance(v, (str, list, tuple)) and not plain_name(v):
             continue  # a value that the policy calls a name, but holds a URL, a setting or a path
         p.attributes.append(KeyValue(key=k, value=value(v)))
     for e in span_events:
