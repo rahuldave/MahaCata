@@ -545,12 +545,38 @@ def test_an_unknown_otlp_protocol_is_refused():
                                          ("https://u:secret@h.example/v1", False), ("u:secret@h.example", False),
                                          ("ns:model@tag", False), ("token=abc", False), ("/home/someone/x", False),
                                          ("user@host:pw", False), ("../etc/passwd", False), ("a/./b", False),
-                                         ("gpt-4.1", True),
+                                         ("gpt-4.1", True), ("tmp/a/b", False), ("a//b", False),
+                                         ("org/model", True), ("openrouter/meta-llama/llama-3-70b", False),
                                          (["a", "https://h.example/x"], False), ("two words", False), ({}, False), ([], False), (True, True)])
 def test_a_plain_name_holds_no_url_password_setting_or_path(value, plain):
     from provevi import plain_name
 
     assert plain_name(value) is plain
+
+
+def test_a_declared_name_may_have_more_than_one_slash_and_nothing_else():
+    from provevi import plain_name
+
+    model = "openrouter/meta-llama/llama-3-70b"
+    assert plain_name(model, declared=[model]) is True
+    assert plain_name([model, "tmp/a/b"], declared=[model]) is False
+    assert plain_name("https://h.example/a/b", declared=["https://h.example/a/b"]) is False
+    assert plain_name("a/../b/c", declared=["a/../b/c"]) is False
+    with pytest.raises(TypeError):
+        plain_name("r/meta-llama/l", declared=model)
+
+
+@pytest.mark.parametrize("key, value, plain", [
+    ("gen_ai.request.model", "openrouter/meta-llama/llama-3-70b", True),
+    ("gen_ai.response.model", "accounts/fireworks/models/llama-v3p1-70b-instruct", True),
+    ("model", "bedrock/arn:aws:bedrock:us-east-1:1:inference-profile/us.anthropic.x", True),
+    ("mlflow.llm.model", "projects/p/locations/us/publishers/google/models/gemini", True),
+    ("gen_ai.request.model", "https://h.example/a/b", False), ("gen_ai.request.model", "token=x", False),
+    ("gen_ai.system", "tmp/a/b", False), ("gen_ai.tool.name", "org/tool", True)])
+def test_a_model_s_name_may_have_more_than_one_slash(key, value, plain):
+    from provevi import plain_attribute
+
+    assert plain_attribute(key, value) is plain
 
 
 @pytest.mark.parametrize("name, plain", [("agent run", True), ("chat gpt-4o", True), ("one", True),

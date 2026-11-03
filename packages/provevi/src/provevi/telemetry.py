@@ -41,7 +41,7 @@ import re
 from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Collection, Mapping
 from urllib.parse import urlsplit
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
@@ -249,19 +249,39 @@ _KEY = re.compile(r"(^|[^A-Za-z0-9])(sk-[A-Za-z0-9_-]{16,}|[srp]k_(live|test)_[A
 _SPAN_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,200}( [A-Za-z0-9_.:-]{1,200})?")
 
 
-def plain_name(value: Any) -> bool:
+def plain_name(value: Any, *, declared: Collection[str] = ()) -> bool:
     """True if value is a name, as the levels say, that holds no URL, no user
-    and password, no setting such as ``token=x``, no path from ``/`` and no
-    ``.`` or ``..`` segment, and none that starts like a common API key, such
-    as ``sk-`` or ``ghp_``. A
+    and password, no setting such as ``token=x``, no path from ``/``, no
+    ``.`` or ``..`` segment and no more than one ``/``, and none that starts
+    like a common API key, such as ``sk-`` or ``ghp_``. A
     secret or a path can pass the levels' test of a name, so a place below
     bodies should get only plain names. A name such as ``ns:model@tag`` looks
     like ``user:password@host``, so it is not plain. A number and a yes or no
-    are plain, as they are names; an empty list is not."""
+    are plain, as they are names; an empty list is not.
+
+    ``org/model`` is plain, and ``tmp/a/b`` is not. A model name such as
+    ``openrouter/meta-llama/llama-3-70b`` has two ``/`` too, so a text in
+    declared may have more. It must pass every other test."""
+    if isinstance(declared, str):
+        raise TypeError("declared must be a list of texts, not one text")
     if not _is_name(value) or (isinstance(value, (list, tuple)) and not value):
         return False
     texts = [value] if isinstance(value, str) else list(value) if isinstance(value, (list, tuple)) else []
-    return not any(_NOT_PLAIN.search(t) or _KEY.search(t) for t in texts)
+    return not any(_NOT_PLAIN.search(t) or _KEY.search(t) or (t.count("/") > 1 and t not in declared)
+                   for t in texts)
+
+
+#: The keys whose value is a model's name, which may have more than one ``/``.
+MODEL_KEYS = frozenset({"model", "gen_ai.request.model", "gen_ai.response.model", "mlflow.llm.model"})
+
+
+def plain_attribute(key: str, value: Any) -> bool:
+    """True if value is a plain name for key. A model's name, under one of
+    MODEL_KEYS, may have more than one ``/``, as
+    ``openrouter/meta-llama/llama-3-70b`` or a Vertex model's path has. Any
+    other value is a plain name as plain_name says."""
+    declared = [value] if key in MODEL_KEYS and isinstance(value, str) else []
+    return plain_name(value, declared=declared)
 
 
 def plain_span_name(name: Any) -> bool:

@@ -32,12 +32,12 @@ def no_mlflow_variables(monkeypatch):
         monkeypatch.delenv(key)
 
 
-def events_of(run_id, *, spans=True, failed=False):
+def events_of(run_id, *, spans=True, failed=False, model="openai/gpt-4o-mini"):
     """A run as provrun writes it: (type, component, refs, data, payload, seconds)."""
     run_uri = f"run://acme/demo/dev/{run_id}"
     ids = (lambda span, start: {"trace_id": TRACE, "span_id": span, "parent_span_id": ROOT,
                                 "started_at": f"2026-11-02T00:00:{start:02}.000000Z"}) if spans else (lambda *a: {})
-    spec = {"name": "q", "backend": "litellm", "model": "openai/gpt-4o-mini", "tools": [], "limits": {"steps": 3},
+    spec = {"name": "q", "backend": "litellm", "model": model, "tools": [], "limits": {"steps": 3},
             "settings": {"temperature": 0}}
     created = {"org": "acme", "domain": "demo", "env": "dev", "mode": "strict", "agent": "q", "backend": "litellm",
                "spec": spec}
@@ -50,7 +50,7 @@ def events_of(run_id, *, spans=True, failed=False):
         ("input_staged", "Stager", [DOC, PINNED], {"sha256": SHA, "agent_path": "/input/report.txt",
                                                     "name": "report.txt", **ids(STAGE, 1)}, None, 2),
         ("prompt_rendered", "Backend", [DOC], {"messages": 2}, b'[{"role": "user", "content": "the prompt"}]', 3),
-        ("model_called", "Backend", [], {"model": "openai/gpt-4o-mini", "input_tokens": 10, "output_tokens": 20,
+        ("model_called", "Backend", [], {"model": model, "input_tokens": 10, "output_tokens": 20,
                                          "finish_reason": "stop", **ids(MODEL, 3)},
          json.dumps({"request": [{"role": "user", "content": "the prompt"}], "response": "42"}).encode(), 5),
     ]
@@ -498,7 +498,7 @@ def test_the_copy_puts_the_variables_back_and_writes_nothing_here(store, tmp_pat
 LIB = "c0ffee00c0ffee00"
 
 
-def run_with_a_library_span(tmp_path, library="pydantic-ai"):
+def run_with_a_library_span(tmp_path, library="pydantic-ai", attributes=None):
     s = SqliteStore(tmp_path / "e.db")
     folder = tmp_path / "runs" / RUN
     (folder / "output").mkdir(parents=True)
@@ -506,7 +506,7 @@ def run_with_a_library_span(tmp_path, library="pydantic-ai"):
     events = events_of(RUN)
     span = {"name": "agent run", "library": library, "trace_id": TRACE, "span_id": LIB, "parent_span_id": MODEL,
             "start_time": 1793577603_100_000_000, "end_time": 1793577604_000_000_000, "status": "ERROR",
-            "attributes": {"gen_ai.request.model": "gpt-4o-mini", "gen_ai.usage.input_tokens": 7}}
+            "attributes": attributes or {"gen_ai.request.model": "gpt-4o-mini", "gen_ai.usage.input_tokens": 7}}
     body = {"attributes": {"gen_ai.prompt": "the secret prompt"},
             "events": [{"name": "retry", "timestamp": 1793577603_500_000_000, "attributes": {"why": "slow"}}],
             "links": []}
@@ -580,7 +580,7 @@ def test_a_library_span_stays_out_when_the_policy_does_not_let_it_feed_the_place
                                          ("https://u:secret@h.example/v1", False), ("u:secret@h.example", False),
                                          ("token=abc", False), ("/home/someone/agent.py", False),
                                          ("ns:model@tag", False), ("bedrock/arn:aws:bedrock:us-east-1:1:x", True),
-                                         (["a", "https://h.example/x"], False)])
+                                         ("tmp/a/b", False), (["a", "https://h.example/x"], False)])
 def test_below_bodies_a_name_holds_no_url_password_setting_or_path(value, kept):
     import provevi.mlflow_copy as m
 
@@ -657,6 +657,7 @@ def test_a_copy_through_a_tracking_server(store, tmp_path):
         assert trace.info.trace_id == f"tr-{TRACE}" and trace.info.tags[RUN_TAG] == RUN
         assert {s.name for s in trace.data.spans} == {"run", "input_staged", "model_called"}
         assert client.get_run(copy.mlflow_run_id).data.metrics["output_tokens"] == 20
+        assert "provevi.copy.unfinished" not in client.get_run(copy.mlflow_run_id).data.tags
     finally:
         server.terminate()
         server.wait(timeout=30)
@@ -705,3 +706,103 @@ def test_the_redirect_check_reads_the_variables_it_is_given(monkeypatch):
     refuse_redirects("sqlite:///tmp/m.db", {"HTTPS_PROXY": "http://proxy.example:3128", "PGHOST": "db"})
     with pytest.raises(ProveviError, match="PGHOST"):
         refuse_redirects("postgresql://db.example/m", {"PGHOST": "elsewhere"})
+
+
+def test_below_bodies_the_run_s_own_model_may_have_two_slashes(tmp_path):
+    model = "openrouter/meta-llama/llama-3-70b"
+    s = SqliteStore(tmp_path / "evidence.db")
+    write_run(s, tmp_path / "runs", model=model)
+    copy = copy_run(s, RUN, own("names"), environ={})
+    run, _, spans = read_copy(client_of(s), copy)
+    assert run.data.params["model"] == model
+    assert spans["model_called"].attributes["gen_ai.request.model"] == model
+
+
+def test_below_bodies_a_library_span_keeps_a_model_with_slashes_but_not_a_path(tmp_path):
+    vertex = "projects/p/locations/us/publishers/google/models/gemini"
+    s = run_with_a_library_span(tmp_path, attributes={"gen_ai.request.model": "openrouter/meta-llama/llama-3-70b",
+                                                      "gen_ai.response.model": vertex, "gen_ai.system": "tmp/a/b"})
+    copy = copy_run(s, RUN, feeding("names"), environ={})
+    lib = read_copy(client_of(s), copy)[2]["agent run"].attributes
+    assert lib["gen_ai.request.model"] == "openrouter/meta-llama/llama-3-70b"
+    assert lib["gen_ai.response.model"] == vertex
+    assert "gen_ai.system" not in lib
+
+
+def test_a_whole_copy_has_no_unfinished_tag(store):
+    import provevi.mlflow_copy as m
+
+    copy = copy_run(store, RUN, own(), environ={})
+    run = client_of(store).get_run(copy.mlflow_run_id)
+    assert m.UNFINISHED_TAG not in run.data.tags and run.info.status == "FINISHED"
+
+
+def test_a_copy_stopped_part_way_is_marked_unfinished_and_a_new_copy_replaces_it(store, monkeypatch):
+    import provevi.mlflow_copy as m
+
+    # A copy that provrun kills runs no clean-up, as if _remove did nothing.
+    def killed(*a, **kw):
+        raise RuntimeError("killed")
+
+    monkeypatch.setattr(m, "_write_trace", killed)
+    monkeypatch.setattr(m, "_remove", lambda *a, **kw: None)
+    with pytest.raises(ProveviError):
+        copy_run(store, RUN, own(), environ={})
+    client = client_of(store)
+    (left,) = client.search_runs([e.experiment_id for e in client.search_experiments()])
+    assert left.data.tags[m.UNFINISHED_TAG] == "true" and left.info.status == "RUNNING"
+
+    monkeypatch.undo()
+    copy = copy_run(store, RUN, own(), environ={})
+    assert copy.replaced == [left.info.run_id]
+    (run,) = client.search_runs([e.experiment_id for e in client.search_experiments()])
+    assert run.info.run_id == copy.mlflow_run_id and m.UNFINISHED_TAG not in run.data.tags
+
+
+def test_a_trace_that_a_killed_copy_did_not_link_is_deleted_by_the_next_copy(store, monkeypatch):
+    import provevi.mlflow_copy as m
+
+    real = m._read_back
+
+    def killed(client, trace_id, n, **kw):
+        real(client, trace_id, n, **kw)
+        raise RuntimeError("killed")  # after the spans are written, before the trace is linked
+
+    monkeypatch.setattr(m, "_read_back", killed)
+    monkeypatch.setattr(m, "_remove", lambda *a, **kw: None)
+    with pytest.raises(ProveviError):
+        copy_run(store, RUN, own(), environ={})
+    monkeypatch.undo()
+    real_delete = m._delete_earlier
+    after = {}
+
+    def deleting(client, experiment_id, run_id, trace_id=None):
+        out = real_delete(client, experiment_id, run_id, trace_id)
+        after["traces"] = client.search_traces(locations=[experiment_id])
+        return out
+
+    monkeypatch.setattr(m, "_delete_earlier", deleting)
+    copy_run(store, RUN, own(), environ={})
+    assert after["traces"] == []
+
+
+def test_the_next_copy_leaves_a_trace_of_the_same_id_that_is_not_a_copy_of_the_run(store, monkeypatch):
+    import provevi.mlflow_copy as m
+
+    real = m._read_back
+
+    def killed(client, trace_id, n, **kw):
+        real(client, trace_id, n, **kw)
+        raise RuntimeError("killed")
+
+    monkeypatch.setattr(m, "_read_back", killed)
+    monkeypatch.setattr(m, "_remove", lambda *a, **kw: None)
+    with pytest.raises(ProveviError):
+        copy_run(store, RUN, own(), environ={})
+    monkeypatch.undo()
+    client = client_of(store)
+    (exp,) = [e for e in client.search_experiments() if e.name != "Default"]
+    m._delete_earlier(client, exp.experiment_id, "run-other", f"tr-{TRACE}")
+    assert client.get_trace(f"tr-{TRACE}") is not None
+    m._delete_earlier(client, exp.experiment_id, RUN, f"tr-{TRACE}")
+    assert client.search_traces(locations=[exp.experiment_id]) == []
