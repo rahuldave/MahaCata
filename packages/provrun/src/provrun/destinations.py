@@ -39,7 +39,6 @@ run, whose evidence is closed by then.
 from __future__ import annotations
 
 import base64
-import functools
 import json
 import pickle
 import re
@@ -458,15 +457,8 @@ def _names(library: str) -> list[str]:
     # decides them. They come only from an installed package that shows the
     # scope, such as pydantic-ai-slim for pydantic_ai; a scope that none shows
     # has no name, so the policy approves none of its spans.
-    return list(_span_libraries(library))
-
-
-@functools.cache
-def _span_libraries(scope: str) -> tuple[str, ...]:
-    # span_libraries reads every installed package's metadata, which takes
-    # most of a second, and a run asks for each span. The packages do not
-    # change while the process runs.
-    return span_libraries(scope)
+    # provevi caches it, as reading the installed packages takes most of a second.
+    return list(span_libraries(library))
 
 
 class _Sent:
