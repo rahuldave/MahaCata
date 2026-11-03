@@ -2075,6 +2075,7 @@ dev = [
     { name = "moto", extra = ["server"] },
     { name = "psycopg", extra = ["binary"] },
     { name = "pytest" },
+    { name = "smalldocs" },
 ]
 docs = [
     { name = "smalldocs" },
@@ -2101,6 +2102,7 @@ dev = [
     { name = "moto", extras = ["server"], specifier = ">=5.2.4" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pytest", specifier = ">=9.1.1" },
+    { name = "smalldocs", specifier = ">=0.5.4" },
 ]
 docs = [{ name = "smalldocs", specifier = ">=0.5.4" }]
 system = [

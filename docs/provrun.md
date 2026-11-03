@@ -93,6 +93,10 @@ On macOS `/tmp` is a link to `/private/tmp`, and `find_run` gives the real path.
 | `read_events(folder)` | The events in the evidence folder of a run, as `provr show` prints them. |
 | `run_agent(agent, catalog=..., org=..., ...)` | Runs an agent spec with the run settings given one by one. |
 
+`run_file` can run inside a server's event loop, such as FastAPI's, and several runs can go at once. A run does its slow plain-Python steps in threads. These steps fetch and stage the inputs, check them, collect the outputs, seal the run, send the last spans and copy the run into MLflow. So the server goes on answering other requests meanwhile. Two quick steps stay on the loop. One opens the run, making its folder and writing its first event, and the other is the end scan for patches.
+
+A cancel waits for the step in hand to end. Then the run ends with `run_failed`, whose error is `CancelledError`, and the cancel goes on to the caller. A cancel that comes while the run is being sealed waits for the seal. That run keeps the `run_completed` or `run_failed` it was given, and then the cancel goes on to the caller.
+
 A run checks its settings before it makes the run folder. Each of these raises `RunSettingError` and leaves no folder behind:
 
 - a mode that is not `strict` or `lenient`;
@@ -375,7 +379,7 @@ provrun sends OTLP over HTTP itself, with protobuf. Its sender reads no variable
 
 provrun sends the spans in batches while the run goes on. It sends the rest when the run ends, after the run's own span has ended, to all places at once.
 
-The run's end waits up to about ten seconds in all, however many places there are, and holds up the event loop while it waits. The `OTEL_BSP_*` variables do not change the batches. A request that started before the run's end, and a gRPC call, keep their own timeout, from `OTEL_EXPORTER_OTLP_TIMEOUT`. A place that cannot be reached gives a warning with the number of spans lost. The run does not fail, and its evidence does not record the loss, because the evidence is closed by then.
+The run's end waits up to about ten seconds in all, however many places there are. It waits in a thread, so the event loop goes on. The `OTEL_BSP_*` variables do not change the batches. A request that started before the run's end, and a gRPC call, keep their own timeout, from `OTEL_EXPORTER_OTLP_TIMEOUT`. A place that cannot be reached gives a warning with the number of spans lost. The run does not fail, and its evidence does not record the loss, because the evidence is closed by then.
 
 ### Copy a sealed run into MLflow
 

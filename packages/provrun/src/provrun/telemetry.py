@@ -698,9 +698,11 @@ class Telemetry:
         return t
 
     @contextmanager
-    def applied(self, store: Any = None) -> Iterator[Telemetry]:
+    def applied(self, store: Any = None, *, close: bool = True) -> Iterator[Telemetry]:
         """Set the environment and the providers for the length of the run.
-        store is the run's evidence store, None for the file store."""
+        store is the run's evidence store, None for the file store. With
+        close False, the caller closes ``routes`` itself, as the runner does
+        in a thread, because sending the last spans can take seconds."""
         try:
             _enter_environment(self)
             p = providers()
@@ -727,7 +729,7 @@ class Telemetry:
             yield self
         finally:
             try:
-                if self.routes is not None:
+                if close and self.routes is not None:
                     self.routes.close()  # after the run's root span has ended, so it is sent too
             finally:
                 _leave_environment(self)
