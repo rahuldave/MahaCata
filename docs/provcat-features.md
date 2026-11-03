@@ -165,10 +165,10 @@ A file in a bucket with versioning on becomes its version ID, which S3 gives eac
 
 ```
 $ uv run provc pin files://sales/orders/day1.csv
-tour-s3://tour-sales/main/orders/day1.csv?at=version:549fce9b-7d43-4d2d-9dfd-b6badd667f35
+tour-s3://tour-sales/main/orders/day1.csv?at=version:09adc054-a05a-4659-b76a-b5e8306feeec
 
 $ uv run provc pin files://sales/orders
-tour-s3://tour-sales/main/orders?at=commit:819ea816ccdbf97b0575420fc1a72626cd47bbc14c6eba9820ef59fa6fb7de12
+tour-s3://tour-sales/main/orders?at=commit:0537ea725a5756b72794cdfdcb4a8f2ae9ab7932a133b8a2e3351f4e8c3973ac
 ```
 
 A lakeFS branch becomes a commit, which lakeFS keeps in the path:
@@ -186,6 +186,27 @@ lakefs-acme://acme-data-sales/66e31b0b4f4106b90daacf5a46a349884414697fc9ef3f190b
 | `ts:TIME` | The commit that the branch had at TIME, on lakeFS, GitHub and Hugging Face. |
 
 On a bucket scheme, such as `files`, a logical URI takes `branch:`, `commit:` and `version:`. A branch goes in the path. A commit or a version goes on to the physical URI as `?at=`, on the default branch of the scheme. provcat refuses `tag:`, because a bucket has no tags. It passes `ts:` on to the bucket, which refuses it. A commit made on another branch reads only through its physical URI, which `provc commit` prints.
+
+In [the tour](tour.md), the last line of `day1.csv` goes from `2,west,12` to `2,west,15` after the folder's commit. `$ID` holds the commit, and `$VERSION` takes the version ID that `pin` prints. The name then reads the version, which is the file as it is now, and the commit, which is the file as it was. It refuses a tag:
+
+```
+$ ID=0537ea725a5756b72794cdfdcb4a8f2ae9ab7932a133b8a2e3351f4e8c3973ac
+
+$ VERSION=$(uv run provc pin files://sales/orders/day1.csv); VERSION=${VERSION#*version:}
+
+$ uv run provc cat "files://sales/orders/day1.csv?at=version:$VERSION"
+order,region,amount
+1,east,30
+2,west,15
+
+$ uv run provc cat "files://sales/orders/day1.csv?at=commit:$ID"
+order,region,amount
+1,east,30
+2,west,12
+
+$ uv run provc cat 'files://sales/orders/day1.csv?at=tag:v1' || true
+provc: files://sales/orders/day1.csv?at=tag:v1: files goes to a bucket, which has no tags; use commit: or version:
+```
 
 ## Write, commit, branch and merge
 
@@ -273,7 +294,7 @@ provc: github://octocat/Hello-World/README?at=branch:test: offline, and branch:t
 
 ```
 $ uv run python tours/provcat/snapshot.py "$FIRST"
-pinned: tour-s3://tour-sales/main/orders?at=commit:819ea816ccdbf97b0575420fc1a72626cd47bbc14c6eba9820ef59fa6fb7de12
+pinned: tour-s3://tour-sales/main/orders?at=commit:0537ea725a5756b72794cdfdcb4a8f2ae9ab7932a133b8a2e3351f4e8c3973ac
 digest: feb1e4a1980a1b554363cd5e3f80fecc1c43050d0d8ffe90373e495070880597
 day1.csv 0o444
 ```
