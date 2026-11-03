@@ -1,9 +1,9 @@
 """The runnable tour: tours/provrun/run.sh runs, and docs/provrun-tour.md shows its output.
 
 The script starts its own moto server and collector on free ports, in a
-scratch folder, and deletes the folder when it ends. Step 14 calls a real
-model, so these tests run the script without --online, and compare the steps
-before it with the page.
+scratch folder, and deletes the folder when it ends. Steps 14 and 15 call a
+real model, so these tests run the script without --online, and compare the
+steps before them with the page.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ SCRIPT = TOURS / "run.sh"
 PAGE = ROOT / "docs" / "provrun-tour.md"
 FEATURES = ROOT / "docs" / "provrun-features.md"
 OVERVIEW = ROOT / "docs" / "overview.md"  # the overview of all three packages copies some steps
-ONLINE = "Step 14"
+ONLINE = ("Step 14", "Step 15")  # the steps that call a real model
 PAGE_DIR = "/tmp/provrun-tour"
 PAGE_OTLP_PORT = "4318"
 
@@ -155,12 +155,13 @@ def _heading_ids(page: str) -> set[str]:
     return {h["id"] for h in env.get("headings", [])}
 
 
-def test_the_overview_s_links_into_the_tour_land_on_a_heading():
+def test_the_links_into_the_tour_land_on_a_heading():
     # smalldocs check does not follow a link's #part into another page.
-    anchors = set(re.findall(r"provrun-tour(?:\.md|\.html|/)?#([^)\s\"'>]+)", OVERVIEW.read_text()))
     ids = _heading_ids(PAGE.read_text())
-    assert anchors
-    assert anchors <= ids, anchors - ids
+    linked = {p.name: set(re.findall(r"provrun-tour(?:\.md|\.html|/)?#([^)\s\"'>]+)", p.read_text()))
+              for p in sorted((ROOT / "docs").rglob("*.md")) if "_site" not in p.parts}
+    assert linked[OVERVIEW.name]  # the overview links into the tour
+    assert {n: a - ids for n, a in linked.items() if a - ids} == {}
 
 
 def test_heading_ids_follow_the_site():
@@ -175,12 +176,34 @@ def test_heading_ids_follow_the_site():
     }
 
 
-def test_the_page_shows_the_online_commands_of_the_script():
-    online = next(b for t, b in _page_steps(PAGE.read_text()).items() if t.startswith(ONLINE))
-    shown = [line[2:] for line in online.splitlines() if line.startswith("$ ")]
+def test_the_page_shows_the_online_steps_of_the_script():
+    # Each online step on the page has the script's title and the script's commands, in order.
     body = SCRIPT.read_text().split('if [ "${1:-}" = "--online" ]; then', 1)[1]
-    ran = [line.split("show ", 1)[1][1:-1] for line in body.splitlines() if "show " in line]
-    assert shown == ran
+    steps, title = {}, None
+    for line in body.splitlines():
+        if m := re.match(r'\s*step "(.*)"$', line):
+            title = m.group(1)
+            steps[title] = []
+        elif "show " in line and title is not None:
+            steps[title].append(line.split("show ", 1)[1][1:-1])
+    page = {t: [line[2:] for line in b.splitlines() if line.startswith("$ ")]
+            for t, b in _page_steps(PAGE.read_text()).items() if t.startswith(ONLINE)}
+    assert list(steps) and all(t.startswith(ONLINE) for t in steps)
+    assert page == steps
+
+
+def test_the_streamed_script_records_each_request_and_keeps_to_a_new_folder(tmp_path):
+    # PydanticAI's test model streams, and needs no key.
+    env = {**os.environ, "PROVRUN_TOUR_MODEL": "test"}
+    env.pop("ANTHROPIC_API_KEY", None)
+    go = ["uv", "run", "python", str(TOURS / "streamed.py"), str(tmp_path / "s")]
+    done = subprocess.run(go, cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr
+    events = [line.split()[0] for line in done.stdout.splitlines() if line.startswith(("model_called", "tool_called"))]
+    assert events == ["model_called", "tool_called", "model_called"]
+    assert all(" streamed " in line for line in done.stdout.splitlines() if line.startswith("model_called"))
+    again = subprocess.run(go, cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert again.returncode != 0 and "is not empty" in again.stderr
 
 
 ROUND_TRIP = (

@@ -2,7 +2,7 @@
 # Run the whole provrun tour, and print each command before its output.
 # Run it from the top folder of the repository:
 #   bash tours/provrun/run.sh            # the steps that need no model and no key
-#   bash tours/provrun/run.sh --online   # also the step that calls a real model
+#   bash tours/provrun/run.sh --online   # also the steps that call a real model
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 if [ "${1:-}" = "--online" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
@@ -147,4 +147,8 @@ if [ "${1:-}" = "--online" ]; then
   show 'uv run python tours/provrun/field.py $TOUR_DIR/r10.json mlflow'
   show 'uv run provr --store $O verify $R10'
   show 'unset PROVRUN_TELEMETRY_POLICY OTEL_EXPORTER_OTLP_ENDPOINT LOGFIRE_TOKEN'
+
+  step "Step 15: Stream a real model in your own agent (needs ANTHROPIC_API_KEY)"
+  show 'sed -n "/^model = /,/^    print()/p" tours/provrun/streamed.py'
+  show 'uv run python tours/provrun/streamed.py $TOUR_DIR/streamed'
 fi
