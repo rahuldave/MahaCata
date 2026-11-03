@@ -340,13 +340,19 @@ As each run starts, provrun reads the variables that name a place:
 
 A place gets spans only when the policy has a destination of its kind at that endpoint. provevi's `match_destination` decides this. A place with no match gets nothing, and the run writes `telemetry_blocked` with the path `destination`.
 
-A matched place gets provrun's spans, and the spans of each library that the policy lets feed that destination. Each span is cut down to the level the destination receives:
+A matched place gets provrun's spans, and the spans of each library that the policy lets feed that destination. A span's library is known by its tracer's name, its scope. provevi's `span_libraries` gives the names the policy may know it by. They come only from an installed package that ships the scope's module, such as `pydantic-ai-slim` for `pydantic_ai`.
+
+A scope that no installed package shows, such as `com.anthropic.sdk.python` or `pydantic_ai.evil`, has no name. The policy then approves none of its spans, and the run records a `telemetry_blocked` event. The copy in MLflow decides the same way.
+
+Each span is cut down to the level the destination receives:
 
 - `names` keeps the names attributes;
 - `usage` adds the token counts;
 - `bodies` keeps everything.
 
-Below `bodies`, a span's events and its status message are dropped, because they can hold an exception's text. Its links and its scope keep only what the level allows. A span name can hold a prompt or a person's name. So a name of more than two plain words, or with a path or an address, becomes the library's name.
+Below `bodies`, a span's events and its status message are dropped, because they can hold an exception's text. Its links and its scope keep only what the level allows.
+
+A span name can hold a prompt or a person's name. So a name that is not one or two plain words becomes the library's name, as provevi's `plain_span_name` decides. A plain word holds no URL, no user and password, no setting such as `token=x` and no path from `/`. Below `bodies`, an attribute's text that passes as a name but is not plain is left out too, as provevi's `plain_name` decides. The evidence keeps such a span name in the payload.
 
 provrun sends OTLP over HTTP itself, with protobuf. Its sender reads no variable of its own. So the OTLP headers never reach Logfire, and Logfire's token never reaches the collector. It does not follow a redirect from the place.
 
@@ -434,7 +440,7 @@ If the store for bundles is `file`, which has no commits, provrun writes the bun
 | provrun does not guard the network. A run can reach any host the machine can. | Control egress with the firewall or the container that runs provrun. |
 | A copy into MLflow that fails is a warning only, and the evidence does not record it. | Read the summary's `mlflow` part, and run `prove mlflow RUN` again once the cause is fixed. |
 | A span that a place did not get is a warning only, because the run's evidence is closed when the last spans are sent. | Watch the warnings, or the place's own logs. |
-| A library is known by the name of its tracer. Code that names its tracer after an approved library has its spans kept and sent as that library's. | Approve only libraries whose code you run. A container is the boundary for the rest. |
+| A library is known by the name of its tracer, if an installed package ships that module. Code that names its tracer after a module of an approved library, such as `litellm`, has its spans kept and sent as that library's. | Approve only libraries whose code you run. A container is the boundary for the rest. |
 | A library's span made in a thread that lost the run's context starts a new trace. It goes to no run, so it is neither kept nor sent. | None yet. |
 | The scan for patches looks only in the libraries named above, and finds a function replaced by a wrapper. A library that changes a function in place, or patches another library, is not found. A Logfire configured with `local=True` is not found either. | The checks catch the known paths. A container is the boundary for the rest. |
 | The scan finds a patch only on a library that was loaded when the run started. `provr run` starts with no backend loaded. So a library that is loaded during the run, and patched by an import hook as it loads, is not found. Only MLflow's patches are found then, by their marks. | Load the backend's libraries before the run, in a program that calls provrun, or use a container. |

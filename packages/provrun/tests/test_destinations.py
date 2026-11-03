@@ -402,9 +402,9 @@ def test_the_user_s_logfire_off_switch_is_kept(catalog, runs, collector, monkeyp
 
 
 def test_a_namespace_package_s_scope_names_its_own_distribution():
-    assert destinations._library("opentelemetry.exporter.otlp.proto.common.trace_encoder") == \
-        "opentelemetry-exporter-otlp-proto-common"
-    assert destinations._library("opentelemetry.sdk.trace") == "opentelemetry-sdk"
+    assert destinations._names("opentelemetry.exporter.otlp.proto.common.trace_encoder") == \
+        ["opentelemetry-exporter-otlp-proto-common"]
+    assert destinations._names("opentelemetry.sdk.trace") == ["opentelemetry-sdk"]
 
 
 def test_a_header_variable_cannot_set_the_host_or_the_framing():
@@ -524,7 +524,8 @@ def test_the_run_s_end_waits_once_for_all_places(catalog, runs, monkeypatch):
     assert time.monotonic() - started < 5
 
 
-@pytest.mark.parametrize("name", ["GET /users/alice", "mail alice@example.com", "set key=value"])
+@pytest.mark.parametrize("name", ["GET /users/alice", "mail alice@example.com", "set key=value", "token=abc",
+                                  "https://u:pw@host", "ns:model@tag", "/home/alice"])
 def test_a_path_or_an_address_is_not_a_span_name(name):
     assert destinations._cut(_span(name), "names").name == "lib"
 
@@ -535,6 +536,57 @@ def test_a_model_name_is_a_span_name():
 
 def test_a_scope_that_is_no_module_keeps_its_whole_name():
     # The Anthropic SDK names its tracer com.anthropic.sdk.python; com is no module.
-    assert destinations._library("com.anthropic.sdk.python") is None
-    assert destinations._names("com.anthropic.sdk.python") == ["com.anthropic.sdk.python"]
-    assert destinations._library("litellm") == "litellm"
+    assert destinations._names("com.anthropic.sdk.python") == []  # so no policy approves its spans
+    assert destinations._names("litellm") == ["litellm"]
+
+
+
+# ---- provevi's checks: the senders decide as the copy in MLflow does ---------------
+
+@pytest.mark.parametrize("scope", ["pydantic_ai.evil", "pydantic-ai-fake", "opentelemetry.instrumentation.nothere"])
+def test_a_scope_that_no_installed_package_shows_is_refused(catalog, runs, collector, monkeypatch, scope):
+    from opentelemetry import trace
+
+    async def claims(**kw):
+        with trace.get_tracer(scope).start_as_current_span("chat"):
+            pass
+        return reply()
+
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", collector.url)
+    libraries = {name: {"versions": ">=0", "telemetry": ["collector"]}
+                 for name in ("litellm", "pydantic-ai", "pydantic-ai-slim", "opentelemetry-sdk")}
+    out = run(catalog, runs, backend=LiteLLMBackend(claims), policy=policy(collector, libraries=libraries))
+    assert out.status == "completed", out.error
+    assert {s["scope"] for s in collector.spans} == {"provrun"}
+    [b] = blocked(out, "opentelemetry.span")
+    assert scope in b["detail"]
+    assert b["library"] not in ("pydantic-ai-slim", "opentelemetry-sdk")  # no guessed package
+    assert events(out, "span_recorded") == []
+
+
+def test_an_installed_package_s_scope_keeps_its_names():
+    assert destinations._names("pydantic_ai") == ["pydantic-ai", "pydantic-ai-slim"]
+    assert destinations._names("opentelemetry.sdk.trace") == ["opentelemetry-sdk"]
+
+
+def test_below_bodies_a_value_that_is_not_plain_is_left_out():
+    span = _span("chat", {"gen_ai.request.model": "gpt-4o", "gen_ai.system": "https://u:pw@host",
+                          "gen_ai.operation.name": "token=abc", "gen_ai.usage.input_tokens": 3},
+                 link_attributes={"gen_ai.request.model": "/home/alice/model"})
+    cut = destinations._cut(span, "usage")
+    assert dict(cut.attributes) == {"gen_ai.request.model": "gpt-4o", "gen_ai.usage.input_tokens": 3}
+    assert dict(cut.links[0].attributes) == {}
+    assert destinations._cut(span, "bodies") is span
+
+
+def test_a_scope_s_names_are_read_once(monkeypatch):
+    # Reading the installed packages takes most of a second; a run asks for each span.
+    calls = []
+    destinations._span_libraries.cache_clear()
+    monkeypatch.setattr(destinations, "span_libraries", lambda scope: calls.append(scope) or ("lib",))
+    try:
+        for _ in range(3):
+            assert destinations._names("some.scope") == ["lib"]
+    finally:
+        destinations._span_libraries.cache_clear()
+    assert calls == ["some.scope"]
