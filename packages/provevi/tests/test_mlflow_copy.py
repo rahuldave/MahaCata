@@ -579,7 +579,7 @@ def test_a_library_span_stays_out_when_the_policy_does_not_let_it_feed_the_place
 @pytest.mark.parametrize("value, kept", [("openai/gpt-4o-mini", True), ("claude-sonnet@20240620", True),
                                          ("https://u:secret@h.example/v1", False), ("u:secret@h.example", False),
                                          ("token=abc", False), ("/home/someone/agent.py", False),
-                                         ("ns:model@tag", False), ("bedrock/arn:aws:bedrock:x@y", True),
+                                         ("ns:model@tag", False), ("bedrock/arn:aws:bedrock:us-east-1:1:x", True),
                                          (["a", "https://h.example/x"], False)])
 def test_below_bodies_a_name_holds_no_url_password_setting_or_path(value, kept):
     import provevi.mlflow_copy as m

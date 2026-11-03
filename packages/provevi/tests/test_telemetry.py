@@ -533,9 +533,19 @@ def test_an_unknown_otlp_protocol_is_refused():
 
 
 @pytest.mark.parametrize("value, plain", [("openai/gpt-4o-mini", True), ("claude-sonnet@20240620", True),
-                                         ("bedrock/arn:aws:bedrock:x@y", True), (["a", "b"], True), (3, True),
+                                         ("bedrock/arn:aws:bedrock:us-east-1:1:x", True), ("ollama/llama3:8b", True), ("proj/u:p@h", False),
+                                         ("proj/user@host:pw", False),
+                                         ("sk-abcdef0123456789", False), ("sk-ant-api03-abcdefghijklmnop", False),
+                                         ("prefix-sk-proj-abcdefghijklmnop", False), ("ghp_" + "a" * 36, False),
+                                         ("x/AKIAIOSFODNN7EXAMPLE", False), ("hf_" + "a" * 34, False),
+                                         ("sk_live_" + "a" * 24, False), ("eyJhbGciOiJIUzI1NiJ9.e30.x", False),
+                                         ("xapp-1-abcdefghijk", False), ("task-sk-1", True), ("risk-model", True),
+                                         ("hf_transfer", True), ("huggingface/hf_xet", True), ("sk-learn", True),
+                                         ("AKIAK", True), ("ASIAN-model", True), (["a", "b"], True), (3, True),
                                          ("https://u:secret@h.example/v1", False), ("u:secret@h.example", False),
                                          ("ns:model@tag", False), ("token=abc", False), ("/home/someone/x", False),
+                                         ("user@host:pw", False), ("../etc/passwd", False), ("a/./b", False),
+                                         ("gpt-4.1", True),
                                          (["a", "https://h.example/x"], False), ("two words", False), ({}, False), ([], False), (True, True)])
 def test_a_plain_name_holds_no_url_password_setting_or_path(value, plain):
     from provevi import plain_name
@@ -610,8 +620,35 @@ def test_no_scope_names_a_library_when_the_installed_packages_cannot_be_read(mon
     def broken():
         raise OSError("unreadable")
 
+    from provevi import telemetry
+
     monkeypatch.setattr(metadata, "packages_distributions", broken)
-    assert span_libraries("litellm") == ()
+    for cached in (span_libraries, telemetry._shipped):
+        cached.cache_clear()
+    try:
+        assert span_libraries("litellm") == ()
+    finally:
+        for cached in (span_libraries, telemetry._shipped):
+            cached.cache_clear()
+
+
+def test_a_process_reads_the_installed_packages_once(monkeypatch):
+    from importlib import metadata
+
+    from provevi import telemetry
+
+    calls = []
+    real = metadata.packages_distributions
+    monkeypatch.setattr(metadata, "packages_distributions", lambda: calls.append(1) or real())
+    telemetry.span_libraries.cache_clear()
+    telemetry._shipped.cache_clear()
+    try:
+        for scope in ("litellm", "pydantic-ai", "litellm", "opentelemetry.sdk.trace"):
+            telemetry.span_libraries(scope)
+        assert calls == [1]
+    finally:
+        telemetry.span_libraries.cache_clear()
+        telemetry._shipped.cache_clear()
 
 
 

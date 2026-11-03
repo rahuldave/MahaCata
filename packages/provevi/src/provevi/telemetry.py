@@ -35,6 +35,7 @@ provrun applies the policy. This module only reads, checks and describes it.
 """
 from __future__ import annotations
 
+import functools
 import json
 import re
 from dataclasses import dataclass, field
@@ -169,10 +170,7 @@ def _installed_by(module: str, names: list[str], *, strict: bool = False) -> str
     parts = module.split(".")
     held = {}
     for name in names:
-        try:
-            held[name] = {str(f).replace("\\", "/") for f in metadata.files(name) or ()}
-        except Exception:  # a broken install names no files
-            held[name] = set()
+        held[name] = _files(name)
     for n in range(len(parts), len(parts) - 1 if strict else 0, -1):
         stem = "/".join(parts[:n])
         for name in names:
@@ -181,6 +179,27 @@ def _installed_by(module: str, names: list[str], *, strict: bool = False) -> str
     return None
 
 
+@functools.cache
+def _files(name: str) -> frozenset[str]:
+    """The files of an installed distribution, with / between parts. A
+    process reads them once, as reading them takes a while."""
+    try:
+        return frozenset(str(f).replace("\\", "/") for f in metadata.files(name) or ())
+    except Exception:  # a broken install names no files
+        return frozenset()
+
+
+@functools.cache
+def _shipped() -> Mapping[str, list[str]] | None:
+    """Each top package, and the distributions that ship it, read once in a
+    process; None if the installed packages cannot be read."""
+    try:
+        return metadata.packages_distributions()
+    except Exception:  # a broken install elsewhere
+        return None
+
+
+@functools.lru_cache(maxsize=1024)  # a library may make many scope names
 def span_libraries(scope: str) -> tuple[str, ...]:
     """The names that the policy may know the library of a span by, from the
     span's scope name, such as pydantic_ai. It gives the scope name only if
@@ -188,13 +207,14 @@ def span_libraries(scope: str) -> tuple[str, ...]:
     the distribution whose files hold the scope's module. It does not
     guess: a scope whose module no installed distribution holds, or any
     scope when the installed packages cannot be read, gives no name, so the
-    policy approves none of its spans."""
+    policy approves none of its spans. A process reads the installed
+    packages once, and does not see a change to them after that; ``span_libraries.cache_clear()`` and the same call on
+    ``_shipped`` and ``_files`` make it read them again."""
     if not isinstance(scope, str) or not scope:
         return ()
     module = scope.replace("-", "_")
-    try:
-        shipped = metadata.packages_distributions()
-    except Exception:  # a broken install: nothing can be shown
+    shipped = _shipped()
+    if shipped is None:  # a broken install: nothing can be shown
         return ()
     found = []
     # A dotted scope is a module path; pydantic.ai would else find the
@@ -212,14 +232,28 @@ def span_libraries(scope: str) -> tuple[str, ...]:
 
 # What a plain name may not hold: a URL, a user and password, a setting such
 # as token=..., or a path from the root.
-_NOT_PLAIN = re.compile(r"://|^[^/@]*:[^/@]*@|=|^/")
+_NOT_PLAIN = re.compile(r"://|(^|/)[^/@]*:[^/@]*@|(^|/)[^/@]*@[^/@]*:|=|^/|(^|/)\.\.?(/|$)")
+# A common API key or token, by its prefix and the run of characters that
+# follows it, so that a name such as hf_transfer or sk-learn is not one:
+# OpenAI and Anthropic (sk-), Stripe (sk_, rk_, pk_ with live or test),
+# GitHub (ghp_ and the like, github_pat_), GitLab (glpat-), Slack (xox?-,
+# xapp-), AWS access keys (AKIA, ASIA), Google (AIza), Hugging Face (hf_),
+# npm (npm_), webhook secrets (whsec_) and JSON web tokens (eyJ). A shape
+# test cannot catch every secret.
+_KEY = re.compile(r"(^|[^A-Za-z0-9])(sk-[A-Za-z0-9_-]{16,}|[srp]k_(live|test)_[A-Za-z0-9]{10,}"
+                  r"|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}"
+                  r"|xox[abposre]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}|(AKIA|ASIA)[A-Z0-9]{16}"
+                  r"|AIza[A-Za-z0-9_-]{30,}|hf_[A-Za-z0-9]{30,}|npm_[A-Za-z0-9]{30,}|whsec_[A-Za-z0-9]{20,}"
+                  r"|eyJ[A-Za-z0-9_-]{10,})")
 # A span name below bodies: one word, or two, such as "chat gpt-4o".
 _SPAN_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,200}( [A-Za-z0-9_.:-]{1,200})?")
 
 
 def plain_name(value: Any) -> bool:
     """True if value is a name, as the levels say, that holds no URL, no user
-    and password, no setting such as ``token=x`` and no path from ``/``. A
+    and password, no setting such as ``token=x``, no path from ``/`` and no
+    ``.`` or ``..`` segment, and none that starts like a common API key, such
+    as ``sk-`` or ``ghp_``. A
     secret or a path can pass the levels' test of a name, so a place below
     bodies should get only plain names. A name such as ``ns:model@tag`` looks
     like ``user:password@host``, so it is not plain. A number and a yes or no
@@ -227,7 +261,7 @@ def plain_name(value: Any) -> bool:
     if not _is_name(value) or (isinstance(value, (list, tuple)) and not value):
         return False
     texts = [value] if isinstance(value, str) else list(value) if isinstance(value, (list, tuple)) else []
-    return not any(_NOT_PLAIN.search(t) for t in texts)
+    return not any(_NOT_PLAIN.search(t) or _KEY.search(t) for t in texts)
 
 
 def plain_span_name(name: Any) -> bool:
