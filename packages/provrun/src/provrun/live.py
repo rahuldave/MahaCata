@@ -125,6 +125,8 @@ class LiveFeed(Sink):
                     yield item
                     return
                 if item["n"] <= last:
+                    if item["type"] == "done":
+                        return  # the viewer asked to start after the run's end
                     continue  # given from the list already
                 yield item
                 last = item["n"]

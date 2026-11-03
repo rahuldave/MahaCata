@@ -219,3 +219,12 @@ def test_items_that_come_while_a_viewer_reads_the_earlier_ones_are_not_missed():
         return [i["n"] for i in got]
 
     assert asyncio.run(go()) == [1, 2, 3, 4, 5]
+
+
+def test_a_viewer_that_starts_after_the_end_of_a_running_run_is_not_left_waiting(rf, catalog, runs):
+    async def go():
+        live = start_run(rf, **kw(catalog, runs))  # the run is still going
+        return await asyncio.wait_for(collect(live.follow(after=9999)), 30), await live.result()
+
+    items, out = asyncio.run(go())
+    assert items == [] and out.status == "completed"

@@ -2069,8 +2069,10 @@ dependencies = [
 dev = [
     { name = "azure-identity" },
     { name = "azure-storage-blob" },
+    { name = "fastapi" },
     { name = "fsspec" },
     { name = "google-cloud-storage" },
+    { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "moto", extra = ["server"] },
     { name = "psycopg", extra = ["binary"] },
@@ -2096,8 +2098,10 @@ requires-dist = [
 dev = [
     { name = "azure-identity", specifier = ">=1.27.0" },
     { name = "azure-storage-blob", specifier = ">=12.31.0" },
+    { name = "fastapi", specifier = ">=0.162.0" },
     { name = "fsspec", specifier = ">=2026.9.0" },
     { name = "google-cloud-storage", specifier = ">=3.17.1" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "huggingface-hub", specifier = ">=2.4.0" },
     { name = "moto", extras = ["server"], specifier = ">=5.2.4" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },

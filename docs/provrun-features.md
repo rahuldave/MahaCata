@@ -270,7 +270,7 @@ $ uv run python tours/provrun/follow.py $TOUR_DIR/stream.yaml
 14 done completed
 ```
 
-[provrun's page](provrun.md#watch-a-run-as-it-goes) shows the code, and what each item holds.
+[provrun's page](provrun.md#watch-a-run-as-it-goes) shows the code, and what each item holds. It also shows `live_server.py`, a small FastAPI server in the examples that sends the feed to a browser.
 
 ## Copy a run into MLflow
 
