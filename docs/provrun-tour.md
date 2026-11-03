@@ -44,7 +44,7 @@ Run the script. It takes about 45 seconds.
 bash tours/provrun/run.sh
 ```
 
-Add `--online` to run Step 14 too, which calls a real model. The script starts moto and a small collector, runs the steps, stops both and deletes its scratch folder.
+Add `--online` to run Steps 14 and 15 too, which call a real model. The script starts moto and a small collector, runs the steps, stops both and deletes its scratch folder.
 
 ## Or run it step by step
 
@@ -85,6 +85,7 @@ Add `--online` to run Step 14 too, which calls a real model. The script starts m
 | `tours/provrun/collector.py` | The collector of Step 12. |
 | `tours/provrun/mlflow.yaml` | The telemetry policy of Step 13, with an MLflow destination. |
 | `tours/provrun/agent.yaml` | The PydanticAI agent of Step 14, which needs a real model. |
+| `tours/provrun/streamed.py` | The streamed PydanticAI agent of Step 15, which needs a real model, or `PROVRUN_TOUR_MODEL=test`. |
 | `tours/provrun/field.py`, `event.py`, `spans.py`, `types.py`, `mlflow_spans.py`, `modes.py`, `drop_event.py` | Small helpers that print one field of a run's output or evidence, or change the evidence. |
 
 The run file holds this:
@@ -933,6 +934,44 @@ $ unset PROVRUN_TELEMETRY_POLICY OTEL_EXPORTER_OTLP_ENDPOINT LOGFIRE_TOKEN
 
 The examples `claude-run.yaml` and `claude-agent.yaml` in `packages/provrun/examples` run the same two on a local file, with no store and no policy.
 
+## Step 15: Stream a real model in your own agent (needs ANTHROPIC_API_KEY)
+
+This step also runs only with `--online`, and costs less than a cent. A run file cannot ask for a streamed reply, as both backends ask for the whole reply at once. Your own code can stream, and still get provrun's evidence, by giving its PydanticAI agent provrun's capability, `evidence_capability`. The script `streamed.py` does this, with one tool. It prints the reply as it arrives, then the events that the capability wrote.
+
+The agent, and how it is run. `PROVRUN_TOUR_MODEL` can name another model, such as PydanticAI's `test`, which needs no key; the tests run the script that way:
+
+```
+$ sed -n "/^model = /,/^    print()/p" tours/provrun/streamed.py
+model = os.environ.get("PROVRUN_TOUR_MODEL", "anthropic:claude-haiku-5-5")
+agent = Agent(model, tools=[revenue], capabilities=[evidence_capability(ctx)],
+              instructions="Use the revenue tool. Answer in one short sentence.")
+
+
+async def main() -> None:
+    async with agent.run_stream("What was revenue in 2025?", model_settings={"max_tokens": 200}) as run:
+        async for text in run.stream_text(delta=True):
+            print(text, end="", flush=True)
+    print()
+```
+
+Run it:
+
+```
+$ uv run python tours/provrun/streamed.py $TOUR_DIR/streamed
+Revenue in 2025 was 42 million.
+model_called claude-haiku-5-5 streamed 404 48 tool_call
+tool_called revenue
+model_called claude-haiku-5-5 streamed 460 17 stop
+```
+
+**What happened:**
+- The agent asked for a streamed reply, and the script printed the text as it arrived.
+- Each of the two model requests wrote one `model_called`, marked `streamed`. The first asked for the tool, and the second gave the answer.
+- Each `model_called` holds the tokens in and out, and why the model stopped. The capability reads them from the whole response, after the stream ends.
+- The tool call wrote `tool_called`.
+
+This script writes only events. It has no store, no bundle and no telemetry policy, which `provr run` gives a run. Its evidence has no `run_created` first and no `run_completed` last, so `provr verify` does not pass it. The script refuses a folder that is not empty, as a second run there would add to the first.
+
 ## Where each step lives in the code
 
 | Step | File |
@@ -942,6 +981,7 @@ The examples `claude-run.yaml` and `claude-agent.yaml` in `packages/provrun/exam
 | Hash, clone and freeze | `packages/provcat/src/provcat/cache.py` |
 | Stage and verify inputs | `packages/provrun/src/provrun/stagers.py` |
 | Run the model | `packages/provrun/src/provrun/backends/litellm.py` |
+| Record each request of a PydanticAI agent, streamed or not | `evidence_capability` in `packages/provrun/src/provrun/backends/pydantic_ai.py` |
 | Write the events | `packages/provrun/src/provrun/evidence.py`, through a store in `packages/provevi/src/provevi/store.py` |
 | Check the evidence, the outputs and the bundle | `packages/provevi/src/provevi/checks.py` |
 | Commit the bundle | `packages/provrun/src/provrun/context.py` |

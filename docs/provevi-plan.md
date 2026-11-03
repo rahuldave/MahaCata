@@ -122,7 +122,7 @@ So a run keeps them, records them, and sends provrun's own spans where they poin
 - **Decided on 2026-11-02: `prove telemetry RUN` lists `telemetry_problem` events** as well as `telemetry_blocked` events.
 
 - The SDKs of OpenAI and Anthropic send `X-Stainless-*` headers, with the operating system, the processor, and the Python and SDK versions, to the model provider. The research did not settle whether `default_headers` can remove them.
-- Streamed calls, the OpenAI Agents SDK and the Claude Agent SDK are not tested yet.
+- The OpenAI Agents SDK and the Claude Agent SDK are not tested yet. A streamed PydanticAI request was checked with Claude Haiku on 2026-11-03, in [Step 15 of provrun's tour](provrun-tour.md#step-15-stream-a-real-model-in-your-own-agent-needs-anthropic_api_key). A run file still cannot ask for a streamed reply.
 
 ## Phase 4: the copy in MLflow
 

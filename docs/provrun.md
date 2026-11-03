@@ -158,7 +158,7 @@ In the PydanticAI backend, one PydanticAI capability writes `model_called` and `
 - the output tool, when the agent answers through one, as `tool_called` with `output_tool` set;
 - each tool that the provider ran itself, such as a web search, as `tool_called` with `provider_run` set and confidence `parsed`. provrun sees only the provider's account of such a call.
 
-The backend gives text output and no provider tools, so its runs have neither of the last two. Other code can pass the capability, `evidence_capability`, to its own agent. In a streamed request, the output tool's event comes before the `model_called` that asked for it.
+The backend gives text output and no provider tools, so its runs have neither of the last two. Other code can pass the capability, `evidence_capability`, to its own agent, and stream; Step 15 of the [tour](provrun-tour.md) streams Claude Haiku this way. A run file cannot ask for a streamed reply. In a streamed request, the output tool's event comes before the `model_called` that asked for it.
 
 Each `model_called` event lists the tool calls that the model asked for, under `tool_calls`. The list includes a call to an unknown tool, or a call with bad arguments. PydanticAI refuses such a call before the tool runs, so it has no `tool_called` event.
 
