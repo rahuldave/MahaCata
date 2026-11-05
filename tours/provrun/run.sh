@@ -28,7 +28,7 @@ show 'uv run provr run $TOUR_DIR/run.yaml | tee $TOUR_DIR/r1.json'
 show 'R1=$(uv run python tours/provrun/field.py $TOUR_DIR/r1.json run_id)'
 
 step "Step 3: Look at the cache"
-show 'find $TOUR_DIR/cache -type f | sort'
+show 'find $TOUR_DIR/cache -type f -not -path "*/.provcat/locks/*" | sort'
 show 'uv run python tours/provrun/modes.py $TOUR_DIR/cache/.provcat/snapshots/file/*/report.txt'
 
 step "Step 4: Look at the run folder"
