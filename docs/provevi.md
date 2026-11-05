@@ -187,7 +187,7 @@ Some model names have more than one `/`, such as `openrouter/meta-llama/llama-3-
 
 `plain_name` also refuses a common API key or token, by its start and the run of characters after it. Examples are `sk-…` keys, Stripe's `sk_live_…`, GitHub's `ghp_…`, Slack's `xoxb-…`, AWS's `AKIA…`, Hugging Face's `hf_…` and JSON web tokens, `eyJ…`. A name such as `hf_transfer` or `sk-learn` is too short to be a key, so it stays plain. A shape test cannot catch every secret, so a secret written as a plain word still passes. It also refuses a name such as `ns:model@tag`, which looks like `user:password@host`. A number and a yes or no are plain.
 
-`plain_span_name(name)` takes one or two plain words, such as `chat gpt-4o`. The copy in MLflow uses both below `bodies`, and so do provrun's senders. provrun's senders still check attributes with `plain_name`, so they leave out a model's name that has more than one `/`.
+`plain_span_name(name)` takes one or two plain words, such as `chat gpt-4o`. The copy in MLflow uses both below `bodies`, and so do provrun's senders. provrun's senders check attributes with `plain_attribute` too, so they keep a model's name that has more than one `/`.
 
 **Narrow the policy for one run.** `policy.narrow(section)` reads a run file's `telemetry` section. The section has the keys `libraries`, `destinations` and `hosts`, and each one replaces the policy's list with a smaller one. A destination can receive a lower level, and a library can feed fewer destinations. The section cannot change versions, kinds or endpoints.
 

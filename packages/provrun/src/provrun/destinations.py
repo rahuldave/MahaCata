@@ -53,7 +53,7 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from opentelemetry.sdk.trace import SpanProcessor
-from provevi import (ProveviError, attributes_for, otlp_traces_target, plain_name, plain_span_name, span_libraries,
+from provevi import (ProveviError, attributes_for, otlp_traces_target, plain_attribute, plain_span_name, span_libraries,
                      split_body)
 
 from . import otel
@@ -628,9 +628,10 @@ def _cut(span: Any, level: str):
 def _plain(attributes: dict, level: str) -> dict:
     # The attributes at level, as provevi's copy in MLflow cuts them: below
     # bodies, a text that passes as a name but holds a URL, a user and
-    # password, a setting or a path is left out.
+    # password, a setting or a path is left out. A model's name may have more
+    # than one /, as openrouter/meta-llama/llama-3-70b has.
     return {k: v for k, v in attributes_for(attributes, level).items()
-            if not isinstance(v, (str, list, tuple)) or plain_name(v)}
+            if not isinstance(v, (str, list, tuple)) or plain_attribute(k, v)}
 
 
 def _jsonable(value: Any) -> Any:
