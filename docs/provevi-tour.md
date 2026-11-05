@@ -79,6 +79,7 @@ The script makes its scratch folder, runs the steps, and deletes the folder.
 | `tours/provevi/run_id.py` | Prints the run ID from what `provr run` printed. |
 | `tours/provevi/break_row.py` | Deletes one event from the evidence file, for Step 4. |
 | `tours/provevi/query.py` | Asks the evidence file questions from Python, for Step 7. |
+| `tours/provevi/replay.py` | Prints the live feed of a finished run at a level, for Step 8. |
 
 The run file names its input by its path in the tour's folder:
 
@@ -262,6 +263,58 @@ run-20261102T192005Z-c93d67ab completed 81c0f05189eb verifies
 ```
 
 **What happened:** each run staged a different version of the document, so the SHA-256 of their inputs differs. The run broken in Step 4 has 4 problems.
+
+## Step 8: Show a finished run to a live viewer
+
+provrun can give a live feed of a run, which a program such as a web app streams to a browser. The policy names the viewer as a destination of kind `live`, with a level. `replay` gives the same feed for a run that has ended, from its evidence. `tours/provevi/replay.py` prints each event of the feed as its type and the keys of its data:
+
+```python
+for item in replay(store, run_id, level):
+    if item["type"] == "event":
+        print(f"{item['event']:<24} {' '.join(sorted(item['data']))}".rstrip())
+    else:
+        print(json.dumps(item, sort_keys=True))
+```
+
+```
+$ uv run python tours/provevi/replay.py $RUN2 names
+run_created              agent backend domain env mode org span_id trace_id
+access_requested         mode
+access_granted           decision grant_id mode policy
+context_resolved         grant_id parent_span_id span_id started_at trace_id
+snapshot_materialized    kind parent_span_id sha256 span_id started_at trace_id
+input_staged             kind parent_span_id sha256 span_id started_at trace_id
+sandbox_started          agent backend model
+prompt_rendered
+model_called             finish_reason model parent_span_id span_id started_at streamed trace_id
+sandbox_completed        status
+input_verified           parent_span_id sha256 span_id started_at trace_id unchanged
+output_artifact_created  parent_span_id sha256 span_id started_at trace_id
+run_completed            span_id trace_id
+{"n": 14, "run_id": "run-20261102T192005Z-c93d67ab", "status": "completed", "type": "done"}
+
+$ uv run python tours/provevi/replay.py $RUN2 bodies
+run_created              agent backend domain env mode org span_id spec telemetry trace_id
+access_requested         mode purpose
+access_granted           decision expires_at grant_id mode policy reason
+context_resolved         grant_id parent_span_id physical span_id started_at trace_id
+snapshot_materialized    kind parent_span_id pinned sha256 span_id started_at trace_id
+input_staged             agent_path kind name parent_span_id sha256 span_id started_at trace_id
+sandbox_started          agent backend inputs model
+prompt_rendered          messages
+model_called             finish_reason input_tokens model output_tokens parent_span_id settings span_id started_at streamed trace_id
+{"n": 10, "text": "Revenue in 2025 was 42 million.", "type": "text"}
+sandbox_completed        duration status usage
+input_verified           name parent_span_id sha256 span_id started_at trace_id unchanged
+output_artifact_created  parent_span_id path sha256 size span_id started_at trace_id
+run_completed            span_id trace_id
+{"n": 15, "run_id": "run-20261102T192005Z-c93d67ab", "status": "completed", "type": "done"}
+```
+
+**What happened:**
+- At `names`, each event kept only the keys that hold names, such as `model` and `status`. The purpose, the reason, the file's name, the paths, the spec, the settings and the token counts stayed out.
+- At `bodies`, the feed added everything, and a `text` item with the model's answer after `model_called`.
+- `done` ends the feed, with the run's status and ID. Each item has `n`, its number in the feed, as provrun's live feed numbers its items.
 
 ## Open MLflow's viewer
 

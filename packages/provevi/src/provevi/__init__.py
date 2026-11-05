@@ -12,12 +12,14 @@ also answers queries across runs. ``open_store`` opens one from a URI. Every
 error that provevi raises on purpose is a ``ProveviError``.
 
 ``TelemetryPolicy`` reads the operator's telemetry policy, which says what
-may record or send data from a run besides the evidence.
+may record or send data from a run besides the evidence. ``shown_at`` and
+``replay`` give what a viewer of a run's live feed may see.
 """
 from .checks import (ENDINGS, RunCheck, bundle_pin, read_events, verify, verify_against, verify_bundle,
                      verify_outputs, verify_run, verify_store_copy)
 from .errors import CannotReadBack, EvidenceError, ProveviError, RunNotFound
 from .events import CONFIDENCE, EvidenceEvent, canonical, now, sha256_bytes
+from .live import replay, shown_at
 from .runs import default_runs_root, find_run, list_runs
 from .sqlite import SCHEMA_VERSION, SqliteRecord, SqliteRunWriter, SqliteStore
 from .telemetry import (BLOCKED, LEVELS, MLFLOW_DATABASES, MODEL_KEYS, PROBLEM, Destination, Library, TelemetryPolicy,
@@ -30,7 +32,8 @@ __all__ = [
     "CONFIDENCE", "ENDINGS", "CannotReadBack", "SCHEMA_VERSION", "EvidenceError", "EvidenceEvent", "EvidenceStore", "FileRunWriter",
     "FileStore", "FolderRecord", "JsonlSink", "PayloadStore", "ProveviError", "RunCheck", "RunNotFound", "RunRecord",
     "RunWriter", "Sink", "SqliteRecord", "SqliteRunWriter", "SqliteStore", "bundle_pin", "canonical", "check_store_uri",
-    "default_runs_root", "find_run", "list_runs", "now", "open_store", "read_events", "sha256_bytes", "verify",
+    "default_runs_root", "find_run", "list_runs", "now", "open_store", "read_events", "replay", "sha256_bytes",
+    "shown_at", "verify",
     "verify_against", "verify_bundle", "verify_outputs", "verify_run", "verify_store_copy",
     "BLOCKED", "LEVELS", "MLFLOW_DATABASES", "PROBLEM", "MODEL_KEYS", "Destination", "Library", "TelemetryPolicy", "attributes_for",
     "blocked_data", "distribution_of", "normal_endpoint", "otlp_traces_target", "plain_attribute", "plain_name", "plain_span_name",

@@ -11,7 +11,7 @@ approves exceptions in a policy file, which this module reads and checks::
         telemetry: [logfire]        # the destinations its instrumentation may feed
     destinations:
       logfire:
-        kind: logfire               # logfire, otlp or mlflow
+        kind: logfire               # logfire, otlp, mlflow or live
         receives: usage             # names, usage or bodies
         endpoint: https://logfire-us.pydantic.dev
     hosts:
@@ -53,8 +53,10 @@ from .events import sha256_bytes
 
 #: The levels of what a destination receives, from least to most.
 LEVELS = ("names", "usage", "bodies")
-#: The kinds of destination that provrun can send spans to.
-DESTINATION_KINDS = ("logfire", "otlp", "mlflow")
+#: The kinds of destination that provrun can send spans to. A ``live``
+#: destination is a viewer of the live feed of a run, such as a browser that a
+#: program streams the run to. It has no endpoint, and no library feeds it.
+DESTINATION_KINDS = ("logfire", "otlp", "mlflow", "live")
 #: The policy file format that this provevi reads.
 POLICY_VERSION = 1
 #: The event type of an attempt that the policy blocked.
@@ -401,6 +403,11 @@ class TelemetryPolicy:
         hosts = _hosts(doc.get("hosts"), "hosts", problems)
         destinations = _destinations(doc.get("destinations"), hosts, problems)
         libraries = _libraries(doc.get("libraries"), set(destinations), problems)
+        for lib in libraries.values():
+            for d in lib.telemetry:
+                if destinations[d].kind == "live":
+                    problems.append(f"library {lib.name!r} feeds {d!r}, a live viewer; a library's spans reach "
+                                    f"the viewer as span_recorded events")
         if problems:
             raise ProveviError(f"{source}: " + "; ".join(problems))
         return cls(libraries, destinations, hosts, source)
@@ -429,6 +436,11 @@ class TelemetryPolicy:
         """The destinations that the library's instrumentation may feed."""
         lib = self.library(library)
         return [] if lib is None else [self.destinations[d] for d in lib.telemetry]
+
+    def live_level(self) -> str | None:
+        """The level that a viewer of the live feed of a run receives, or None
+        if the policy names no live viewer, so a run shows nothing live."""
+        return next((d.receives for d in self.destinations.values() if d.kind == "live"), None)
 
     def allows_host(self, host: str) -> bool:
         """True if hosts names host. An entry with a leading dot names each
@@ -644,6 +656,10 @@ def _destinations(value: Any, hosts: tuple[str, ...], problems: list[str]) -> di
             ok = False
         if kind == "mlflow" and endpoint is None:
             pass  # the copy in MLflow goes into the store's own file
+        elif kind == "live":
+            if endpoint is not None:
+                problems.append(f"destination {name!r} is a live viewer, which has no endpoint")
+                ok = False
         elif not isinstance(endpoint, str):
             what = "an http, https or database" if kind == "mlflow" else "an http or https"
             problems.append(f"destination {name!r} needs {what} endpoint, not {endpoint!r}")
@@ -655,6 +671,9 @@ def _destinations(value: Any, hosts: tuple[str, ...], problems: list[str]) -> di
                 ok = False
         if ok:
             out[str(name)] = Destination(str(name), kind, receives, endpoint)
+    live = sorted(n for n, d in out.items() if d.kind == "live")
+    if len(live) > 1:
+        problems.append(f"destinations {', '.join(map(repr, live))} are both live viewers; name one")
     return out
 
 

@@ -160,7 +160,7 @@ hosts:
 |---|---|
 | `version` | `1`, the format of the file. |
 | `libraries` | Each approved library, by its distribution name. `versions` is the versions that were tested, as a version specifier. `telemetry` is the destinations that its instrumentation may feed. |
-| `destinations` | Each place outside the evidence that spans may go to. `kind` is `logfire`, `otlp` or `mlflow`. `receives` is `names`, `usage` or `bodies`. `endpoint` is an http or https URL, and its host must be in `hosts`. An `mlflow` endpoint may also be a database URL, such as `postgresql://db.example.com/mlflow` or `sqlite:////srv/mlflow.db`. An `mlflow` destination may leave the endpoint out, for the copy in the store's own file. An endpoint names no user and no password, because the policy holds no secrets. |
+| `destinations` | Each place outside the evidence that spans may go to. `kind` is `logfire`, `otlp`, `mlflow` or `live`. `receives` is `names`, `usage` or `bodies`. `endpoint` is an http or https URL, and its host must be in `hosts`. An `mlflow` endpoint may also be a database URL, such as `postgresql://db.example.com/mlflow` or `sqlite:////srv/mlflow.db`. An `mlflow` destination may leave the endpoint out, for the copy in the store's own file. A `live` destination, a viewer of a run's live feed, has no endpoint. An endpoint names no user and no password, because the policy holds no secrets. |
 | `hosts` | The hosts that destinations may send to. provevi checks each endpoint's host against this list, and the list is a record for the firewall. Neither provevi nor provrun limits where a run connects, because that is the job of the firewall or the container. An entry with a leading dot, such as `.amazonaws.com`, names each host under the domain, but not the domain itself. A dotted entry needs two labels at least, so `.com` is refused. |
 
 A library or a destination that the policy does not name gets nothing. A run with no policy file gets `TelemetryPolicy.deny_all()`, which approves nothing. The loader refuses an unknown key, a key named twice in one mapping, and a `version` that is not the integer `1`. It reports every problem in the file at once. A library installed as a local build, such as `2.64.0+patched`, passes only if `versions` names the local build.
@@ -373,6 +373,38 @@ MLflow's viewer on /private/tmp/provevi-mlflow/evidence.db: http://127.0.0.1:508
 ```
 
 provrun makes the copy itself when a run is sealed, if the policy approves an MLflow place, as [provrun's page](provrun.md#copy-a-sealed-run-into-mlflow) says. `prove mlflow` makes the copy again, or makes it for a run with no approved place at the time.
+
+## Show a run to a live viewer
+
+provrun can give a live feed of a run, which a program such as a web app streams to a browser. provevi decides what the viewer may see. The policy names the viewer as a destination of kind `live`, with a level and no endpoint:
+
+```yaml
+destinations:
+  browser:
+    kind: live
+    receives: names
+```
+
+`policy.live_level()` gives that level, or `None` when the policy names no live viewer, and then a run shows nothing live. A policy names one live viewer at most, and no library feeds it. A library's spans reach the viewer as `span_recorded` events. A run file can lower the level with `narrow`, as for any destination.
+
+The feed is a list of items, each a JSON object with a `type` and `n`, its number in the feed from 1:
+
+| Item | What it holds |
+|---|---|
+| `event` | One evidence event: its run, `seq`, time, type as `event`, component, actor and data, cut to the level. At `bodies`, also its refs and payload. |
+| `text` | Text of the model's answer, only at `bodies`. Live, it comes in pieces of any size. A viewer adds the pieces in order. |
+| `done` | The end: the run's `status`, `completed`, `failed` or `cancelled`, and its `run_id`. |
+
+`shown_at(event, level, record=None)` gives the `event` item of one event, or `None` when the level is `None`:
+
+- Below `bodies`, the item keeps only the data under keys that hold names or counts, such as `model`, `status`, `sha256` and `input_tokens`. Any other key stays out. It may hold what a person or a model wrote, such as a note's text, a purpose or a file's name.
+- At `names`, a listed key's value shows if it passes `plain_attribute`. The component and the actor show if each is a plain name. A library span's attributes are cut as for any destination, and its name shows if `plain_span_name` says so.
+- `usage` adds the counts and timings, such as token counts, and the usage attributes of a library's span. A mapping among them shows only if each of its keys is a plain name.
+- `bodies` adds all the data, the refs, the component and the actor. With `record`, it adds the payload too.
+
+`replay(store, run_id, level)` gives the feed of a run that has ended, from its evidence, so a viewer that connects after the end sees the same items. It checks the run's chain first, before the first item. It refuses a run that does not verify, and a run that has not ended does not verify. Each answer comes as one `text` item, the whole answer of one model call. A stream that failed part way gives its text so far, after its `step_failed` event.
+
+A run that provrun cancelled ends with `run_failed`, whose error is `CancelledError`, and replays as `cancelled`. `folder=` names the run's evidence folder. The file store finds it by itself when it is left out. Step 8 of [the tour](provevi-tour.md) replays a run.
 
 ## The command `prove`
 
