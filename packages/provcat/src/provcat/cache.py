@@ -98,6 +98,15 @@ def _digest(store: str, key: Iterable[str]) -> str:
     return hashlib.sha256("\0".join([store, *key]).encode()).hexdigest()
 
 
+def _bytes_of(meta: dict | None) -> tuple | None:
+    """The parts of a meta record that name the bytes: its version, size and
+    hash. A rewrite that only notes a new time or inode keeps them."""
+    if meta is None:
+        return None
+    f = meta.get("file") or {}
+    return meta.get("version"), f.get("size"), f.get("sha256")
+
+
 class LocalCache:
     def __init__(self, root: str | Path | None = None):
         self.root = Path(root) if root else default_root()
@@ -188,7 +197,7 @@ class LocalCache:
             return None
         if version is not None and meta.get("version") != version:
             return None
-        if self._read_json(record) != meta:  # a put finished meanwhile; meta may not describe p
+        if _bytes_of(self._read_json(record)) != _bytes_of(meta):  # a put finished meanwhile
             return None
         return p
 
