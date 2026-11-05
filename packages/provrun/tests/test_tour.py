@@ -12,6 +12,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -113,6 +114,13 @@ def run(tmp_path_factory):
     env = _env(tour_dir)
     done = subprocess.run(["bash", str(SCRIPT)], cwd=ROOT, env=env, capture_output=True, text=True, timeout=900)
     return done, tour_dir, env["TOUR_OTLP_PORT"]
+
+
+def test_no_tour_script_hides_a_module_of_python_s_own():
+    # Python puts a script's folder first on the path, so a tours/provrun/types.py
+    # broke `import enum` on Linux, where types is not loaded at startup.
+    hiding = [p.relative_to(ROOT) for p in (ROOT / "tours").rglob("*.py") if p.stem in sys.stdlib_module_names]
+    assert hiding == []
 
 
 def test_the_tour_runs_and_cleans_up(run):

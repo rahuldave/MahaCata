@@ -1,0 +1,29 @@
+# Run the tests of provcat, provrun and provevi on each push, to any branch.
+# Tests marked system call real services and are left out, as they are on your machine.
+name: tests
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+permissions:
+  contents: read
+# A new push to a branch stops the run of the push before it, except on main,
+# where each commit keeps its own result.
+concurrency:
+  group: tests-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || 'latest' }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      # The emulator tests skip when their image is missing, so pull them here,
+      # with Postgres for provevi's copy test. Each pull is tried three times.
+      - run: |
+          for image in fsouza/fake-gcs-server:1.52.2 mcr.microsoft.com/azure-storage/azurite:3.35.0 postgres:17-alpine; do
+            for try in 1 2 3; do docker pull -q "$image" && break; [ "$try" = 3 ] && exit 1; sleep 10; done
+          done
+      - run: uv sync --locked
+      - run: uv run pytest -q -rfs

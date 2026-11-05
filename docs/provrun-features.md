@@ -369,7 +369,7 @@ A PydanticAI agent with tools found the fact with `grep_file`, noted the line it
 $ cat $PROVRUN_RUNS/$R10/output/answer.txt
 Revenue in 2025 was 45 million (after a restatement). Source: /input/report.txt, line 1.
 
-$ uv run python tours/provrun/types.py $R10
+$ uv run python tours/provrun/event_types.py $R10
 0 run_created 
 1 telemetry_blocked 
 2 access_requested 
