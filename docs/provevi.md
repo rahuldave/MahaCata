@@ -181,6 +181,10 @@ A path need not start with `/`, so `plain_name` also refuses one that looks like
 - a path two folders deep from another folder of the root, such as `run/secrets/x`, `opt/app/x` or `proc/self/environ`;
 - a path that ends in a file of keys or settings, such as `x/key.pem`, `x/key.pem.bak`, `x/config.yaml`, `x/kubeconfig` or `x/id_rsa.pub`.
 
+It refuses a path with a part that is a URL's scheme, a host or an email, anywhere before a `/`. Examples are `https:/host/x`, `s3:/bucket/key`, `x/host.com/a`, `127.1/x`, `db:5432/x` and `x/user@host.com/a`. The hosts `hf.co`, `huggingface.co`, `modelscope.cn` and `registry.ollama.ai` start real model names in Ollama, so they stay plain. PydanticAI's `groq:meta-llama/x` stays plain too, as `groq` is not a scheme of storage or the web, such as `s3` or `https`.
+
+The list of schemes cannot hold every one, so a scheme that is not on it passes, written as `name:bucket/x`. A host or an email with no path passes, such as `host.com` or `user@host.com`. So does an IP address written as one number, such as `2130706433/x`.
+
 A shape test cannot catch every path. A path with one `/` to a file of another name passes under any key, such as `x/notes`. A model's name may have more than one `/`, so under a model key a deeper path passes too, such as `scratch/x/notes`. One word passes, such as `id_rsa` or `.env`.
 
 Some model names have more than one `/`, such as `openrouter/meta-llama/llama-3-70b` or a Vertex model's path. So `plain_name(value, declared=[...])` lets a text in `declared` have more, though it must pass every other test. `plain_attribute(key, value)` declares the value when its key names a model, such as `gen_ai.request.model`. The keys are in `MODEL_KEYS`. The copy in MLflow checks each setting and attribute with `plain_attribute`. A mapping, such as MLflow's token usage, goes in only if each of its keys is a plain name.

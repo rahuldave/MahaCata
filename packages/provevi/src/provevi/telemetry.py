@@ -233,8 +233,20 @@ def span_libraries(scope: str) -> tuple[str, ...]:
 
 
 # What a plain name may not hold: a URL, a user and password, a setting such
-# as token=..., or a path from the root.
-_NOT_PLAIN = re.compile(r"://|(^|/)[^/@]*:[^/@]*@|(^|/)[^/@]*@[^/@]*:|=|^/|(^|/)\.\.?(/|$)")
+# as token=..., or a path from the root. Nor may any part before a "/" be a
+# URL's scheme, a host or an email, such as https:/host/x, x/host.com/a or
+# x/user@host.com/a, nor a host and a port, such as db:5432/x. hf.co,
+# huggingface.co, modelscope.cn and registry.ollama.ai start model names in
+# Ollama, so they may. A list of schemes cannot hold every one. PydanticAI's groq:meta-llama/x is not a scheme, as
+# its part does not end in ":" and groq is not a scheme of storage or the web.
+_NOT_PLAIN = re.compile(
+    r"://|(^|/)[^/@]*:[^/@]*@|(^|/)[^/@]*@[^/@]*:|=|^/|(^|/)\.\.?(/|$)"
+    r"|(^|/)[A-Za-z][A-Za-z0-9+.-]*:/|(^|/)(https?|s3a?|gs|gcs|az|abfss?|wasbs?|adls?|file|ftps?|sftp|ssh|git"
+    r"|hdfs|dbfs|r2|oss|cos|b2|lakefs[a-z0-9-]*):"
+    r"|(^|/)(?!(hf\.co|huggingface\.co|modelscope\.cn|registry\.ollama\.ai)/)([A-Za-z0-9_-]+\.)+[A-Za-z]{2,}\.?"
+    r"(:\d+)?/|(^|/)[0-9.]*\.[0-9.]*(:\d+)?/|(^|/)[0-9A-F]*:[0-9A-F:]*:[0-9A-F]*/|(^|/)[^/:]+:\d+/"
+    r"|(^|/)localhost\.?(:\d+)?/|(^|/)[^/@]+@[^/]+/",
+    re.IGNORECASE)
 # A path that does not start with "/" but is still a path: one with a hidden
 # part, such as home/someone/.ssh/id_rsa; one from a drive, such as C:/x; one
 # from a folder of the root, such as etc/passwd or run/secrets/x; one through
@@ -270,7 +282,9 @@ def plain_name(value: Any, *, declared: Collection[str] = ()) -> bool:
     """True if value is a name, as the levels say, that holds no URL, no user
     and password, no setting such as ``token=x``, no path from ``/``, no
     path that looks like one of a machine's files, such as
-    ``home/someone/.ssh/id_rsa`` or ``x/key.pem``, and no more than one
+    ``home/someone/.ssh/id_rsa`` or ``x/key.pem``, no part before a ``/``
+    that is a URL's scheme, a host or an email, such as ``https:/host/x`` or
+    ``x/host.com/a``, and no more than one
     ``/``, and none that starts
     like a common API key, such as ``sk-`` or ``ghp_``. A
     secret or a path can pass the levels' test of a name, so a place below
