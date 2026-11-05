@@ -150,7 +150,7 @@ if [ "${1:-}" = "--online" ]; then
   show 'uv run provr --store $O run $TOUR_DIR/agent.yaml > $TOUR_DIR/r10.json'
   show 'R10=$(uv run python tours/provrun/field.py $TOUR_DIR/r10.json run_id)'
   show 'cat $PROVRUN_RUNS/$R10/output/answer.txt'
-  show 'uv run python tours/provrun/types.py $R10'
+  show 'uv run python tours/provrun/event_types.py $R10'
   show 'uv run prove telemetry $PROVRUN_RUNS/$R10'
   show 'tail -n +$((N + 1)) $TOUR_DIR/collector.log'
   show 'uv run python tours/provrun/field.py $TOUR_DIR/r10.json mlflow'

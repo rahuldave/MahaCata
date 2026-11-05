@@ -29,7 +29,7 @@ You do not need the `aws` command. The AWS SDK reads `~/.aws/credentials` and `~
 
 ## Run the tests
 
-The provcat tests are in three folders, and each test gets the marker of its folder. The provrun tests are in `packages/provrun/tests`. They get no marker, so `-m unit` and `-m integration` select provcat tests only.
+The provcat tests are in three folders, and each test gets the marker of its folder. The provrun tests are in `packages/provrun/tests` and get no marker. The provevi tests are in `packages/provevi/tests`, and the tour's tests and those that start a server are marked `integration`. So `-m unit` selects provcat tests only.
 
 | Folder | Marker | What the tests use |
 |---|---|---|
@@ -37,12 +37,16 @@ The provcat tests are in three folders, and each test gets the marker of its fol
 | `packages/provcat/tests/integration` | `integration` | Servers on this machine: a fake GitHub API and a fake etcd in the test process, moto for S3, and emulators in Docker for GCS and Azure. |
 | `packages/provcat/tests/system` | `system` | Real services on the network. |
 
-`uv run pytest` runs the unit and integration tests. They need no network. The GCS and Azure tests need Docker and two images. If an image is missing, those tests skip and name the image to pull:
+`uv run pytest` runs every test except the system tests. They need no network once Docker has the images below. The GCS and Azure tests need Docker and two images. If an image is missing, those tests skip and name the image to pull:
 
 ```
 docker pull fsouza/fake-gcs-server:1.52.2
 docker pull mcr.microsoft.com/azure-storage/azurite:3.35.0
 ```
+
+One provevi test copies evidence into Postgres. It runs `postgres:17-alpine` in Docker, which Docker downloads the first time.
+
+GitHub runs the same tests on each push to any branch, by the workflow `.github/workflows/tests.yml`. It pulls the two emulator images and Postgres first, so the tests that use Docker run there too. It leaves out the system tests. Its output names each test that failed or skipped. See a commit's run with `gh run list --workflow tests.yml --commit "$(git rev-parse HEAD)"`.
 
 `packages/provcat/tests/object_store_suite.py` holds one set of tests for every object store. The integration tests run it against moto, fake-gcs-server and Azurite. The system tests run it against real AWS, GCS, Azure and lakeFS. Each system test makes its own bucket and deletes it afterwards. It uses the cloud's Python SDK, or the REST API for lakeFS.
 

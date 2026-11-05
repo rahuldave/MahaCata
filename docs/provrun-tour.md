@@ -87,7 +87,7 @@ Add `--online` to run Steps 15 and 16 too, which call a real model. The script s
 | `tours/provrun/agent.yaml` | The PydanticAI agent of Step 15, which needs a real model. |
 | `tours/provrun/follow.py` | The program of Step 14 that follows a run's live feed. |
 | `tours/provrun/streamed.py` | The streamed PydanticAI agent of Step 16, which needs a real model, or `PROVRUN_TOUR_MODEL=test`. |
-| `tours/provrun/field.py`, `event.py`, `spans.py`, `types.py`, `mlflow_spans.py`, `modes.py`, `drop_event.py` | Small helpers that print one field of a run's output or evidence, or change the evidence. |
+| `tours/provrun/field.py`, `event.py`, `spans.py`, `event_types.py`, `mlflow_spans.py`, `modes.py`, `drop_event.py` | Small helpers that print one field of a run's output or evidence, or change the evidence. |
 
 The run file holds this:
 
@@ -914,7 +914,7 @@ Revenue in 2025 was 45 million (after a restatement). Source: /input/report.txt,
 List the events of the run, with the tool of each tool call:
 
 ```
-$ uv run python tours/provrun/types.py $R10
+$ uv run python tours/provrun/event_types.py $R10
 0 run_created 
 1 telemetry_blocked 
 2 access_requested 

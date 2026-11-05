@@ -1,6 +1,6 @@
 """Print the sequence number and the type of each event of a run, and the
 tool of each tool call.
-    types.py RUN"""
+    event_types.py RUN"""
 import json
 import os
 import sys
