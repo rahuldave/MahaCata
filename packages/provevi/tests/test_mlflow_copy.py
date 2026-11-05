@@ -806,3 +806,12 @@ def test_the_next_copy_leaves_a_trace_of_the_same_id_that_is_not_a_copy_of_the_r
     assert client.get_trace(f"tr-{TRACE}") is not None
     m._delete_earlier(client, exp.experiment_id, RUN, f"tr-{TRACE}")
     assert client.search_traces(locations=[exp.experiment_id]) == []
+
+
+def test_below_bodies_a_mapping_whose_key_is_a_secret_stays_out(tmp_path):
+    s = run_with_a_library_span(tmp_path, attributes={
+        "mlflow.chat.tokenUsage": {"sk-abcdefghijklmnopqrstuv": 1}, "gen_ai.usage.input_tokens": 7})
+    copy = copy_run(s, RUN, feeding("usage"), environ={})
+    lib = read_copy(client_of(s), copy)[2]["agent run"].attributes
+    # MLflow writes its own token usage from the counts, with no secret in it.
+    assert "sk-abcdefghijklmnopqrstuv" not in json.dumps(lib) and lib["gen_ai.usage.input_tokens"] == 7

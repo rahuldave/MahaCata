@@ -685,6 +685,8 @@ def _proto(trace: str, span: str, parent: str | None, name: str, start: int, end
     for k, v in attributes_for(kept, level).items():
         if level != "bodies" and isinstance(v, (str, list, tuple)) and not plain_attribute(k, v):
             continue  # a value that the policy calls a name, but holds a URL, a setting or a path
+        if level != "bodies" and isinstance(v, dict) and not all(plain_name(x) for x in v):
+            continue  # a mapping, such as MLflow's token usage, whose key holds a secret
         p.attributes.append(KeyValue(key=k, value=value(v)))
     for e in span_events:
         ev = p.events.add(time_unix_nano=_ns(e.time), name=e.type)

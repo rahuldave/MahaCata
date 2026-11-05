@@ -173,7 +173,17 @@ provevi also checks each value. A `names` attribute must hold one word of at mos
 
 A secret or a path can pass the test of a name, such as `https://user:password@host` or `token=x`. `plain_name(value)` is stricter. It refuses a URL, and a user and password in either order, such as `user:password@host` or `user@host:password`. It refuses a setting with `=`, a path from `/`, and a `.` or `..` segment. It refuses a path with more than one `/`, such as `tmp/a/b`, though `openai/gpt-4o-mini` stays plain.
 
-Some model names have more than one `/`, such as `openrouter/meta-llama/llama-3-70b` or a Vertex model's path. So `plain_name(value, declared=[...])` lets a text in `declared` have more, though it must pass every other test. `plain_attribute(key, value)` declares the value when its key names a model, such as `gen_ai.request.model`. The keys are in `MODEL_KEYS`. The copy in MLflow checks each setting and attribute with `plain_attribute`.
+A path need not start with `/`, so `plain_name` also refuses one that looks like a machine's file, in any case:
+
+- a path with a hidden part, such as `home/someone/.ssh/id_rsa` or `x/.env`;
+- a path from a drive, such as `C:/Users/someone`;
+- a path from `home`, `Users`, `root`, `etc`, `private`, `Volumes`, `tmp` or `var`, such as `etc/passwd`, or through a home, such as `data/home/someone/x`;
+- a path two folders deep from another folder of the root, such as `run/secrets/x`, `opt/app/x` or `proc/self/environ`;
+- a path that ends in a file of keys or settings, such as `x/key.pem`, `x/key.pem.bak`, `x/config.yaml`, `x/kubeconfig` or `x/id_rsa.pub`.
+
+A shape test cannot catch every path. A path with one `/` to a file of another name passes under any key, such as `x/notes`. A model's name may have more than one `/`, so under a model key a deeper path passes too, such as `scratch/x/notes`. One word passes, such as `id_rsa` or `.env`.
+
+Some model names have more than one `/`, such as `openrouter/meta-llama/llama-3-70b` or a Vertex model's path. So `plain_name(value, declared=[...])` lets a text in `declared` have more, though it must pass every other test. `plain_attribute(key, value)` declares the value when its key names a model, such as `gen_ai.request.model`. The keys are in `MODEL_KEYS`. The copy in MLflow checks each setting and attribute with `plain_attribute`. A mapping, such as MLflow's token usage, goes in only if each of its keys is a plain name.
 
 `plain_name` also refuses a common API key or token, by its start and the run of characters after it. Examples are `sk-…` keys, Stripe's `sk_live_…`, GitHub's `ghp_…`, Slack's `xoxb-…`, AWS's `AKIA…`, Hugging Face's `hf_…` and JSON web tokens, `eyJ…`. A name such as `hf_transfer` or `sk-learn` is too short to be a key, so it stays plain. A shape test cannot catch every secret, so a secret written as a plain word still passes. It also refuses a name such as `ns:model@tag`, which looks like `user:password@host`. A number and a yes or no are plain.
 

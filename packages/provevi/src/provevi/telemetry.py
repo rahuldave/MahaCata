@@ -233,6 +233,21 @@ def span_libraries(scope: str) -> tuple[str, ...]:
 # What a plain name may not hold: a URL, a user and password, a setting such
 # as token=..., or a path from the root.
 _NOT_PLAIN = re.compile(r"://|(^|/)[^/@]*:[^/@]*@|(^|/)[^/@]*@[^/@]*:|=|^/|(^|/)\.\.?(/|$)")
+# A path that does not start with "/" but is still a path: one with a hidden
+# part, such as home/someone/.ssh/id_rsa; one from a drive, such as C:/x; one
+# from a folder of the root, such as etc/passwd or run/secrets/x; one through
+# a home, such as data/home/someone/x; and one that ends in a file of keys or
+# settings, such as x/key.pem, x/key.pem.bak or x/id_rsa. A model's name is
+# none of these.
+_PATH = re.compile(
+    r"(^|/)\.[^/]*/|/\.|^[A-Za-z]:.*/"
+    r"|^(home|users|root|etc|private|volumes|tmp|var)/|(^|/)(home|users|cygdrive|windows)/"
+    r"|^(opt|srv|mnt|run|proc|dev|sys|usr|snap|nix|media|boot)/[^/]*/"
+    r"|/(id_(rsa|ed25519|ecdsa|dsa)[^/]*|credentials[^/]*|creds[^/]*|authorized_keys|known_hosts|passwd|shadow|sam"
+    r"|htpasswd|kubeconfig|secrets?)$"
+    r"|/[^/]*\.(pem|key|p12|pfx|ppk|crt|der|gpg|asc|env|json|ya?ml|toml|ini|cfg|conf|properties|txt|netrc|kdbx"
+    r"|db|sqlite|tfstate|csv)(\.[^/]*)?$",
+    re.IGNORECASE)
 # A common API key or token, by its prefix and the run of characters that
 # follows it, so that a name such as hf_transfer or sk-learn is not one:
 # OpenAI and Anthropic (sk-), Stripe (sk_, rk_, pk_ with live or test),
@@ -252,7 +267,9 @@ _SPAN_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,200}( [A-Za-z0-9_.:-]{1,200})?")
 def plain_name(value: Any, *, declared: Collection[str] = ()) -> bool:
     """True if value is a name, as the levels say, that holds no URL, no user
     and password, no setting such as ``token=x``, no path from ``/``, no
-    ``.`` or ``..`` segment and no more than one ``/``, and none that starts
+    path that looks like one of a machine's files, such as
+    ``home/someone/.ssh/id_rsa`` or ``x/key.pem``, and no more than one
+    ``/``, and none that starts
     like a common API key, such as ``sk-`` or ``ghp_``. A
     secret or a path can pass the levels' test of a name, so a place below
     bodies should get only plain names. A name such as ``ns:model@tag`` looks
@@ -267,8 +284,8 @@ def plain_name(value: Any, *, declared: Collection[str] = ()) -> bool:
     if not _is_name(value) or (isinstance(value, (list, tuple)) and not value):
         return False
     texts = [value] if isinstance(value, str) else list(value) if isinstance(value, (list, tuple)) else []
-    return not any(_NOT_PLAIN.search(t) or _KEY.search(t) or (t.count("/") > 1 and t not in declared)
-                   for t in texts)
+    return not any(_NOT_PLAIN.search(t) or _PATH.search(t) or _KEY.search(t)
+                   or (t.count("/") > 1 and t not in declared) for t in texts)
 
 
 #: The keys whose value is a model's name, which may have more than one ``/``.

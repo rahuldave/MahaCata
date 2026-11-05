@@ -8,7 +8,7 @@ import re
 
 import pytest
 
-from provevi import EvidenceEvent, FileStore, ProveviError, sha256_bytes
+from provevi import MODEL_KEYS, EvidenceEvent, FileStore, ProveviError, sha256_bytes
 from provevi.cli import main
 from provevi.telemetry import (BLOCKED, PROBLEM, TelemetryPolicy, attributes_for, blocked_data, level_of,
                                normal_endpoint, otlp_traces_target, split_body)
@@ -577,6 +577,44 @@ def test_a_model_s_name_may_have_more_than_one_slash(key, value, plain):
     from provevi import plain_attribute
 
     assert plain_attribute(key, value) is plain
+
+
+@pytest.mark.parametrize("key", sorted(MODEL_KEYS) + ["gen_ai.system"])
+@pytest.mark.parametrize("value", [
+    "home/alice/.ssh/id_rsa", "Users/alice/secrets/key.pem", "home/alice/key", "tmp/x", "etc/passwd", "root/x",
+    "C:/Users/alice/key", "C:foo/bar", "private/var/x", "a/.env", ".ssh/id_rsa", "VAR/lib/x", "Volumes/disk/key",
+    "x/home/alice/id_rsa", "export/home/alice/x", "cygdrive/c/x", "x/Users/alice/key", "Windows/System32/config",
+    "workspace/app/secrets.json", "src/app/config.yaml", "docs/secret.txt", "Desktop/key.pem", "a/credentials",
+    "nix/store/abc/id_ed25519", "x/known_hosts", "x/vault.kdbx", "x/settings.TOML",
+    ".cache/x", "workspace/.git/x", "x/.hidden", "org/.npmrc", "run/secrets/db_password", "proc/self/environ",
+    "opt/app/secrets/api", "srv/app/token", "dev/shm/x", "x/id_rsa.pub", "x/server.key.bak", "x/kubeconfig",
+    "x/private.ppk", "x/terraform.tfstate", "x/htpasswd", "x/credentials.csv", "x/creds.properties",
+    "x/id_ed25519_sk"])
+def test_a_path_is_not_a_model_s_name(key, value):
+    from provevi import plain_attribute, plain_name
+
+    assert plain_attribute(key, value) is False and plain_name(value) is False
+
+
+@pytest.mark.parametrize("value", [
+    "openrouter/meta-llama/llama-3-70b", "huggingface/Qwen/Qwen2.5-7B", "bedrock/us.anthropic.claude-3-5-sonnet",
+    "gpt-4.1", "together_ai/x/y", "vertex_ai/gemini-1.5-pro", "projects/p/locations/us/publishers/google/models/g",
+    "library/llama3", "ollama/llama3:8b", "replicate/owner/model:abc123", "cloudflare/@cf/meta/llama-3-8b",
+    "ollama/hf.co/org/X-GGUF:Q4_K_M", "fireworks_ai/accounts/fireworks/models/llama-v3",
+    "bedrock/arn:aws:bedrock:us-east-1:1:inference-profile/us.anthropic.claude-3-5-sonnet-v1:0",
+    "huggingface/org/model.gguf", "claude-3.5-sonnet"])
+def test_a_common_model_s_name_is_still_plain(value):
+    from provevi import plain_attribute, plain_name
+
+    assert plain_name(value, declared=[value]) is True
+    assert plain_attribute("gen_ai.request.model", value) is True
+
+
+@pytest.mark.parametrize("value", ["dev/main", "run/42", "opt/in", "library/llama3", ".NET", "sys/admin"])
+def test_a_name_with_one_slash_that_is_not_a_path_is_plain(value):
+    from provevi import plain_name
+
+    assert plain_name(value) is True
 
 
 @pytest.mark.parametrize("name, plain", [("agent run", True), ("chat gpt-4o", True), ("one", True),
