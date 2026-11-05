@@ -17,7 +17,8 @@ Each section below shows one feature with examples and their real output. [The t
 | store | Where provevi keeps the evidence. The `file` store keeps files in each run folder. The `sqlite` store also keeps every run in one SQLite file. |
 | experiment | The runs of one agent in one org, domain and environment, such as `acme/demo/dev/revenue-question`. |
 | telemetry policy | The operator's file that says which libraries may load, and where data from a run may go, besides the evidence. |
-| destination | A place outside the evidence that data may go to, such as an OpenTelemetry collector or MLflow. |
+| destination | A place outside the evidence that data may go to, such as an OpenTelemetry collector, MLflow or a live viewer. |
+| live feed | The events of a run as it goes, cut to a level, which a program streams to a viewer such as a browser. |
 | level | What a destination receives: `names`, `usage` or `bodies`, from least to most. |
 
 The examples that use `$STORE`, `$RUN1` or `$RUN2` ran in the shell of [the tour](provevi-tour.md), after `source tours/provevi/start.sh`, in the order of its steps. The examples that use `packages/provevi/tests/data` read a run that the repository holds.
@@ -317,6 +318,30 @@ prove: the telemetry policy approves no mlflow destination for MLFLOW_TRACKING_U
 The copy can also go to an MLflow tracking server, or to MLflow's tables in Postgres. The level limits what it holds, as for any destination.
 
 The copy refuses to run while a proxy variable or a Postgres variable such as `PGHOST` could send it elsewhere. A copy that fails part way deletes what it wrote. An approved library's spans, such as PydanticAI's, go in when the policy lets that library feed MLflow. [The reference](provevi.md#copy-a-run-into-mlflow) gives the rules. `prove ui` opens MLflow's viewer on the store's own file, on 127.0.0.1. On macOS, `/tmp` is a link to `/private/tmp`, so the store's path shows as `/private/tmp`.
+
+## Show a run to a live viewer
+
+provrun can give a live feed of a run, which a program such as a web app streams to a browser. The policy names the viewer as a destination of kind `live`, with a level. provevi cuts each event to what the viewer may see. `replay` gives the same feed for a run that has ended, so a browser that connects late sees the same items. This program, `tours/provevi/replay.py`, prints each event as its type and the keys of its data:
+
+```
+$ uv run python tours/provevi/replay.py $RUN2 names
+run_created              agent backend domain env mode org span_id trace_id
+access_requested         mode
+access_granted           decision grant_id mode policy
+context_resolved         grant_id parent_span_id span_id started_at trace_id
+snapshot_materialized    kind parent_span_id sha256 span_id started_at trace_id
+input_staged             kind parent_span_id sha256 span_id started_at trace_id
+sandbox_started          agent backend model
+prompt_rendered
+model_called             finish_reason model parent_span_id span_id started_at streamed trace_id
+sandbox_completed        status
+input_verified           parent_span_id sha256 span_id started_at trace_id unchanged
+output_artifact_created  parent_span_id sha256 span_id started_at trace_id
+run_completed            span_id trace_id
+{"n": 14, "run_id": "run-20261102T192005Z-c93d67ab", "status": "completed", "type": "done"}
+```
+
+At `names`, the feed kept only the keys that hold names, such as `model` and `status`. The purpose, the file's name, the paths, the spec and the token counts stayed out. At `bodies`, it adds them, and the model's answer as a `text` item. [The reference](provevi.md#show-a-run-to-a-live-viewer) says what each level shows.
 
 ## Use it from Python
 

@@ -47,3 +47,7 @@ show "uv run prove --store \$STORE mlflow \$RUN1 --policy tours/provevi/policy.y
 
 step "Step 7: Ask the same questions from Python"
 show uv run python tours/provevi/query.py
+
+step "Step 8: Show a finished run to a live viewer"
+show uv run python tours/provevi/replay.py \$RUN2 names
+show uv run python tours/provevi/replay.py \$RUN2 bodies
