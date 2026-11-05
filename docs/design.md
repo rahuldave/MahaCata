@@ -92,10 +92,10 @@ Each driver uses its cloud's Python SDK, never a command-line tool. The version 
 
 `LocalCache` writes every file to a temporary name under `.provcat/tmp` and then renames it, so a reader never sees half a file. The records under `.provcat` are named by a hash of the store and the key, so two keys never share or block a record:
 
-- **`meta`:** the version of each cached file, with its size, modification time and SHA-256. If only the time changed, for example after a copy of the cache, provcat hashes the file and keeps it when the hash matches. If the bytes changed, provcat fetches the file again.
+- **`meta`:** the version of each cached file, with its size, modification time, inode and SHA-256. If the time or the inode changed, as after a copy of the cache, provcat hashes the file and keeps it if the hash matches. If the bytes changed, provcat fetches the file again. On Linux a tick of the clock can be a few milliseconds, so the inode tells apart two files of one size from one tick. Two writes of one file take turns, so its record describes the last one. A read that sees the record change while it checks the file gets no file, and fetches it again.
 - **`done`:** a folder that was fetched whole.
 - **`refs`:** a branch, tag or default branch pinned to a commit. The record includes the kind, so `tag:v1` and `branch:v1/x` do not touch each other.
-- **`locks`:** one lock file for each folder. Fetches of one folder run one at a time, in threads and in processes.
+- **`locks`:** one lock file for each folder and each file. Fetches of one folder, and writes of one file, run one at a time, in threads and in processes.
 
 Some disks, for example the default disks of macOS and Windows, store `Guide.md` and `guide.md` as one file. The same is true of one name in two Unicode forms. The GitHub and Hugging Face drivers and the object stores refuse to fetch a folder that holds two such names. They compare every level of each path.
 
