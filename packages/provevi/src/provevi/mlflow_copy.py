@@ -15,8 +15,9 @@ destination that matches it gives the level, which is what the copy holds.
 With the variable unset, the copy goes to the store's own file. A place that
 no destination matches gets nothing.
 
-The copy makes an MLflow experiment named for the run's experiment, such as
-``acme/demo/dev/revenue-agent``, and an MLflow run tagged with provrun's run
+The copy makes an MLflow experiment named for the experiment that the run
+names, such as ``acme/risk/dev/credit/q``, or else for the run's agent class,
+such as ``acme/demo/dev/revenue-agent``, and an MLflow run tagged with provrun's run
 ID. MLflow picks its own run ID, so the tag is how provevi finds the copy
 again. Copying a run again deletes the earlier copy first, so the copy can be
 rebuilt at any time.
@@ -342,10 +343,26 @@ def _keep(value: Any, level: str) -> bool:
 def _write(client, events: list[EvidenceEvent], record, level: str, sqlite_file: Path | None) -> dict:
     created, ending = events[0], events[-1]
     data = created.data
-    # Each part of the experiment's name goes in below bodies only if it is a
-    # name, as an agent's name may be any text.
-    experiment = "/".join(str(data.get(k, "")) if level == "bodies" or plain_name(data.get(k)) else k
-                          for k in ("org", "domain", "env", "agent"))
+    # The experiment that the run names, else its agent class. Each part of
+    # the name goes in below bodies only if it is a name, as a part may be
+    # any text.
+    named = data.get("experiment")
+    if isinstance(named, str) and named.startswith("experiment://"):
+        parts = named.split("?", 1)[0].removeprefix("experiment://").split("/")
+        labels = ("org", "team", "env", "project", "name")
+    else:
+        labels = ("org", "domain", "env", "agent")
+        parts = [str(data.get(k, "")) for k in labels]
+    experiment = "/".join(parts)
+    if level != "bodies":
+        # A part that is not a name is its label. The whole must be a name
+        # too, which its parts alone do not show, as home/someone/.ssh/id_rsa
+        # has plain parts. A whole that is not, or has another shape, is the
+        # labels and a short hash of it, so two such experiments stay apart.
+        if len(parts) == len(labels):
+            experiment = "/".join(p if plain_name(p) else labels[i] for i, p in enumerate(parts))
+        if len(parts) != len(labels) or not plain_name(experiment, declared=[experiment]):
+            experiment = "/".join(labels) + "-" + sha256_bytes("/".join(parts).encode())[:8]
     exp = client.get_experiment_by_name(experiment)
     if exp is None:
         place = (sqlite_file.parent / "mlflow-artifacts").as_uri() if sqlite_file is not None else None

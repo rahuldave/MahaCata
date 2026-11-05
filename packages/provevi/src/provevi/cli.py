@@ -45,12 +45,14 @@ def _sqlite(store: EvidenceStore, what: str):
 
 def cmd_runs(args) -> int:
     store = store_of(args)
-    if args.reading and args.experiment:
-        raise ProveviError("give --reading or --experiment, not both")
+    if sum(bool(x) for x in (args.reading, args.experiment, args.agent)) > 1:
+        raise ProveviError("give one of --reading, --experiment and --agent")
     if args.reading:
         runs = _sqlite(store, "which runs read a URI").runs_reading(args.reading)
     elif args.experiment:
         runs = _sqlite(store, "which runs belong to an experiment").runs_of_experiment(args.experiment)
+    elif args.agent:
+        runs = _sqlite(store, "which runs are of an agent").runs_of_agent(args.agent)
     else:
         runs = store.list_runs()
     for run_id in runs:
@@ -60,8 +62,51 @@ def cmd_runs(args) -> int:
 
 def cmd_experiments(args) -> int:
     for e in _sqlite(store_of(args), "which experiments there are").experiments():
-        print(f"{e['id']}  created by {e['created_by']} at {e['created_at']}")
+        print(f"{e['uri']}  {_count(e['versions'], 'version')}, {_count(e['runs'], 'run')}")
     return 0
+
+
+def cmd_experiment(args) -> int:
+    e = _sqlite(store_of(args), "what an experiment holds").experiment(args.experiment)
+    if e is None:
+        raise ProveviError(f"no run in the store names the experiment {args.experiment}")
+    print(f"{e['uri']}  first named by {e['first_run']}")
+    for v in e["versions"]:
+        print(f"  {v['pin']}  sha256 {v['sha256'][:12]}  {_count(len(v['runs']), 'run')}")
+        for run_id in v["runs"]:
+            print(f"    {run_id}")
+    if args.config:
+        from provcat import Catalog
+
+        from .experiments import read_experiment
+
+        now_ = read_experiment(Catalog.open(args.config, tenant=args.tenant), e["uri"])
+        print(f"  newest version in the catalog: {now_.pin}")
+        print("    " + now_.experiment.to_bytes().decode().rstrip().replace("\n", "\n    "))
+    return 0
+
+
+def cmd_agents(args) -> int:
+    for a in _sqlite(store_of(args), "which agents there are").agents():
+        print(f"{a['id']}  {_count(a['versions'], 'version')}, {_count(a['runs'], 'run')}")
+    return 0
+
+
+def cmd_agent(args) -> int:
+    a = _sqlite(store_of(args), "what an agent's versions are").agent(args.agent)
+    if a is None:
+        raise ProveviError(f"no run in the store is of the agent {args.agent}")
+    print(f"{a['id']}  first run {a['first_run']}")
+    for v in a["versions"]:
+        settings = json.dumps(v["settings"], sort_keys=True, ensure_ascii=False)
+        print(f"  version {v['spec_sha256'][:12]}  {_count(len(v['runs']), 'run')}  {settings}")
+        for run_id in v["runs"]:
+            print(f"    {run_id}")
+    return 0
+
+
+def _count(n: int, what: str) -> str:
+    return f"{n} {what}" + ("" if n == 1 else "s")
 
 
 def cmd_access(args) -> int:
@@ -190,13 +235,14 @@ def verify_command(args, prog: str, folder: Path | None = None) -> int:
         print(f"{prog}: {p}", file=sys.stderr)
     if check.ok:
         print(f"{check.run_id}: the evidence and the outputs verify"
-              + (", and match the committed bundle" if check.pinned else "; no committed bundle to compare with"))
+              + (", and match the committed bundle" if check.pinned else "; no committed bundle to compare with")
+              + (f"; its experiment matches {check.experiment}" if check.experiment else ""))
     return 0 if check.ok else 1
 
 
 def add_verify_arguments(v: argparse.ArgumentParser) -> None:
     v.add_argument("run", help="a run ID under the runs root, or the path of a run folder")
-    v.add_argument("--config", help="the provcat configuration, to read the committed bundle")
+    v.add_argument("--config", help="the provcat configuration, to read the committed bundle and the experiment")
     v.add_argument("--tenant", help="the provcat tenant")
     v.add_argument("--bundle", help="the pinned URI of the committed bundle, taken from outside the run folder; "
                                     "used instead of bundle.json")
@@ -209,11 +255,27 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--runs", type=Path, default=default_runs_root(), help="the runs root")
     ap.add_argument("--store", help="the evidence store: file (the default) or sqlite:///path")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    r = sub.add_parser("runs", help="list the runs in the store, or those that read a URI or belong to an experiment")
+    r = sub.add_parser("runs", help="list the runs in the store, or those that read a URI, name an experiment or "
+                                    "are of an agent")
     r.add_argument("--reading", metavar="URI", help="only the runs that staged this URI as an input")
-    r.add_argument("--experiment", metavar="NAME", help="only the runs of this experiment, such as acme/demo/dev/q")
+    r.add_argument("--experiment", metavar="URI", help="only the runs that named this experiment, such as "
+                                                       "experiment://acme/risk/dev/credit/q, or one pinned version")
+    r.add_argument("--agent", metavar="NAME", help="only the runs of this agent class, such as acme/demo/dev/q")
     r.set_defaults(fn=cmd_runs)
-    sub.add_parser("experiments", help="list the experiments in the store").set_defaults(fn=cmd_experiments)
+    sub.add_parser("experiments", help="list the experiments that runs named").set_defaults(fn=cmd_experiments)
+    x = sub.add_parser("experiment", help="show an experiment's versions and their runs")
+    xs = x.add_subparsers(dest="what", required=True)
+    xshow = xs.add_parser("show", help="show an experiment's versions and their runs")
+    xshow.add_argument("experiment", help="its URI, such as experiment://acme/risk/dev/credit/q")
+    xshow.add_argument("--config", help="the provcat configuration, to also print the newest version in the catalog")
+    xshow.add_argument("--tenant", help="the provcat tenant")
+    xshow.set_defaults(fn=cmd_experiment)
+    sub.add_parser("agents", help="list the agent classes of the runs").set_defaults(fn=cmd_agents)
+    g = sub.add_parser("agent", help="show an agent class's versions and their runs")
+    gs = g.add_subparsers(dest="what", required=True)
+    gshow = gs.add_parser("show", help="show an agent class's versions and their runs")
+    gshow.add_argument("agent", help="its name, such as acme/demo/dev/q")
+    gshow.set_defaults(fn=cmd_agent)
     a = sub.add_parser("access", help="print the grants and refusals of a run")
     a.add_argument("run")
     a.set_defaults(fn=cmd_access)

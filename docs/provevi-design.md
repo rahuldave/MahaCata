@@ -154,7 +154,7 @@ The decisions, agreed on 2026-10-31, are these:
 6. **The command is `prove`.**
 7. **Claude Code's full model requests and responses are kept when a run asks for them.** They are off by default, and are stored once each by hash, as payloads.
 8. **The first build stores content as it is, with no redaction,** but only in payloads named by hash, never in span attributes. Redaction rules come later, behind provrun's redaction hook.
-9. **An experiment is a catalog object,** with an `experiment://` URI, as a sealed run is committed under its bundle scheme. So a run names the exact version of its experiment.
+9. **An experiment is a catalog object,** with an `experiment://` URI, as a sealed run is committed under its bundle scheme. So a run names the exact version of its experiment. The section "Experiments, agents and workflows" gives the details, decided on 2026-11-05.
 10. **The first build covers PydanticAI and LiteLLM.** Claude Code and Codex come second, with the span receiver, their hooks and their session files.
 
 Two decisions were added on 2026-11-01:
@@ -177,21 +177,24 @@ MLflow holds traces well, but most of a run is not a trace. MLflow has no natura
 
 | Table | What it holds |
 |---|---|
-| `provevi_experiments` | ID, logical URI, organisation, domain, environment, name, description, the agent spec and its hash, created by, created at, and MLflow's experiment number. |
-| `provevi_runs` | provrun's run ID, its experiment, actor, status, start and end, evidence mode, parent run, the hash of the last event, the manifest hash, sealed at and the pinned bundle URI. |
+| `provevi_experiments` | One row per experiment that a run names, with its logical URI. |
+| `provevi_experiment_versions` | Each version of an experiment that a run reported, with its pinned URI, its file's hash and its first run. |
+| `provevi_agents` | One row per agent class, with its organisation, domain, environment and name. |
+| `provevi_agent_versions` | Each version of an agent class, with its spec's hash, its settings and its first run. |
+| `provevi_runs` | provrun's run ID, its agent class and spec hash, its experiment and the experiment's pin, actor, status, start and end, evidence mode, parent run, the hash of the last event, the manifest hash, sealed at and the pinned bundle URI. |
 | `provevi_run_params` | The settings of a run, such as the backend, model, tools and limits. Never secrets. |
 | `provevi_events` | Every evidence event, with its hash-chain fields and its trace and span IDs. |
 | `provevi_event_refs` | One row per URI in an event, so that a search by URI is fast. |
 | `provevi_payloads` | The SHA-256, size and location of each payload. |
 | `provevi_assessments` | Judgements on an experiment, a run, an event or a span. |
 
-Grants, refusals, inputs and outputs are views over `provevi_events`, so the record has one copy. An experiment can also be a catalog object, with an `experiment://` URI, as a sealed run is committed under its bundle scheme, such as `run://`.
+Grants, refusals, inputs and outputs are views over `provevi_events`, so the record has one copy. An experiment itself is a catalog object, and the tables keep only what the runs reported of it, as the section "Experiments, agents and workflows" says.
 
 ### The copy in MLflow
 
 | MLflow | What provevi writes there |
 |---|---|
-| `experiments` | One per provevi experiment. Its name is the experiment's logical name, for example `acme/demo/dev/revenue-agent`. |
+| `experiments` | One per experiment that runs name, such as `acme/risk/dev/credit/q`. A run that names none goes in its agent class's, such as `acme/demo/dev/revenue-agent`. |
 | `runs` | One per run, with provrun's own run ID. |
 | `params`, `tags`, `metrics` | The settings, the organisation, domain and environment, and the token counts, costs and call counts. |
 | `datasets`, `inputs` | Each staged input. The source is a JSON object with the full SHA-256, and with `bodies` the URI and the pinned URI. The digest is 32 characters of the SHA-256 of the name and the source. |
@@ -220,6 +223,46 @@ A test with MLflow 3.17.2 checked these:
 - `get_run`, `search_runs` by tag, `search_traces` by run and `get_trace` all returned provrun's ID. The trace's `mlflow.sourceRun` was provrun's ID.
 - MLflow refused a 64-character SHA-256 as a dataset digest, with "'digest' exceeds the maximum length of 36 characters". A 32-character digest worked, with the full SHA-256 in the source.
 - `mlflow server` on the file served the run and its input, and its web page loaded.
+
+## Experiments, agents and workflows
+
+Decided on 2026-11-05. An experiment and an agent are different things. An experiment is declared in a project, and an agent is derived from the runs until it is reused. Workflows are runs too. This section sets the names that later work can grow into, without fixing the shape of agents and flows too early.
+
+### Terms
+
+- **Experiment:** a question a team asks again and again in a project. Its runs may try many agents, or train many models.
+- **Agent class:** an agent's name, with the org, domain and environment of its runs, such as `acme/demo/dev/revenue-question`.
+- **Agent version:** the SHA-256 of an agent's spec, without its `prompt` and `inputs`, which are the task and not the agent. A changed model, instructions, tool or setting gives a new version.
+- **Instance:** one run of one agent version.
+- **Promotion:** writing an agent's spec to the catalog, so that another project, experiment or workflow can name it.
+- **Parent run:** the run that started this run, as a workflow starts its steps.
+
+### An experiment
+
+1. **An experiment is a folder in the catalog,** at `experiment://org/team/env/project/name`. It holds one file, `experiment.yaml`. A commit of the folder is a version, so the store must have commits.
+2. **The file says what the runs share.** It has a `kind`, either `agent-eval` for an agentic experiment for evals or `ml` for a machine-learning experiment. It has a `description`, the `inputs` that every run reads, such as an eval set or a dataset, and the names of its `metrics`.
+3. **It holds no agent spec,** so one experiment can try many agents. The run file keeps its `agent:`, and names the experiment beside it with `experiment:`.
+4. **provrun pins the experiment** through the run's catalog, as it pins an input. It records three fields in `run_created`. `experiment` is the URI as written, `experiment_pin` is the URI pinned to a commit, and `experiment_sha256` is the hash of the file at that commit.
+5. **provevi keeps each version that the runs report.** `prove experiment show` lists the versions and the runs of each. `prove verify --config` reads the file at the pin, and checks its hash.
+
+### An agent
+
+1. **An agent has no URL before promotion.** Its class and version come from the runs in the store, and nothing goes into the catalog. `prove agents` lists the classes, and `prove agent show` lists the versions and their runs.
+2. **An agent is promoted when something else reuses it.** Its spec is written and committed at `agent://org/team/env/project/name`, as `model://` registers a model. A run file then names it, and provrun pins it. Promotion is not built.
+3. **A run records its spec's hash either way.** So the runs from before a promotion match the promoted version by hash.
+
+Before this, provevi called each agent class an experiment. Version 2 of the store's schema moves those rows to the agent tables, and `prove runs --agent` replaces `prove runs --experiment` for them.
+
+### Workflows, sub-agents and swarms
+
+1. **A workflow is a run whose steps are runs.** Each child run records its `parent_run` in `run_created`. The runs form a tree, with no graph put on the agents. A Burr or Hamilton flow, a PydanticAI graph, and Claude Code's or Codex's sub-agents all fit.
+2. **A canned flow may later be promoted,** to `workflow://`, with its graph declared. A run then records which node it ran as, so the graph can be drawn from the evidence. Promoted flows are not built.
+3. **Agents in a swarm talk on a bus, such as Redis.** Each would record what it sends and receives as an event, with the message as a payload. Who talked to whom is rebuilt after the fact, with no graph declared. Message events are not built.
+
+### Context packs and outside information
+
+1. **A context pack is a named, versioned set of pinned inputs.** A run, an experiment or a promoted agent would name packs, and a run would record each pack's pin. Packs come before promotion, since a promoted agent's spec names the packs it needs. Packs are not built.
+2. **A tool may bring in outside information, such as a web search.** Each call would be an event, holding the query and the answer's hash, with the answer as a payload. A promoted agent's spec would say what it may reach, and a check would compare the two. Events for outside calls are not built. provrun's tools today, `grep` and `note`, reach nothing outside the run.
 
 ## Libraries first, with a command line on top
 

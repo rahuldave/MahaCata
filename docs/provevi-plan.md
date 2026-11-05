@@ -158,15 +158,23 @@ provevi writes all three through MLflow's client, `MlflowClient(tracking_uri=...
 
 **Status: built,** after Phase 4. provrun gives a run a live feed, which a program such as a web app streams to a browser. The policy names one viewer as a destination of kind `live`, with a level. provevi's `shown_at` cuts each event to what that viewer may see. Its `replay` gives the same feed for a run that has ended. [provevi's page](provevi.md#show-a-run-to-a-live-viewer) describes both.
 
-## Phase 5: experiments in the catalog
+## Phase 5: experiments and agent classes
 
-1. Store an experiment as a catalog object, at `experiment://<org>/<domain>/<env>/<name>`, holding its agent spec and its description.
-2. Let a run file name its experiment by URI. provrun pins it, and the run records the pinned version.
-3. Write `prove experiments` and `prove experiment show`.
+**Status: provevi's part is built; provrun's part is next.** [The design](provevi-design.md#experiments-agents-and-workflows) says what an experiment, an agent class and a parent run are. Decided on 2026-11-05.
 
-**Tests:** two runs of one experiment version name the same pin. A run after the experiment changes names the new pin.
+1. **provevi:** write the experiment file, `experiment.yaml`, and functions that write and commit it, and read it at a pin, through provcat.
+2. **provevi:** bring the store's schema to version 2. It keeps agent classes and their versions, derived from the runs, and the versions of each experiment that runs report. An earlier store's experiment rows become agent classes.
+3. **provevi:** write `prove agents`, `prove agent show`, `prove experiments`, `prove experiment show` and `prove runs --agent`.
+4. **provevi:** let `prove verify --config` read a run's experiment at its pin, and check its hash.
+5. **provcat:** map `experiment://org/team/env/project/name` to a folder, in the example configuration.
+6. **provrun:** let a run file name `experiment:`, beside `agent:`. Pin it through the run's catalog and record `experiment`, `experiment_pin` and `experiment_sha256` in `run_created`.
+7. **provrun:** record `parent_run` in `run_created`, for a run that another run starts.
 
-**Done when:** an experiment has versions, and each run names the version it ran.
+**Tests:** two runs of one experiment version name the same pin, and a run after the experiment changes names the new pin. Two runs of one agent with different prompts are one version, and changed instructions make a new one. An earlier store's rows move to the agent tables, and its runs still verify.
+
+**Done when:** an experiment has versions, each run names the version it ran, and `prove` lists the agent classes from the runs.
+
+**Later:** the design also names promoted agents at `agent://`, promoted flows at `workflow://`, and message events for swarms. It names context packs and events for outside calls too. None is planned yet.
 
 ## Phase 6: Claude Code and Codex
 

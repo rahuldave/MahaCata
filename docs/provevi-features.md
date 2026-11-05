@@ -15,7 +15,8 @@ Each section below shows one feature with examples and their real output. [The t
 | payload | A body that an event refers to by its SHA-256, such as the request and response of a model call. |
 | manifest | The last record of a run: how many events it has, the hash of the last one, and its payloads. |
 | store | Where provevi keeps the evidence. The `file` store keeps files in each run folder. The `sqlite` store also keeps every run in one SQLite file. |
-| experiment | The runs of one agent in one org, domain and environment, such as `acme/demo/dev/revenue-question`. |
+| experiment | A question a team asks again and again in a project. It is a folder in the catalog, such as `experiment://acme/risk/dev/credit/revenue`, and each commit of it is a version. |
+| agent class | An agent's name in its org, domain and environment, such as `acme/demo/dev/revenue-question`. The store finds it in the runs. |
 | telemetry policy | The operator's file that says which libraries may load, and where data from a run may go, besides the evidence. |
 | destination | A place outside the evidence that data may go to, such as an OpenTelemetry collector, MLflow or a live viewer. |
 | live feed | The events of a run as it goes, cut to a level, which a program streams to a viewer such as a browser. |
@@ -85,16 +86,24 @@ $ uv run provr --store $STORE run $TOUR_DIR/run.yaml 2> /dev/null > $TOUR_DIR/fi
 
 ## Ask questions across runs
 
-The `sqlite` store answers questions about many runs at once. Which runs read a file, and which runs belong to an experiment:
+The `sqlite` store answers questions about many runs at once. Which runs read a file, and which agents ran:
 
 ```
 $ uv run prove --store $STORE runs --reading file://$TOUR_DIR/report.txt
 run-20261102T191955Z-52539489
 run-20261102T192005Z-c93d67ab
 
-$ uv run prove --store $STORE experiments
-acme/demo/dev/revenue-question  created by you@example.com at 2026-11-02T19:19:55.358841Z
+$ uv run prove --store $STORE agents
+acme/demo/dev/revenue-question  1 version, 2 runs
+
+$ uv run prove --store $STORE agent show acme/demo/dev/revenue-question
+acme/demo/dev/revenue-question  first run run-20261102T191955Z-52539489
+  version fe7bd27a6da9  2 runs  {"backend": "litellm", "limits": {}, "model": "openai/gpt-4o-mini", "tools": []}
+    run-20261102T191955Z-52539489
+    run-20261102T192005Z-c93d67ab
 ```
+
+Both runs are one version of the agent class. A version is the start of the SHA-256 of the agent's spec, without its prompt and its inputs. Changed instructions or a new model make a new version.
 
 What a run was allowed to read, and why:
 
@@ -343,6 +352,30 @@ run_completed            span_id trace_id
 
 At `names`, the feed kept only the keys that hold names, such as `model` and `status`. The purpose, the file's name, the paths, the spec and the token counts stayed out. At `bodies`, it adds them, and the model's answer as a `text` item. [The reference](provevi.md#show-a-run-to-a-live-viewer) says what each level shows.
 
+## Write an experiment in the catalog
+
+An experiment is a folder in the catalog that holds `experiment.yaml`, and each commit of the folder is a version. It says what every run shares, such as the eval set and the metrics. It holds no agent spec, so one experiment can try many agents. This program writes one twice, in an S3 bucket that moto mocks, and reads both versions:
+
+```
+$ uv run python tours/provevi/experiment.py
+version 1: sha256 bdf38674b8fe, metrics accuracy
+version 2: sha256 5a27db5abdff, metrics accuracy recall
+the pins differ: True
+the newest version is version 2: True
+version 1 at its pin: Does a retrieval step raise accuracy on the revenue questions?
+the file at experiment://acme/risk/dev/credit/revenue:
+  kind: agent-eval
+  description: Does a retrieval step raise accuracy and recall on the revenue questions?
+  inputs:
+  - data+table://acme/risk/dev/evals/revenue
+  metrics:
+  - accuracy
+  - recall
+refused: experiment://acme/risk/dev/credit/revenue/experiment.yaml: name the experiment's folder, not its file
+```
+
+A run will name its experiment beside its agent, once provrun records the pin. Then `prove experiments` lists the experiments that runs named, and `prove experiment show` lists each version with its runs. `prove verify` reads the experiment at the run's pin, and checks its hash. [The reference](provevi.md#experiments-and-agent-classes) gives the file's keys.
+
 ## Use it from Python
 
 Each command calls a library function, which returns what it finds and prints nothing. This program, `tours/provevi/query.py`, finds the runs that read the tour's document, and checks each one:
@@ -372,6 +405,7 @@ run-20261102T192005Z-c93d67ab completed 81c0f05189eb verifies
 | `$STORE`, `$RUN1`, `$RUN2`, `$TOUR_DIR` | The tour's shell, after `source tours/provevi/start.sh`, in the order of [the tour's](provevi-tour.md) steps. The model's answer is mocked, so they need no key and no network. |
 | The run folder, the first event, the manifest and the one line of `prove show` | Another run of the tour, so their run ID differs from the rest. |
 | `packages/provevi/tests/data` | A run and a policy that the repository holds. |
+| `tours/provevi/experiment.py` | Step 9 of the tour. Its bucket is mocked in its own process. |
 | The Python programs on levels and matching | Any shell in the repository, with `uv run python`. |
 | The version that fails the policy | The repository's policy, with `versions: ">=2.65"` for pydantic-ai. |
 | `MLFLOW_TRACKING_URI=https://mlflow.example.com` | The tour's shell. The name is refused before anything connects to it. |

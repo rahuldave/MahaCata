@@ -304,13 +304,15 @@ class RunCheck:
     run_id: str
     problems: list[str] = field(default_factory=list)
     pinned: str | None = None  # the committed bundle compared with, if any
+    experiment: str | None = None  # the pinned experiment checked, if the run names one
 
     @property
     def ok(self) -> bool:
         return not self.problems
 
     def to_dict(self) -> dict:
-        return {"run_id": self.run_id, "ok": self.ok, "problems": self.problems, "pinned": self.pinned}
+        return {"run_id": self.run_id, "ok": self.ok, "problems": self.problems, "pinned": self.pinned,
+                "experiment": self.experiment}
 
 
 def verify_store_copy(run_folder: Path, store: EvidenceStore) -> list[str]:
@@ -360,7 +362,9 @@ def verify_run(run_folder: Path, *, catalog: Catalog | Callable[[], Catalog] | N
                bundle: str | None = None, require_bundle: bool = False,
                store: EvidenceStore | None = None) -> RunCheck:
     """Check a run as ``prove verify`` does: its evidence, then its outputs,
-    then its committed bundle. With a store that keeps its own record, such as
+    then its committed bundle, then the version of the experiment that it
+    names, read at its pin, whose hash must match the run's. With a store
+    that keeps its own record, such as
     a SqliteStore, the run as the store holds it is checked too, and must
     match the folder. A malformed run gives problems, never an
     exception. bundle is the pinned URI of the bundle, taken
@@ -381,6 +385,43 @@ def verify_run(run_folder: Path, *, catalog: Catalog | Callable[[], Catalog] | N
     except EvidenceError as e:
         check.problems.append(str(e))
         return check
+    if callable(catalog):
+        catalog = _once(catalog)
     check.problems += verify_bundle(run_folder, pinned, catalog, require=require_bundle)
     check.pinned = pinned
+    check.problems += verify_experiment(run_folder, catalog)
+    created = read_events(run_folder / "evidence")[0].data
+    check.experiment = created.get("experiment_pin") if isinstance(created.get("experiment_pin"), str) else None
     return check
+
+
+def _once(open_catalog: Callable[[], Catalog]) -> Callable[[], Catalog]:
+    """open_catalog, called at most once, so the bundle and the experiment
+    share one catalog."""
+    opened: list = []
+
+    def get() -> Catalog:
+        if not opened:
+            opened.append(open_catalog())
+        return opened[0]
+
+    return get
+
+
+def verify_experiment(run_folder: Path, catalog: Catalog | Callable[[], Catalog] | None) -> list[str]:
+    """Problems with the experiment that a run names in run_created: its
+    pin must read through catalog, and the file there must have the hash
+    the run recorded. Nothing for a run that names no experiment."""
+    from .experiments import experiment_problems
+
+    created = read_events(Path(run_folder) / "evidence")[0].data
+    if not any(k in created for k in ("experiment", "experiment_pin", "experiment_sha256")):
+        return []
+    if catalog is None:
+        return [f"no catalog was given to read the experiment {created.get('experiment_pin')}"]
+    try:
+        if callable(catalog):
+            catalog = catalog()
+    except Exception as e:  # provcat's errors, and a bad configuration
+        return [f"cannot open the catalog to read the experiment {created.get('experiment_pin')}: {e}"]
+    return experiment_problems(catalog, created)
