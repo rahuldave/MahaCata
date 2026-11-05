@@ -8,7 +8,7 @@ mounted into a container. The layout is::
     <root>/.provcat/done/<hash>.json       a folder that was fetched whole
     <root>/.provcat/refs/<hash>            a moving name pinned to a version
     <root>/.provcat/tmp/                   files and folders being written
-    <root>/.provcat/locks/<hash>.lock      one lock for each folder install
+    <root>/.provcat/locks/<hash>.lock      one lock for each key being written
     <root>/.provcat/snapshots/<kind>/<sha>/<name>  a read-only copy, named by its content
 
 A store decides the key. GitHub keys hold the commit, so they never change.
@@ -16,9 +16,12 @@ S3 keys are bucket and object key, and the meta file holds the ETag.
 
 The records under .provcat are named by a hash of store and key, so two keys
 can never share or block a record. A meta record also holds the size, the
-modification time and the SHA-256 of the file it describes. If the time differs,
-for example after the cache was copied, the file is hashed again and kept when
-the hash matches. If anything else changed the bytes, the file is fetched again.
+modification time, the inode and the SHA-256 of the file it describes. If the
+time or the inode differs, as after the cache was copied, the file is hashed
+again and kept if the hash matches. On Linux a time's tick can be a few
+milliseconds, so the inode tells apart two files of one size from one tick.
+Writes of one key take its lock, so the last record describes the last file,
+and a read that saw the record change while it looked returns nothing. If anything else changed the bytes, the file is fetched again.
 
 Two names that differ only in case or in Unicode form land in one file on macOS
 and Windows. ``find_twins`` finds such names, and the stores refuse a folder
@@ -144,21 +147,27 @@ class LocalCache:
     @staticmethod
     def _fingerprint(p: Path) -> dict:
         st = p.stat()
-        return {"size": st.st_size, "mtime_ns": st.st_mtime_ns, "sha256": _sha256(p)}
+        return {"size": st.st_size, "mtime_ns": st.st_mtime_ns, "ino": st.st_ino, "sha256": _sha256(p)}
 
-    def _unchanged(self, p: Path, record: Path, meta: dict) -> bool:
+    def _unchanged(self, p: Path, store: str, key: list[str], meta: dict) -> bool:
         """True if p still holds the bytes that meta describes."""
         want = meta.get("file") or {}
         st = p.stat()
         if st.st_size != want.get("size"):
             return False
-        if st.st_mtime_ns == want.get("mtime_ns"):
+        # A time's tick can be coarse, as on Linux, so two writers' files can share
+        # a size and a time. Each write renames a new file into place, so the
+        # inode tells them apart.
+        if st.st_mtime_ns == want.get("mtime_ns") and st.st_ino == want.get("ino"):
             return True
         if _sha256(p) != want.get("sha256"):
             return False
+        record = self._record("meta", store, key)
         try:  # the bytes match; remember the new time so the hash is not needed next time
-            self._write_json(record, {**meta, "file": {**want, "mtime_ns": st.st_mtime_ns}})
-        except StoreError:
+            with self.lock(store, key):
+                if self._read_json(record) == meta:  # no put wrote a newer record meanwhile
+                    self._write_json(record, {**meta, "file": {**want, "mtime_ns": st.st_mtime_ns, "ino": st.st_ino}})
+        except (OSError, StoreError):
             pass  # a read-only cache
         return True
 
@@ -173,11 +182,13 @@ class LocalCache:
         record = self._record("meta", store, key)
         meta = self._read_json(record)
         try:
-            if meta is None or not p.is_file() or not self._unchanged(p, record, meta):
+            if meta is None or not p.is_file() or not self._unchanged(p, store, key, meta):
                 return None
         except OSError:
             return None
         if version is not None and meta.get("version") != version:
+            return None
+        if self._read_json(record) != meta:  # a put finished meanwhile; meta may not describe p
             return None
         return p
 
@@ -200,10 +211,17 @@ class LocalCache:
             # A rename keeps the modification time, so the measure describes p after the rename.
             got["file"] = self._fingerprint(tmp)
 
-        self._record("meta", store, key).unlink(missing_ok=True)
-        self._write_atomic(p, run, measure)
-        self._write_json(self._record("meta", store, key),
-                         {"store": store, "key": key, "version": got["version"], "file": got["file"]})
+        # One writer of a key at a time, so the last record describes the last file.
+        # Without the lock, a third writer's file could take the inode number of
+        # the first writer's freed file, and the first writer's late record vouch for it.
+        try:
+            with self.lock(store, key):
+                self._record("meta", store, key).unlink(missing_ok=True)
+                self._write_atomic(p, run, measure)
+                self._write_json(self._record("meta", store, key),
+                                 {"store": store, "key": key, "version": got["version"], "file": got["file"]})
+        except OSError as e:
+            raise StoreError(f"cannot write {p} in the cache: {e}") from e
         return p
 
     # whole folders
