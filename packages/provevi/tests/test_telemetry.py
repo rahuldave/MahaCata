@@ -596,13 +596,31 @@ def test_a_path_is_not_a_model_s_name(key, value):
     assert plain_attribute(key, value) is False and plain_name(value) is False
 
 
+@pytest.mark.parametrize("key", sorted(MODEL_KEYS) + ["gen_ai.system", "status"])
+@pytest.mark.parametrize("value", [
+    "https:/host/x", "http:/evil.com/a/b", "s3:/bucket/a/b", "gs:/bucket/key/x", "https:/host", "s3:bucket/x",
+    "bucket.s3.amazonaws.com/a/b", "host.com/x", "user@host.com/a/b", "a@b/c", "10.0.0.1/admin",
+    "proxy/https:/host/x", "openai/http:/10.0.0.1/x", "litellm_proxy/user@host.com/x", "x/host.com/a",
+    "vertex_ai/user@proj.iam/x", "localhost/admin/x", "x/localhost:8080/a", "HTTPS:/Host/x", "x/Host.COM/a",
+    "db:5432/x", "minio:9000/bucket/x", "my_host.internal/x", "host.com./x", "LOCALHOST./x", "127.1/x",
+    "0177.0.0.1/x", "fe80::1/x", "r2:bucket/a/b", "oss:bucket/a/b", "dbfs:bucket/a/b"])
+def test_a_url_host_or_email_with_a_path_is_not_a_name(key, value):
+    from provevi import plain_attribute, plain_name
+
+    assert plain_attribute(key, value) is False and plain_name(value) is False
+
+
 @pytest.mark.parametrize("value", [
     "openrouter/meta-llama/llama-3-70b", "huggingface/Qwen/Qwen2.5-7B", "bedrock/us.anthropic.claude-3-5-sonnet",
     "gpt-4.1", "together_ai/x/y", "vertex_ai/gemini-1.5-pro", "projects/p/locations/us/publishers/google/models/g",
     "library/llama3", "ollama/llama3:8b", "replicate/owner/model:abc123", "cloudflare/@cf/meta/llama-3-8b",
     "ollama/hf.co/org/X-GGUF:Q4_K_M", "fireworks_ai/accounts/fireworks/models/llama-v3",
     "bedrock/arn:aws:bedrock:us-east-1:1:inference-profile/us.anthropic.claude-3-5-sonnet-v1:0",
-    "huggingface/org/model.gguf", "claude-3.5-sonnet"])
+    "huggingface/org/model.gguf", "claude-3.5-sonnet", "groq:meta-llama/llama-4-scout-17b-16e-instruct",
+    "huggingface:Qwen/Qwen3-235B-A22B", "openrouter:anthropic/claude-3.5-sonnet", "together:meta-llama/Llama-3-70b",
+    "hf.co/bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M", "huggingface.co/org/model",
+    "modelscope.cn/Qwen/Qwen2.5-3B-Instruct-GGUF", "registry.ollama.ai/library/llama3:latest", "github:openai/gpt-4.1",
+    "huggingface/deepseek-ai/DeepSeek-V2.5", "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"])
 def test_a_common_model_s_name_is_still_plain(value):
     from provevi import plain_attribute, plain_name
 

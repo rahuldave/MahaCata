@@ -154,6 +154,10 @@ provevi writes all three through MLflow's client, `MlflowClient(tracking_uri=...
 
 **Done when:** a real PydanticAI run and a real LiteLLM run verify with `prove verify`. Both show in MLflow's viewer, from a tracking server and from the store's own file.
 
+## The live feed of a run
+
+**Status: built,** after Phase 4. provrun gives a run a live feed, which a program such as a web app streams to a browser. The policy names one viewer as a destination of kind `live`, with a level. provevi's `shown_at` cuts each event to what that viewer may see. Its `replay` gives the same feed for a run that has ended. [provevi's page](provevi.md#show-a-run-to-a-live-viewer) describes both.
+
 ## Phase 5: experiments in the catalog
 
 1. Store an experiment as a catalog object, at `experiment://<org>/<domain>/<env>/<name>`, holding its agent spec and its description.
