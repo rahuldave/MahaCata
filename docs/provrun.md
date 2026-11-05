@@ -427,7 +427,9 @@ Each span is cut down to the level the destination receives:
 
 Below `bodies`, a span's events and its status message are dropped, because they can hold an exception's text. Its links and its scope keep only what the level allows.
 
-A span name can hold a prompt or a person's name. So a name that is not one or two plain words becomes the library's name, as provevi's `plain_span_name` decides. A plain word holds no URL, no user and password, no setting such as `token=x` and no path from `/`. Below `bodies`, an attribute's text that passes as a name but is not plain is left out too, as provevi's `plain_name` decides. The evidence keeps such a span name in the payload.
+A span name can hold a prompt or a person's name. So a name that is not one or two plain words becomes the library's name, as provevi's `plain_span_name` decides. A plain word holds no `/` at all. The evidence keeps such a span name in the payload.
+
+Below `bodies`, an attribute's text that passes as a name but is not plain is left out too, as provevi's `plain_attribute` decides. Such a text holds no URL, no user and password, no setting such as `token=x`, no path from `/` and no more than one `/`. A model's name, such as `openrouter/meta-llama/llama-3-70b`, may have more than one `/`. A shape test cannot tell a model's name from a relative path such as `data/alice/notes`, so such a path passes under a model's key.
 
 provrun sends OTLP over HTTP itself, with protobuf. Its sender reads no variable of its own. So the OTLP headers never reach Logfire, and Logfire's token never reaches the collector. It does not follow a redirect from the place.
 

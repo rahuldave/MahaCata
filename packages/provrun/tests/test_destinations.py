@@ -580,6 +580,20 @@ def test_below_bodies_a_value_that_is_not_plain_is_left_out():
     assert destinations._cut(span, "bodies") is span
 
 
+def test_below_bodies_a_model_name_may_have_more_slashes_and_nothing_else_may():
+    span = _span("chat", {"gen_ai.request.model": "openrouter/meta-llama/llama-3-70b",
+                          "gen_ai.system": "tmp/a/b", "gen_ai.response.model": "a/b/c://x"})
+    cut = destinations._cut(span, "names")
+    assert dict(cut.attributes) == {"gen_ai.request.model": "openrouter/meta-llama/llama-3-70b"}
+
+
+@pytest.mark.parametrize("path", ["home/alice/.ssh/id_rsa", "Users/alice/notes/a.txt", "C:/Users/alice/x", "a/../../etc"])
+def test_below_bodies_a_file_path_under_a_model_key_is_left_out(path):
+    # Guards provevi: a model key lets more slashes through, but not these.
+    cut = destinations._cut(_span("chat", {"gen_ai.request.model": path}), "names")
+    assert dict(cut.attributes) == {}
+
+
 def test_a_scope_s_names_are_quick_after_the_first():
     # Reading the installed packages takes most of a second; a run asks for
     # each span, so provevi reads them once.
