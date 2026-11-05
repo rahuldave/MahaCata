@@ -717,8 +717,7 @@ $ R8=$(uv run python tours/provrun/field.py $TOUR_DIR/r8.json run_id)
 $ uv run python tours/provrun/event.py $R8 telemetry_blocked detail
 MLFLOW_TRACKING_URI: matches no mlflow destination of the policy; nothing is copied
 
-$ ls $TOUR_DIR/elsewhere.db || echo "no copy"
-ls: /tmp/provrun-tour/elsewhere.db: No such file or directory
+$ test -e $TOUR_DIR/elsewhere.db || echo "no copy"
 no copy
 ```
 
