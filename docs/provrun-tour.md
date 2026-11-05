@@ -189,10 +189,7 @@ $ R1=$(uv run python tours/provrun/field.py $TOUR_DIR/r1.json run_id)
 ## Step 3: Look at the cache
 
 ```
-$ find $TOUR_DIR/cache -type f | sort
-/tmp/provrun-tour/cache/.provcat/locks/94c319e2d0007faa0c7404ce262c520d461c24246cfb26e7a16df72ee7cfe5a7.lock
-/tmp/provrun-tour/cache/.provcat/locks/a35d1a702b018acdce543e9820b4472ef8af7beea862699a6751183b37088305.lock
-/tmp/provrun-tour/cache/.provcat/locks/f56a44fe7fcc5f807321f25b306828115c7bc7f388faeda61dc5dba8ed2c0694.lock
+$ find $TOUR_DIR/cache -type f -not -path "*/.provcat/locks/*" | sort
 /tmp/provrun-tour/cache/.provcat/meta/a35d1a702b018acdce543e9820b4472ef8af7beea862699a6751183b37088305.json
 /tmp/provrun-tour/cache/.provcat/meta/f56a44fe7fcc5f807321f25b306828115c7bc7f388faeda61dc5dba8ed2c0694.json
 /tmp/provrun-tour/cache/.provcat/snapshots/file/205cfa28c510eeba46bd4bc49acc2fb13f7645f66bab5ff5f0c3bda90d26f0b2/report.txt
@@ -213,7 +210,7 @@ The cache now holds the file three times:
 
 The folder name of the snapshot is the SHA-256 of the content. Two runs that read the same content under the same name share one snapshot. On macOS and on Linux disks that can clone, the snapshot is a copy-on-write clone, so it costs almost no space.
 
-The records under `.provcat/meta` hold the version, the size, the modification time, the inode and the SHA-256 of each cached file. The files under `.provcat/locks` keep two processes from writing the same path at once. Each record and its lock file share a name.
+The records under `.provcat/meta` hold the version, the size, the modification time, the inode and the SHA-256 of each cached file. The listing leaves out `.provcat/locks`. It holds one lock file for each record, of the same name, so that two processes never write the same path at once.
 
 ## Step 4: Look at the run folder
 
