@@ -119,7 +119,7 @@ show 'PROVRUN_TELEMETRY_POLICY=$TOUR_DIR/mlflow.yaml MLFLOW_TRACKING_URI=sqlite:
   uv run provr --store $M run $TOUR_DIR/run.yaml > $TOUR_DIR/r8.json'
 show 'R8=$(uv run python tours/provrun/field.py $TOUR_DIR/r8.json run_id)'
 show 'uv run python tours/provrun/event.py $R8 telemetry_blocked detail'
-show 'ls $TOUR_DIR/elsewhere.db || echo "no copy"'
+show 'test -e $TOUR_DIR/elsewhere.db || echo "no copy"'
 
 step "Step 14: Ask for the reply in pieces"
 show '{ cat $TOUR_DIR/run.yaml; echo "  stream: true"; } > $TOUR_DIR/stream.yaml'

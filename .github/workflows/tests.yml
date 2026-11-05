@@ -25,5 +25,7 @@ jobs:
           for image in fsouza/fake-gcs-server:1.52.2 mcr.microsoft.com/azure-storage/azurite:3.35.0 postgres:17-alpine; do
             for try in 1 2 3; do docker pull -q "$image" && break; [ "$try" = 3 ] && exit 1; sleep 10; done
           done
+      # grep_file, a tool of provrun's, calls ripgrep.
+      - run: sudo apt-get update -q && sudo apt-get install -y -q ripgrep
       - run: uv sync --locked
       - run: uv run pytest -q -rfs

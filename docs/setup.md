@@ -44,9 +44,9 @@ docker pull fsouza/fake-gcs-server:1.52.2
 docker pull mcr.microsoft.com/azure-storage/azurite:3.35.0
 ```
 
-One provevi test copies evidence into Postgres. It runs `postgres:17-alpine` in Docker, which Docker downloads the first time.
+One provrun test needs ripgrep, the `rg` command, and skips without it. One provevi test copies evidence into Postgres. It runs `postgres:17-alpine` in Docker, which Docker downloads the first time.
 
-GitHub runs the same tests on each push to any branch, by the workflow `.github/workflows/tests.yml`. It pulls the two emulator images and Postgres first, so the tests that use Docker run there too. It leaves out the system tests. Its output names each test that failed or skipped. See a commit's run with `gh run list --workflow tests.yml --commit "$(git rev-parse HEAD)"`.
+GitHub runs the same tests on each push to any branch, by the workflow `.github/workflows/tests.yml`. It installs ripgrep and pulls the two emulator images and Postgres first, so those tests run there too. It leaves out the system tests. Its output names each test that failed or skipped. See a commit's run with `gh run list --workflow tests.yml --commit "$(git rev-parse HEAD)"`.
 
 `packages/provcat/tests/object_store_suite.py` holds one set of tests for every object store. The integration tests run it against moto, fake-gcs-server and Azurite. The system tests run it against real AWS, GCS, Azure and lakeFS. Each system test makes its own bucket and deletes it afterwards. It uses the cloud's Python SDK, or the REST API for lakeFS.
 

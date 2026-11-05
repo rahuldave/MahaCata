@@ -1,5 +1,6 @@
 """Whole runs through run_agent, with fake models, so no network and no keys."""
 import asyncio
+import shutil
 from types import SimpleNamespace
 
 import pytest
@@ -123,6 +124,7 @@ def scripted(steps):
     return FunctionModel(fn)
 
 
+@pytest.mark.skipif(shutil.which("rg") is None, reason="grep_file needs ripgrep, the rg command")
 def test_a_pydantic_ai_run_reads_input_writes_output_and_records_tools(catalog, runs, docs):
     model = scripted([
         ("read_file", {"path": "/input/report.txt"}),
