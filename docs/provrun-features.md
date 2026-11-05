@@ -159,8 +159,8 @@ $ uv run prove --store $S runs --reading data://acme/demo/dev/reports/report.txt
 run-20261102T224043Z-e6ed9133
 run-20261102T224050Z-406f3eaf
 
-$ uv run prove --store $S experiments
-acme/demo/dev/revenue-question  created by you@example.com at 2026-11-02T22:40:43.723950Z
+$ uv run prove --store $S agents
+acme/demo/dev/revenue-question  1 version, 2 runs
 
 $ uv run prove --store $S access $Q
    2 granted  mounted_snapshot   data://acme/demo/dev/reports/report.txt  in the allow list; org and environment match

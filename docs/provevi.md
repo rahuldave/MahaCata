@@ -16,7 +16,10 @@ Experiments as catalog objects and the span receiver come in later phases.
 - **Evidence:** the file `events.jsonl`, the folder `payloads/` and the file `manifest.json`, in `evidence/`.
 - **Store:** an object that keeps the evidence of runs. `FileStore` writes the files in each run folder, as provrun always has. `SqliteStore` also keeps every run in one SQLite file.
 - **Store URI:** the name of a store. `file` is the file store, and `sqlite:///evidence.db` is a SQLite file.
-- **Experiment:** the runs of one agent in one org, domain and environment, such as `acme/demo/dev/revenue-question`.
+- **Experiment:** a question a team asks again and again in a project, such as `experiment://acme/risk/dev/credit/q`. It is a folder in the catalog, and each commit of it is a version. A run may name one.
+- **Agent class:** an agent's name in the org, domain and environment of its runs, such as `acme/demo/dev/revenue-question`. The store finds it in the runs.
+- **Agent version:** the SHA-256 of an agent's spec, without its `prompt` and its `inputs`, which are the task and not the agent.
+- **Parent run:** the run that started a run, as a workflow starts its steps.
 - **Writer:** what a store gives for one run. provrun's recorder hands it each event line and each payload, and seals it at the end.
 - **Committed bundle:** a copy of the run's evidence that provrun commits through provcat, in another store.
 - **Telemetry policy:** the operator's file that says what may record or send data from a run, besides the evidence.
@@ -85,7 +88,7 @@ How the store writes:
 - **Each event is a row as it happens.** The row is committed only once the line is also in the run's `events.jsonl`. If the file write or the commit fails, both are taken back, and the recorder counts the event as lost. If the process dies between the two, the file holds one more line than the rows, and the check against the store reports it.
 - **The run folder holds the same files as the `file` store.** So the bundle that provrun commits is the same in both stores. The payload bytes live only in the run's `payloads/` folder, and the table records their hash, size and place.
 - **Many runs can write one file at once,** from threads or from processes. A writer waits up to a minute for another one.
-- **The file records its schema version.** Opening a file to write brings an older version up to date, one step at a time. A file of a newer provevi is refused.
+- **The file records its schema version.** Opening a file to write brings an older version up to date, one step at a time. A file of a newer provevi is refused. Version 1 called each agent class an experiment. Version 2 moves those rows to the agent tables, and fills each run's agent version from its events.
 - **`SqliteStore(path, create=False)` only reads.** It writes nothing, and refuses a missing file, a file that holds no provevi evidence, and a file of another schema version. `prove` opens the store this way.
 - **provevi uses SQLite's WAL mode only.** A writer puts the file in WAL mode, which stays in the file. Every connection checks it, and a file in any other mode is refused. Even to read, SQLite writes a side file next to a WAL file, so the file's folder must be writable.
 - **A copy may leave WAL mode.** A copy made with `VACUUM INTO` is in another mode, so `prove` refuses it. Open the copy once to write, as `SqliteStore(path)` or `provr run` does, and it is in WAL mode again. A copy in a folder you cannot write must first be copied to one you can.
@@ -97,39 +100,78 @@ How the store writes:
 
 | Table or view | What it holds |
 |---|---|
-| `provevi_runs` | One row for each run: its experiment, actor, status, times, mode, folder, last hash, manifest, and where its bundle was committed. |
+| `provevi_runs` | One row for each run: its agent class and version, its experiment and the experiment's pin, its parent run, actor, status, times, mode, folder, last hash, manifest, and where its bundle was committed. |
 | `provevi_run_params` | The agent, backend, model, mode, tools and limits of a run. |
-| `provevi_experiments` | One row for each experiment, made by its first run. It holds that run's backend, model, tools and limits, and the SHA-256 of its whole agent spec. |
+| `provevi_agents` | One row for each agent class, with its first run. |
+| `provevi_agent_versions` | One row for each version of an agent class, with the backend, model, tools and limits, and its first run. |
+| `provevi_experiments` | One row for each experiment that a run named, with its first run. |
+| `provevi_experiment_versions` | One row for each version of an experiment that a run named, with its pin, its file's SHA-256 and its first run. |
 | `provevi_events` | Each event: its line, and its fields as columns, with the trace and span IDs. |
 | `provevi_event_refs` | Each URI that an event names. |
 | `provevi_payloads` | The SHA-256, size and place of each payload. |
 | `provevi_assessments` | Judgements on a run or an event. Nothing writes this table yet. |
 | `provevi_grants`, `provevi_refusals`, `provevi_inputs`, `provevi_outputs` | Views over the events. |
 
-The agent's `settings` may hold secrets, so the run's settings and the experiment leave them out. The `run_created` event still holds the whole spec, in the file as in `events.jsonl`.
+The agent's `settings` may hold secrets, so the run's settings and the agent's versions leave them out. The `run_created` event still holds the whole spec, in the file as in `events.jsonl`.
 
 A changed or deleted row fails the check:
 
 - the chain covers each event's line;
 - each row's columns and URIs must match its line;
 - the run's manifest must match its hash;
-- the run's org, domain, environment, actor, mode, experiment, status and times must be what its events say;
-- its settings, its experiment's name and parts, and its payload sizes must match its events and files;
+- the run's org, domain, environment, actor, mode, parent run, status and times must be what its events say;
+- so must its agent class and version, and its experiment, the experiment's pin and the file's hash;
+- its settings, its agent class's row and version, its experiment's rows and its payload sizes must match its events and files;
 - where its bundle was committed must match the run's `bundle.json`, if the store recorded it;
 - the schema must be provevi's own, with no trigger on its tables.
 
-The check does not cover the run's folder, the time of its seal, or who made an experiment and when. Nothing in the events fixes those.
+The check of a run covers the rows that the run implies. So a row that no run reported is not checked, such as an agent class with no runs. The check does not cover the run's folder or the time of its seal. Nor does it cover which run came first for an agent class or an experiment version, or when. The first run fixes those, and no event of a later run does.
 
 The store answers questions across runs:
 
 | Method | Returns |
 |---|---|
 | `runs_reading(uri)` | The runs that staged `uri` as an input, by its URI or by a pinned version of it. |
-| `runs_of_experiment(name)` | The runs of an experiment, by its name or its `experiment://` URI. |
-| `experiments()` | The experiments in the file. |
+| `runs_of_experiment(uri)` | The runs that named an experiment, by its URI or its name. A pinned URI gives the runs of that version. |
+| `experiments()` | The experiments that runs named, with their numbers of versions and runs. |
+| `experiment(uri)` | An experiment, with each version that runs reported and the runs of each. |
+| `runs_of_agent(name, version=None)` | The runs of an agent class, or of one version of it, by its SHA-256 or the start of it. |
+| `agents()` | The agent classes, with their numbers of versions and runs. |
+| `agent(name)` | An agent class, with each version, its settings and its runs. |
 | `run(run_id)` | The run's row, with its settings as `params`. |
 | `access(run_id)` | The grants and refusals of a run, in order. |
 | `inputs(run_id)` | The inputs that a run staged, with their pinned URIs. |
+
+## Experiments and agent classes
+
+An experiment is a question a team asks again and again in a project. It is a folder in the catalog, such as `experiment://acme/risk/dev/credit/q`, holding one file, `experiment.yaml`. A commit of the folder is a version, so the folder must be in a store with commits, such as lakeFS or a versioned bucket. [The design](provevi-design.md#experiments-agents-and-workflows) says why an experiment holds no agent spec.
+
+```yaml
+kind: agent-eval
+description: Does a retrieval step raise accuracy on the revenue questions?
+inputs:
+  - data+table://acme/risk/dev/evals/revenue
+metrics: [accuracy]
+```
+
+| Key | What it holds |
+|---|---|
+| `kind` | `agent-eval`, an agentic experiment for evals, or `ml`, a machine-learning experiment. |
+| `description` | What the experiment asks. It must not be empty. |
+| `inputs` | The URIs that every run of the experiment reads, such as an eval set or a dataset. |
+| `metrics` | The names of the scores or metrics that each run reports. |
+
+A file with another key is refused, and so is a single text where a list belongs.
+
+`write_experiment(catalog, uri, experiment, message)` writes the file and commits the folder. It returns a `PinnedExperiment`, with the URI, the pin, which is the URI with `?at=commit:...`, and the file's SHA-256. `read_experiment(catalog, uri)` reads the newest version, or the version that the URI's `?at=` names. Both go through the catalog's hooks. A store whose pin names no commit, such as a local folder, is refused.
+
+A run names its experiment beside its agent. provrun records the fields `experiment`, `experiment_pin` and `experiment_sha256` in `run_created`. provrun's part is not built yet. The store keeps each version that runs report.
+
+`verify_run` reads the file at the run's pin through the catalog, and checks its hash. The pin must name a commit, as a branch moves. A run may name a branch, such as `?at=branch:main`, and its pin is then the branch's commit at the start of the run. With no catalog, a run that names an experiment does not verify.
+
+An agent class needs no declaring. The store finds it in the runs, as the agent's name in the run's org, domain and environment. A version of the class is the SHA-256 of the agent's spec without its `prompt` and `inputs`. So runs that ask other questions of one agent are one version, and changed instructions or a new model make a new one. The hash covers the agent's `settings`, so a changed key in them makes a new version too, though the settings are never stored. A run also records its `parent_run`, when provrun sets it, for a run that another run started.
+
+The copy in MLflow goes in the experiment that the run names, else in one named for its agent class.
 
 ## Check a telemetry policy
 
@@ -289,11 +331,11 @@ The evidence is the record of a run. MLflow holds a copy, so that its viewer can
 
 The destination that matches gives the level. A place that no destination matches gets nothing, and `prove mlflow` exits with 1. `prove mlflow` reads the policy from `--policy FILE`, or else from the file that `PROVRUN_TELEMETRY_POLICY` names, as provrun does. With neither, the policy approves nothing.
 
-**What the copy holds.** The copy makes an MLflow experiment named for the run's experiment, and one MLflow run, tagged `provrun.run_id`. MLflow picks its own run ID, so provevi finds the copy by the tag. The run's trace keeps provrun's trace and span IDs. Each step is a span from its start to its end, under the root span of the run.
+**What the copy holds.** The copy makes an MLflow experiment named for the run's experiment, or else for its agent class, and one MLflow run, tagged `provrun.run_id`. MLflow picks its own run ID, so provevi finds the copy by the tag. The run's trace keeps provrun's trace and span IDs. Each step is a span from its start to its end, under the root span of the run.
 
 | Level | What the copy holds |
 |---|---|
-| `names` | The experiment, the run with its tags, the settings that are names, but no name that holds a URL, a password, a setting such as `token=`, a path from `/` or a path with more than one `/`, though a model's name may have more. A name such as `ns:model@tag` looks like `user:password@host`, so it stays out too. The copy holds each input's SHA-256, and the spans with their names, models and IDs. A part of the experiment's name that is not a name, such as an agent called with free text, shows as `agent`. An input whose name is not a name is called `input`. |
+| `names` | The experiment, the run with its tags, the settings that are names, but no name that holds a URL, a password, a setting such as `token=`, a path from `/` or a path with more than one `/`, though a model's name may have more. A name such as `ns:model@tag` looks like `user:password@host`, so it stays out too. The copy holds each input's SHA-256, and the spans with their names, models and IDs. A part of the experiment's name that is not a name, such as an agent called with free text, shows as the part's label, such as `agent` or `project`. A name whose whole looks like a path, such as `home/someone/.ssh/id_rsa`, shows as its labels and a short hash of it, such as `org/team/env/project/name-1a2b3c4d`. So two such experiments stay apart. An input whose name is not a name is called `input`. |
 | `usage` | Also the token counts on the spans, and the counts of tokens and calls as the run's metrics. |
 | `bodies` | Also every other setting, each input's URIs, each step's data and URIs, the request and response of each model call, and the events that had no span, as events of the root span. |
 
@@ -418,17 +460,21 @@ A run that provrun cancelled ends with `run_failed`, whose error is `CancelledEr
 |---|---|
 | `prove runs` | Lists the run IDs in the store, oldest first. |
 | `prove runs --reading URI` | Lists the runs that staged the URI as an input. |
-| `prove runs --experiment NAME` | Lists the runs of an experiment. |
-| `prove experiments` | Lists the experiments. |
+| `prove runs --experiment URI` | Lists the runs that named an experiment, or one pinned version of it. |
+| `prove runs --agent NAME` | Lists the runs of an agent class. |
+| `prove experiments` | Lists the experiments that runs named, with their numbers of versions and runs. |
+| `prove experiment show URI` | Prints each version of an experiment that runs reported, and its runs. With `--config`, it also prints the newest version in the catalog. |
+| `prove agents` | Lists the agent classes, with their numbers of versions and runs. |
+| `prove agent show NAME` | Prints each version of an agent class, with its settings and its runs. |
 | `prove access RUN` | Prints the grants and refusals of a run. |
 | `prove show RUN` | Prints the events of a run. |
 | `prove telemetry RUN` | Prints the attempts that the telemetry policy blocked in a run, and the telemetry problems that the run found. |
 | `prove policy FILE` | Checks a telemetry policy file, and the installed version of each library it approves. |
-| `prove verify RUN` | Checks the evidence, the outputs and the committed bundle. It takes `--config`, `--tenant`, `--bundle` and `--require-bundle`, as `provr verify` does. |
+| `prove verify RUN` | Checks the evidence, the outputs, the committed bundle, and the experiment that the run names, at its pin. It takes `--config`, `--tenant`, `--bundle` and `--require-bundle`, as `provr verify` does. |
 | `prove mlflow RUN` | Copies a sealed run into MLflow, at the place that `MLFLOW_TRACKING_URI` names and the policy approves. It takes `--policy FILE`. |
 | `prove ui` | Opens MLflow's viewer on the `sqlite` store's own file, on 127.0.0.1. It takes `--port`. |
 
-`--store URI` chooses the store, before the command, as in `prove --store sqlite:///evidence.db runs`. The default is the file store under the runs root. The file store has no index of runs, so `--reading`, `--experiment`, `experiments` and `access` need a `sqlite` store.
+`--store URI` chooses the store, before the command, as in `prove --store sqlite:///evidence.db runs`. The default is the file store under the runs root. The file store has no index of runs, so `--reading`, `--experiment`, `--agent`, `experiments`, `experiment`, `agents`, `agent` and `access` need a `sqlite` store.
 
 `RUN` is a run ID under the runs root, or the path of a run folder. With a `sqlite` store, a run ID that is not under the runs root is found at the folder that the store records. `show` reads the events from the store when the run is in it. A run ID that names a link under the runs root is refused, so a link cannot pass off one run as another. The runs root is the same as provrun's. It is `--runs`, or else `PROVRUN_RUNS`, or else `$XDG_DATA_HOME/provrun/runs`, or else `~/.local/share/provrun/runs`.
 

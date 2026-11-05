@@ -32,7 +32,7 @@ def no_mlflow_variables(monkeypatch):
         monkeypatch.delenv(key)
 
 
-def events_of(run_id, *, spans=True, failed=False, model="openai/gpt-4o-mini"):
+def events_of(run_id, *, spans=True, failed=False, model="openai/gpt-4o-mini", created_extra=None):
     """A run as provrun writes it: (type, component, refs, data, payload, seconds)."""
     run_uri = f"run://acme/demo/dev/{run_id}"
     ids = (lambda span, start: {"trace_id": TRACE, "span_id": span, "parent_span_id": ROOT,
@@ -41,6 +41,7 @@ def events_of(run_id, *, spans=True, failed=False, model="openai/gpt-4o-mini"):
             "settings": {"temperature": 0}}
     created = {"org": "acme", "domain": "demo", "env": "dev", "mode": "strict", "agent": "q", "backend": "litellm",
                "spec": spec}
+    created.update(created_extra or {})
     if spans:
         created.update(trace_id=TRACE, span_id=ROOT)
     out = [
@@ -815,3 +816,50 @@ def test_below_bodies_a_mapping_whose_key_is_a_secret_stays_out(tmp_path):
     lib = read_copy(client_of(s), copy)[2]["agent run"].attributes
     # MLflow writes its own token usage from the counts, with no secret in it.
     assert "sk-abcdefghijklmnopqrstuv" not in json.dumps(lib) and lib["gen_ai.usage.input_tokens"] == 7
+
+
+NAMED = {"experiment": "experiment://acme/risk/dev/credit/q", "experiment_pin":
+         "experiment://acme/risk/dev/credit/q?at=commit:abc", "experiment_sha256": "e" * 64}
+
+
+@pytest.mark.parametrize("level", ["names", "bodies"])
+def test_a_run_that_names_an_experiment_goes_in_that_experiment(tmp_path, level):
+    store = SqliteStore(tmp_path / "evidence.db")
+    write_run(store, tmp_path / "runs", created_extra=NAMED)
+    copy = copy_run(store, RUN, own(level), environ={})
+    assert client_of(store).get_experiment(copy.experiment_id).name == "acme/risk/dev/credit/q"
+
+
+def test_below_bodies_a_part_of_the_experiment_that_is_not_a_name_is_left_out(tmp_path):
+    store = SqliteStore(tmp_path / "evidence.db")
+    write_run(store, tmp_path / "runs", created_extra={**NAMED, "experiment": "experiment://acme/risk/dev/token=abc/q"})
+    copy = copy_run(store, RUN, own("names"), environ={})
+    assert client_of(store).get_experiment(copy.experiment_id).name == "acme/risk/dev/project/q"
+
+
+@pytest.mark.parametrize("uri", [
+    "experiment://home/someone/.ssh/id_rsa", "experiment://Users/someone/Projects/x/y",
+    "experiment://db.internal.corp/a/b/c/d", "experiment://acme/x/key.pem/a/b", "experiment://acme/risk/dev/credit/q/deeper",
+])
+def test_below_bodies_an_experiment_name_that_looks_like_a_path_is_its_labels_and_a_hash(tmp_path, uri):
+    store = SqliteStore(tmp_path / "evidence.db")
+    write_run(store, tmp_path / "runs", created_extra={**NAMED, "experiment": uri})
+    copy = copy_run(store, RUN, own("names"), environ={})
+    whole = uri.removeprefix("experiment://")
+    assert client_of(store).get_experiment(copy.experiment_id).name == \
+        "org/team/env/project/name-" + sha256_bytes(whole.encode())[:8]
+
+
+def test_below_bodies_a_bad_part_is_its_label_and_the_others_stay(tmp_path):
+    store = SqliteStore(tmp_path / "evidence.db")
+    write_run(store, tmp_path / "runs", created_extra={**NAMED, "experiment": "experiment://acme/risk/dev/a=b/q"})
+    copy = copy_run(store, RUN, own("names"), environ={})
+    assert client_of(store).get_experiment(copy.experiment_id).name == "acme/risk/dev/project/q"
+
+
+def test_below_bodies_an_agent_class_that_looks_like_a_path_is_its_labels_and_a_hash(tmp_path):
+    store = SqliteStore(tmp_path / "evidence.db")
+    write_run(store, tmp_path / "runs", created_extra={"org": "users"})
+    copy = copy_run(store, RUN, own("names"), environ={})
+    assert client_of(store).get_experiment(copy.experiment_id).name == \
+        "org/domain/env/agent-" + sha256_bytes(b"users/demo/dev/q")[:8]

@@ -21,9 +21,10 @@ show 'echo $RUN1 $RUN2'
 
 step "Step 2: Ask which runs read a file"
 show uv run prove --store \$STORE runs
-show uv run prove --store \$STORE experiments
+show uv run prove --store \$STORE agents
 show uv run prove --store \$STORE runs --reading file://\$TOUR_DIR/report.txt
-show uv run prove --store \$STORE runs --experiment acme/demo/dev/revenue-question
+show uv run prove --store \$STORE runs --agent acme/demo/dev/revenue-question
+show uv run prove --store \$STORE agent show acme/demo/dev/revenue-question
 
 step "Step 3: Read the events of a run"
 show "uv run prove --store \$STORE show \$RUN1 | awk '{print \$1, \$3, \$4}'"
@@ -51,3 +52,6 @@ show uv run python tours/provevi/query.py
 step "Step 8: Show a finished run to a live viewer"
 show uv run python tours/provevi/replay.py \$RUN2 names
 show uv run python tours/provevi/replay.py \$RUN2 bodies
+
+step "Step 9: Write an experiment, and read each version"
+show uv run python tours/provevi/experiment.py

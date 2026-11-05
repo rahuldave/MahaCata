@@ -2,7 +2,9 @@
 title: A runnable tour of provevi
 ---
 
-This tour runs provevi on your own machine. It needs no account, no key, no server and no network. provrun runs a small agent twice, with the model's answer mocked, and keeps the evidence in a SQLite file. Then `prove` asks questions of the evidence, checks it, and copies a run into MLflow. [What provevi does](provevi-features.md) shows the features first. Read it before the tour if provevi is new to you.
+This tour runs provevi on your own machine. It needs no account, no key, no server and no network. provrun runs a small agent twice, with the model's answer mocked, and keeps the evidence in a SQLite file. Then `prove` asks questions of the evidence, checks it, and copies a run into MLflow. Last, a script writes an experiment in a mocked bucket, and reads each version.
+
+[What provevi does](provevi-features.md) shows the features first. Read it before the tour if provevi is new to you.
 
 A script, `tours/provevi/run.sh`, runs every step and prints each command before its output. The output below is from that script. The run IDs, the times and MLflow's IDs differ on each run.
 
@@ -13,7 +15,8 @@ A script, `tours/provevi/run.sh`, runs every step and prints each command before
 | run | One run of an agent by provrun, with an ID such as `run-20261102T191955Z-52539489`. |
 | evidence | The events of a run, each chained to the one before it by a hash, with their payloads and a manifest. |
 | store | Where provevi keeps the evidence. The tour's store is the SQLite file `$TOUR_DIR/evidence.db`, and `$STORE` names it. |
-| experiment | The runs of one agent in one org, domain and environment, such as `acme/demo/dev/revenue-question`. |
+| agent class | An agent's name in its org, domain and environment, such as `acme/demo/dev/revenue-question`. The store finds it in the runs. |
+| version | The start of the SHA-256 of an agent's spec, without its prompt and its inputs. |
 | telemetry policy | A file that says which libraries may load, and where data from a run may go, besides the evidence. |
 | copy in MLflow | A run rebuilt from its evidence in MLflow's tables, for MLflow's viewer. |
 
@@ -80,6 +83,7 @@ The script makes its scratch folder, runs the steps, and deletes the folder.
 | `tours/provevi/break_row.py` | Deletes one event from the evidence file, for Step 4. |
 | `tours/provevi/query.py` | Asks the evidence file questions from Python, for Step 7. |
 | `tours/provevi/replay.py` | Prints the live feed of a finished run at a level, for Step 8. |
+| `tours/provevi/experiment.py` | Writes an experiment twice in a mocked bucket, and reads each version, for Step 9. |
 
 The run file names its input by its path in the tour's folder:
 
@@ -127,20 +131,28 @@ $ uv run prove --store $STORE runs
 run-20261102T191955Z-52539489
 run-20261102T192005Z-c93d67ab
 
-$ uv run prove --store $STORE experiments
-acme/demo/dev/revenue-question  created by you@example.com at 2026-11-02T19:19:55.358841Z
+$ uv run prove --store $STORE agents
+acme/demo/dev/revenue-question  1 version, 2 runs
 
 $ uv run prove --store $STORE runs --reading file://$TOUR_DIR/report.txt
 run-20261102T191955Z-52539489
 run-20261102T192005Z-c93d67ab
 
-$ uv run prove --store $STORE runs --experiment acme/demo/dev/revenue-question
+$ uv run prove --store $STORE runs --agent acme/demo/dev/revenue-question
 run-20261102T191955Z-52539489
 run-20261102T192005Z-c93d67ab
+
+$ uv run prove --store $STORE agent show acme/demo/dev/revenue-question
+acme/demo/dev/revenue-question  first run run-20261102T191955Z-52539489
+  version fe7bd27a6da9  2 runs  {"backend": "litellm", "limits": {}, "model": "openai/gpt-4o-mini", "tools": []}
+    run-20261102T191955Z-52539489
+    run-20261102T192005Z-c93d67ab
 ```
 
 **What happened:**
-- The experiment is the agent's name in its org, domain and environment. The first run made it.
+- The agent class is the agent's name in its org, domain and environment. The store found it in the runs, and nothing was declared.
+- Both runs are one version of the class, the start of the SHA-256 of the agent's spec without its prompt and inputs. A changed model or instructions would make a new version.
+- `agent show` prints the version's backend, model, tools and limits. It never prints the agent's `settings`, which may hold secrets.
 - `runs --reading` found both runs, because each staged the document as an input.
 
 ## Step 3: Read the events of a run
@@ -316,6 +328,33 @@ run_completed            span_id trace_id
 - At `bodies`, the feed added everything, and a `text` item with the model's answer after `model_called`.
 - `done` ends the feed, with the run's status and ID. Each item has `n`, its number in the feed, as provrun's live feed numbers its items.
 
+## Step 9: Write an experiment, and read each version
+
+An experiment is a folder in the catalog, at a URI such as `experiment://acme/risk/dev/credit/revenue`, holding `experiment.yaml`. Each commit of the folder is a version. `tours/provevi/experiment.py` writes one twice and reads both versions back. Its bucket is S3, which moto mocks in the script's process, so the step needs no server.
+
+```
+$ uv run python tours/provevi/experiment.py
+version 1: sha256 bdf38674b8fe, metrics accuracy
+version 2: sha256 5a27db5abdff, metrics accuracy recall
+the pins differ: True
+the newest version is version 2: True
+version 1 at its pin: Does a retrieval step raise accuracy on the revenue questions?
+the file at experiment://acme/risk/dev/credit/revenue:
+  kind: agent-eval
+  description: Does a retrieval step raise accuracy and recall on the revenue questions?
+  inputs:
+  - data+table://acme/risk/dev/evals/revenue
+  metrics:
+  - accuracy
+  - recall
+refused: experiment://acme/risk/dev/credit/revenue/experiment.yaml: name the experiment's folder, not its file
+```
+
+**What happened:**
+- Each `write_experiment` wrote the file and committed the folder, so each made a version with its own pin.
+- `read_experiment` with the URI read the newest version. With version 1's pin, it read version 1, which is still there.
+- The file holds no agent spec, so one experiment can try many agents. A run will name it beside its agent, once provrun records the pin.
+
 ## Open MLflow's viewer
 
 This step is not in the script, because the viewer runs until you stop it. Run it before `stop.sh`, after Step 6:
@@ -324,7 +363,7 @@ This step is not in the script, because the viewer runs until you stop it. Run i
 uv run prove --store $STORE ui
 ```
 
-Open `http://127.0.0.1:5000`. The experiment `acme/demo/dev/revenue-question` holds the copy of `RUN2`, with its settings, its token counts and its trace. Press Ctrl-C to stop the viewer.
+Open `http://127.0.0.1:5000`. The MLflow experiment `acme/demo/dev/revenue-question`, named for the agent class, holds the copy of `RUN2`, with its settings, its token counts and its trace. Press Ctrl-C to stop the viewer.
 
 ## Clean up
 
