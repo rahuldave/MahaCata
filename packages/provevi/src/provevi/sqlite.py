@@ -17,11 +17,18 @@ file can also hold MLflow's tables. The file records its schema version, and
 opening it to write brings an older schema up to date. Opening it to read,
 as ``prove`` does, changes nothing.
 
+A run is an instance of an agent class, its agent's name with the run's
+org, domain and environment, and of a version of that class, the SHA-256 of
+its spec without the prompt and the inputs. A run may also name an
+experiment, which is a catalog object; the file keeps each version of it
+that a run reported, by its pin and its file's hash.
+
 The check of a run covers each event's line, and every column that the
-events imply: the run's org, domain, environment, actor, mode, experiment,
-status and times, its settings, the span IDs and the payload sizes. It does
-not cover the run's folder, its sealed_at time, or an experiment's first-run
-details (created_by, created_at, spec), which nothing in the events fixes.
+events imply: the run's org, domain, environment, actor, mode, agent class
+and version, experiment and its pin, status and times, its settings, the
+span IDs and the payload sizes. It does not cover the run's folder, its
+sealed_at time, or the first-run details of an agent class or an experiment
+version (the first run, created_by, created_at), which the first run fixes.
 """
 from __future__ import annotations
 
@@ -40,7 +47,7 @@ from .events import EvidenceEvent, canonical, now, sha256_bytes
 from .store import EvidenceStore, FileRunWriter, RunRecord, RunWriter
 
 #: The schema version that this provevi writes.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _V1 = """
 CREATE TABLE provevi_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -94,9 +101,57 @@ CREATE VIEW provevi_outputs AS
     WHERE e.type = 'output_artifact_created';
 """
 
+# Version 2: version 1 called each agent class an experiment. Its rows move
+# to the agent tables, and an experiment is now one that a run names.
+_V2 = """
+CREATE TABLE provevi_agents (
+    id TEXT PRIMARY KEY, org TEXT NOT NULL, domain TEXT NOT NULL, env TEXT NOT NULL, name TEXT NOT NULL,
+    first_run TEXT, created_by TEXT, created_at TEXT);
+CREATE TABLE provevi_agent_versions (
+    agent_id TEXT NOT NULL, spec_sha256 TEXT NOT NULL, spec TEXT, first_run TEXT, created_at TEXT,
+    PRIMARY KEY (agent_id, spec_sha256));
+ALTER TABLE provevi_runs ADD COLUMN agent_id TEXT;
+ALTER TABLE provevi_runs ADD COLUMN spec_sha256 TEXT;
+ALTER TABLE provevi_runs ADD COLUMN experiment_pin TEXT;
+ALTER TABLE provevi_runs ADD COLUMN experiment_sha256 TEXT;
+INSERT INTO provevi_agents (id, org, domain, env, name, created_by, created_at)
+    SELECT id, org, domain, env, name, created_by, created_at FROM provevi_experiments;
+UPDATE provevi_runs SET agent_id = experiment_id, experiment_id = NULL;
+DROP TABLE provevi_experiments;
+CREATE TABLE provevi_experiments (
+    id TEXT PRIMARY KEY, uri TEXT NOT NULL, first_run TEXT, created_at TEXT);
+CREATE TABLE provevi_experiment_versions (
+    experiment_id TEXT NOT NULL, pin TEXT NOT NULL, sha256 TEXT NOT NULL, first_run TEXT, created_at TEXT,
+    PRIMARY KEY (experiment_id, pin));
+CREATE INDEX provevi_runs_agent ON provevi_runs (agent_id, spec_sha256);
+CREATE INDEX provevi_runs_experiment ON provevi_runs (experiment_id, experiment_pin)
+"""
+
+
+def _v2_versions(conn: sqlite3.Connection) -> None:
+    """Fill each run's spec hash and its agent class's versions, and each
+    agent class's first run, from the runs' run_created events. It uses
+    derive as the check does, so the rows it writes are the ones the check
+    of each run wants."""
+    rows = conn.execute("SELECT run_id, line FROM provevi_events WHERE type = 'run_created' "
+                        "ORDER BY time, run_id").fetchall()
+    for run_id, line in rows:
+        try:
+            event = EvidenceEvent.from_line(line)
+        except (ValueError, TypeError):
+            continue  # the check of the run reports the line
+        want = derive(event, None, False)
+        conn.execute("UPDATE provevi_runs SET spec_sha256 = ? WHERE run_id = ?", (want["run"]["spec_sha256"], run_id))
+        for sql, args in _agent_rows(want, run_id, event):
+            conn.execute(sql, args)
+
+
 #: The steps that bring a schema to each version, from the one before it.
-#: Each is a list of statements, so a later step may hold a trigger.
-MIGRATIONS = {1: [st.strip() for st in _V1.split(";") if st.strip()]}
+#: Each is a list of statements, so a later step may hold a trigger. A step
+#: may also hold a function of the connection, which moves data and changes
+#: no table.
+MIGRATIONS = {1: [st.strip() for st in _V1.split(";") if st.strip()],
+              2: [st.strip() for st in _V2.split(";") if st.strip()] + [_v2_versions]}
 
 #: The settings of a run kept in provevi_run_params, taken from run_created.
 #: Never the agent's settings, which may hold secrets.
@@ -161,7 +216,7 @@ def migrate(conn: sqlite3.Connection, path: str | Path = "the evidence file") ->
             raise _newer(path, version)
         for v in range(version + 1, SCHEMA_VERSION + 1):
             for statement in MIGRATIONS[v]:
-                conn.execute(statement)
+                statement(conn) if callable(statement) else conn.execute(statement)
             conn.execute("INSERT OR REPLACE INTO provevi_meta VALUES ('schema_version', ?)", (str(v),))
         conn.execute("COMMIT")
     except BaseException:
@@ -187,7 +242,8 @@ def _expected(version: int, steps: tuple[tuple[str, ...], ...]) -> frozenset[tup
         try:
             for step in steps:
                 for statement in step:
-                    conn.execute(statement)
+                    if not callable(statement):
+                        conn.execute(statement)
             return frozenset(_provevi_objects(conn))
         finally:
             conn.close()
@@ -207,32 +263,79 @@ def schema_problems(conn: sqlite3.Connection) -> list[str]:
     return problems
 
 
+#: The parts of an agent's spec that are the task, not the agent, so they
+#: are left out of the agent's version.
+TASK_FIELDS = ("prompt", "inputs")
+
+
+def spec_sha256(spec: dict) -> str:
+    """The version of an agent: the SHA-256 of its spec without its prompt
+    and its inputs."""
+    return sha256_bytes(canonical({k: v for k, v in spec.items() if k not in TASK_FIELDS}).encode())
+
+
+def _text(value) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
 def derive(created: EvidenceEvent | None, ending: EvidenceEvent | None, sealed: bool) -> dict:
-    """What a run's row, settings and experiment must be, from its run_created
-    event and its ending event. The writer writes these, and the check
-    compares the stored rows with them."""
+    """What a run's row, settings, agent class and experiment must be, from
+    its run_created event and its ending event. The writer writes these, and
+    the check compares the stored rows with them."""
     d = created.data if created is not None else {}
     spec = d.get("spec") if isinstance(d.get("spec"), dict) else {}
     agent = d.get("agent") or spec.get("name")
     org, domain, env = d.get("org"), d.get("domain"), d.get("env")
-    experiment = (f"{org}/{domain}/{env}/{agent}"
-                  if all(isinstance(x, str) and x for x in (org, domain, env, agent)) else None)
+    agent_id = (f"{org}/{domain}/{env}/{agent}"
+                if all(isinstance(x, str) and x for x in (org, domain, env, agent)) else None)
+    version = spec_sha256(spec) if spec else None
+    exp_uri, exp_pin, exp_sha = (_text(d.get(k)) for k in ("experiment", "experiment_pin", "experiment_sha256"))
+    experiment = (exp_uri.split("?", 1)[0].removeprefix("experiment://")
+                  if exp_uri is not None and exp_uri.startswith("experiment://") else None)
     values = {"agent": agent, "mode": d.get("mode"), **{k: spec.get(k) for k in PARAMS if k in spec}}
     if ending is not None:
         status, ended_at = ending.type.removeprefix("run_"), ending.time
     else:
         status, ended_at = ("incomplete" if sealed else "open"), None
     return {
-        "run": {"experiment_id": experiment, "org": org, "domain": domain, "env": env,
+        "run": {"agent_id": agent_id, "spec_sha256": version, "experiment_id": experiment,
+                "experiment_pin": exp_pin, "experiment_sha256": exp_sha, "org": org, "domain": domain, "env": env,
                 "actor": created.actor if created is not None else None, "mode": d.get("mode"),
                 "parent_run": d.get("parent_run"), "started_at": created.time if created is not None else None,
                 "status": status, "ended_at": ended_at},
         "params": {k: canonical(v) for k, v in values.items() if k in PARAMS and v is not None},
-        "experiment": None if experiment is None else {
-            "id": experiment, "uri": f"experiment://{experiment}", "org": org, "domain": domain, "env": env,
-            "name": agent},
+        "agent": None if agent_id is None else {"id": agent_id, "org": org, "domain": domain, "env": env,
+                                                 "name": agent},
+        "experiment": None if experiment is None else {"id": experiment, "uri": f"experiment://{experiment}"},
+        "experiment_version": None if experiment is None or exp_pin is None or exp_sha is None else {
+            "experiment_id": experiment, "pin": exp_pin, "sha256": exp_sha},
         "spec": spec,
     }
+
+
+def _agent_rows(want: dict, run_id: str, event: EvidenceEvent) -> list[tuple[str, tuple]]:
+    """The rows that a run's first event adds, if they are not there yet: its
+    agent class and version, and its experiment and version."""
+    out = []
+    if want["agent"] is not None:
+        a = want["agent"]
+        out.append(("INSERT INTO provevi_agents (id, org, domain, env, name, first_run, created_by, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET first_run = "
+                    "COALESCE(provevi_agents.first_run, excluded.first_run)",
+                    (a["id"], a["org"], a["domain"], a["env"], a["name"], run_id, event.actor, event.time)))
+        if want["run"]["spec_sha256"] is not None:
+            kept = {k: v for k, v in want["spec"].items() if k in PARAMS}
+            out.append(("INSERT OR IGNORE INTO provevi_agent_versions VALUES (?, ?, ?, ?, ?)",
+                        (a["id"], want["run"]["spec_sha256"], canonical(kept), run_id, event.time)))
+    if want["experiment"] is not None:
+        e = want["experiment"]
+        out.append(("INSERT OR IGNORE INTO provevi_experiments VALUES (?, ?, ?, ?)",
+                    (e["id"], e["uri"], run_id, event.time)))
+        if want["experiment_version"] is not None:
+            v = want["experiment_version"]
+            out.append(("INSERT OR IGNORE INTO provevi_experiment_versions VALUES (?, ?, ?, ?, ?)",
+                        (v["experiment_id"], v["pin"], v["sha256"], run_id, event.time)))
+    return out
 
 
 class SqliteStore(EvidenceStore):
@@ -324,20 +427,80 @@ class SqliteStore(EvidenceStore):
         return [r[0] for r in rows]
 
     def runs_of_experiment(self, experiment: str) -> list[str]:
-        """The runs of an experiment, by its name, such as acme/demo/dev/revenue-agent."""
-        rows = self._query("SELECT run_id FROM provevi_runs WHERE experiment_id = ? ORDER BY run_id",
-                           (experiment.removeprefix("experiment://"),))
+        """The runs that named an experiment, by its URI or its name, such as
+        acme/risk/dev/credit/q, or by a pinned URI, for the runs of that version."""
+        name = experiment.removeprefix("experiment://")
+        if "?" in name:
+            rows = self._query("SELECT run_id FROM provevi_runs WHERE experiment_pin = ? ORDER BY run_id",
+                               (f"experiment://{name}",))
+        else:
+            rows = self._query("SELECT run_id FROM provevi_runs WHERE experiment_id = ? ORDER BY run_id", (name,))
+        return [r[0] for r in rows]
+
+    def runs_of_agent(self, agent: str, version: str | None = None) -> list[str]:
+        """The runs of an agent class, such as acme/demo/dev/revenue-agent, or
+        of one version of it, by its spec's SHA-256 or the start of it."""
+        if version:
+            rows = self._query("SELECT run_id FROM provevi_runs WHERE agent_id = ? AND substr(spec_sha256, 1, ?) = ? "
+                               "ORDER BY run_id", (agent, len(version), version))
+        else:
+            rows = self._query("SELECT run_id FROM provevi_runs WHERE agent_id = ? ORDER BY run_id", (agent,))
         return [r[0] for r in rows]
 
     def experiments(self) -> list[dict]:
-        """The experiments. Each row was made by the experiment's first run."""
-        rows = self._query("SELECT id, uri, created_by, created_at, spec_sha256 FROM provevi_experiments "
-                           "ORDER BY id")
+        """The experiments that runs named, each with its number of versions
+        and of runs."""
+        rows = self._query(
+            "SELECT e.id, e.uri, e.first_run, e.created_at, "
+            "(SELECT count(*) FROM provevi_experiment_versions v WHERE v.experiment_id = e.id) AS versions, "
+            "(SELECT count(*) FROM provevi_runs r WHERE r.experiment_id = e.id) AS runs "
+            "FROM provevi_experiments e ORDER BY e.id")
         return [dict(r) for r in rows]
+
+    def experiment(self, experiment: str) -> dict | None:
+        """An experiment, by its URI or its name, with each version that runs
+        reported, oldest first, and the runs of each."""
+        name = experiment.split("?", 1)[0].removeprefix("experiment://")
+        rows = self._query("SELECT id, uri, first_run, created_at FROM provevi_experiments WHERE id = ?", (name,))
+        if not rows:
+            return None
+        versions = []
+        for v in self._query("SELECT pin, sha256, first_run, created_at FROM provevi_experiment_versions "
+                             "WHERE experiment_id = ? ORDER BY created_at, first_run, pin", (name,)):
+            runs = [r[0] for r in self._query("SELECT run_id FROM provevi_runs WHERE experiment_id = ? AND "
+                                              "experiment_pin = ? ORDER BY run_id", (name, v["pin"]))]
+            versions.append({**dict(v), "runs": runs})
+        return {**dict(rows[0]), "versions": versions}
+
+    def agents(self) -> list[dict]:
+        """The agent classes, each with its number of versions and of runs."""
+        rows = self._query(
+            "SELECT a.id, a.first_run, a.created_at, "
+            "(SELECT count(*) FROM provevi_agent_versions v WHERE v.agent_id = a.id) AS versions, "
+            "(SELECT count(*) FROM provevi_runs r WHERE r.agent_id = a.id) AS runs "
+            "FROM provevi_agents a ORDER BY a.id")
+        return [dict(r) for r in rows]
+
+    def agent(self, agent: str) -> dict | None:
+        """An agent class, with each version, oldest first: its spec's
+        SHA-256, its settings without secrets, and its runs."""
+        rows = self._query("SELECT id, org, domain, env, name, first_run, created_at FROM provevi_agents "
+                           "WHERE id = ?", (agent,))
+        if not rows:
+            return None
+        versions = []
+        for v in self._query("SELECT spec_sha256, spec, first_run, created_at FROM provevi_agent_versions "
+                             "WHERE agent_id = ? ORDER BY created_at, first_run, spec_sha256", (agent,)):
+            runs = [r[0] for r in self._query("SELECT run_id FROM provevi_runs WHERE agent_id = ? AND "
+                                              "spec_sha256 = ? ORDER BY run_id", (agent, v["spec_sha256"]))]
+            versions.append({"spec_sha256": v["spec_sha256"], "settings": json.loads(v["spec"] or "{}"),
+                             "first_run": v["first_run"], "created_at": v["created_at"], "runs": runs})
+        return {**dict(rows[0]), "versions": versions}
 
     def run(self, run_id: str) -> dict | None:
         """The run's row, and its settings as ``params``."""
-        rows = self._query("SELECT run_id, experiment_id, org, domain, env, actor, status, started_at, ended_at, "
+        rows = self._query("SELECT run_id, agent_id, spec_sha256, experiment_id, experiment_pin, experiment_sha256, "
+                           "org, domain, env, actor, status, started_at, ended_at, "
                            "mode, folder, last_hash, manifest_sha256, sealed_at, bundle_uri, pinned_bundle "
                            "FROM provevi_runs WHERE run_id = ?", (run_id,))
         if not rows:
@@ -461,17 +624,13 @@ class SqliteRunWriter(RunWriter):
 
     def _created(self, event: EvidenceEvent) -> list[tuple[str, tuple]]:
         want = derive(event, None, False)
-        run, out = want["run"], []
-        if want["experiment"] is not None:
-            e = want["experiment"]
-            kept = {k: v for k, v in want["spec"].items() if k in PARAMS}
-            out.append(("INSERT OR IGNORE INTO provevi_experiments (id, uri, org, domain, env, name, spec, "
-                        "spec_sha256, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (e["id"], e["uri"], e["org"], e["domain"], e["env"], e["name"], canonical(kept),
-                         sha256_bytes(canonical(want["spec"]).encode()), event.actor, event.time)))
-        out.append(("UPDATE provevi_runs SET experiment_id = ?, org = ?, domain = ?, env = ?, actor = ?, mode = ?, "
-                    "parent_run = ?, started_at = ? WHERE run_id = ?",
-                    (run["experiment_id"], run["org"], run["domain"], run["env"], run["actor"], run["mode"],
+        run = want["run"]
+        out = _agent_rows(want, self.run_id, event)
+        out.append(("UPDATE provevi_runs SET agent_id = ?, spec_sha256 = ?, experiment_id = ?, experiment_pin = ?, "
+                    "experiment_sha256 = ?, org = ?, domain = ?, env = ?, actor = ?, mode = ?, parent_run = ?, "
+                    "started_at = ? WHERE run_id = ?",
+                    (run["agent_id"], run["spec_sha256"], run["experiment_id"], run["experiment_pin"],
+                     run["experiment_sha256"], run["org"], run["domain"], run["env"], run["actor"], run["mode"],
                      run["parent_run"], run["started_at"], self.run_id)))
         out += [("INSERT OR REPLACE INTO provevi_run_params VALUES (?, ?, ?)", (self.run_id, k, v))
                 for k, v in want["params"].items()]
@@ -646,11 +805,29 @@ class SqliteRecord(RunRecord):
                                             (self.run_id,))}
         if params != want["params"]:
             problems.append("the run's settings differ from its run_created event")
+        if want["agent"] is not None:
+            got = self._q("SELECT id, org, domain, env, name FROM provevi_agents WHERE id = ?", (want["agent"]["id"],))
+            if not got or dict(got[0]) != want["agent"]:
+                problems.append(f"the agent class {want['agent']['id']} is missing or differs from the run's")
+            elif want["run"]["spec_sha256"] is not None:
+                got = self._q("SELECT spec FROM provevi_agent_versions WHERE agent_id = ? AND spec_sha256 = ?",
+                              (want["agent"]["id"], want["run"]["spec_sha256"]))
+                kept = canonical({k: v for k, v in want["spec"].items() if k in PARAMS})
+                if not got:
+                    problems.append(f"the version {want['run']['spec_sha256']} of {want['agent']['id']} is missing")
+                elif got[0][0] != kept:
+                    problems.append(f"the settings of the version {want['run']['spec_sha256']} of "
+                                    f"{want['agent']['id']} differ from the run's")
         if want["experiment"] is not None:
-            exp = self._q("SELECT id, uri, org, domain, env, name FROM provevi_experiments WHERE id = ?",
-                          (want["experiment"]["id"],))
-            if not exp or dict(exp[0]) != want["experiment"]:
+            got = self._q("SELECT id, uri FROM provevi_experiments WHERE id = ?", (want["experiment"]["id"],))
+            if not got or dict(got[0]) != want["experiment"]:
                 problems.append(f"the experiment {want['experiment']['id']} is missing or differs from the run's")
+        if want["experiment_version"] is not None:
+            v = want["experiment_version"]
+            got = self._q("SELECT experiment_id, pin, sha256 FROM provevi_experiment_versions "
+                          "WHERE experiment_id = ? AND pin = ?", (v["experiment_id"], v["pin"]))
+            if not got or dict(got[0]) != v:
+                problems.append(f"the version {v['pin']} of the experiment is missing or differs from the run's")
         for digest, size in self._q("SELECT sha256, size FROM provevi_payloads WHERE run_id = ?", (self.run_id,)):
             p = self._payload_path(str(digest))
             if p is not None and p.is_file() and p.stat().st_size != size:

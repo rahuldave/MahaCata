@@ -73,10 +73,12 @@ schemes:
       env: "[a-z0-9][a-z0-9_-]{0,19}"
       domain: "[a-z0-9][a-z0-9-]{0,36}"    # {org}-data-{domain} stays within 63
 
-  # experiment://org/team/env/project/pipeline
+  # experiment://org/team/env/project/name, a folder that holds experiment.yaml;
+  # each commit of it is a version
   experiment:
-    parts: [org, team, env, project, pipeline]
-    target: "lakefs-{org}://{org}-ml-{project}/{ref}/{team}/experiments/{pipeline}"
+    parts: [org, team, env, project, name]
+    rest: path
+    target: "lakefs-{org}://{org}-ml-{project}/{ref}/{team}/experiments/{name}/{path}"
     ref: "{env}"
     tenant: org
     match: &ml_names

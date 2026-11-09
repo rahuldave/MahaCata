@@ -150,7 +150,7 @@ The org is the tenant. It is the first part of every logical URI in the example 
 | Logical URI | Physical URI |
 |---|---|
 | `data+table://ORG/DOMAIN/ENV/FAMILY/NAME` | `lakefs-ORG://ORG-data-DOMAIN/ENV/tables/FAMILY/NAME` |
-| `experiment://ORG/TEAM/ENV/PROJECT/PIPELINE` | `lakefs-ORG://ORG-ml-PROJECT/ENV/TEAM/experiments/PIPELINE` |
+| `experiment://ORG/TEAM/ENV/PROJECT/NAME` | `lakefs-ORG://ORG-ml-PROJECT/ENV/TEAM/experiments/NAME` |
 | `model://ORG/TEAM/ENV/PROJECT/NAME?at=version:N` | `lakefs-ORG://ORG-ml-PROJECT/ENV/TEAM/models/NAME/vN` |
 | `artifact+prompt://ORG/TEAM/ENV/PROJECT/NAME` | `lakefs-ORG://ORG-ml-PROJECT/ENV/TEAM/prompts/NAME` |
 | `artifact+card://ORG/TEAM/ENV/PROJECT/NAME` | `lakefs-ORG://ORG-ml-PROJECT/ENV/TEAM/cards/NAME` |

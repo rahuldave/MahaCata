@@ -391,15 +391,15 @@ $ uv run provr --store $S run $TOUR_DIR/run.yaml > /dev/null
 $ Q=$(uv run python tours/provrun/field.py $TOUR_DIR/r4.json run_id)
 ```
 
-Ask which runs read the report, and which experiments there are. Then ask what the first of these runs could read.
+Ask which runs read the report, and which agents ran. Then ask what the first of these runs could read.
 
 ```
 $ uv run prove --store $S runs --reading data://acme/demo/dev/reports/report.txt
 run-20261102T224043Z-e6ed9133
 run-20261102T224050Z-406f3eaf
 
-$ uv run prove --store $S experiments
-acme/demo/dev/revenue-question  created by you@example.com at 2026-11-02T22:40:43.723950Z
+$ uv run prove --store $S agents
+acme/demo/dev/revenue-question  1 version, 2 runs
 
 $ uv run prove --store $S access $Q
    2 granted  mounted_snapshot   data://acme/demo/dev/reports/report.txt  in the allow list; org and environment match
@@ -407,7 +407,7 @@ $ uv run prove --store $S access $Q
 
 **What happened:**
 - Each run wrote each event as a row of the file, as it happened. The run folder still holds the same files as before, so the committed bundle is the same.
-- The experiment is the agent's name in its org, domain and environment. Its first run made it.
+- The agent class is the agent's name in its org, domain and environment. Both runs are one version of it, because they ran the same spec.
 - `runs --reading` matched the URI of each staged input.
 
 Now delete one row, and check the run.

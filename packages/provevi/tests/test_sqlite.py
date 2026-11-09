@@ -101,13 +101,14 @@ def test_a_migration_runs_each_step_once(tmp_path, monkeypatch):
     stored statement, still opens: the expected schema is built by the steps."""
     path = tmp_path / "e.db"
     SqliteStore(path)
-    monkeypatch.setattr(provevi.sqlite, "SCHEMA_VERSION", 2)
-    monkeypatch.setitem(provevi.sqlite.MIGRATIONS, 2, ["ALTER TABLE provevi_runs ADD COLUMN note TEXT"])
+    following = provevi.sqlite.SCHEMA_VERSION + 1
+    monkeypatch.setattr(provevi.sqlite, "SCHEMA_VERSION", following)
+    monkeypatch.setitem(provevi.sqlite.MIGRATIONS, following, ["ALTER TABLE provevi_runs ADD COLUMN note TEXT"])
     SqliteStore(path)
     SqliteStore(path)  # a second open must not add the column again
     SqliteStore(path, create=False)
-    SqliteStore(tmp_path / "new.db")  # a new file gets both steps
-    assert provevi.sqlite.schema_version(sqlite3.connect(path)) == 2
+    SqliteStore(tmp_path / "new.db")  # a new file gets every step
+    assert provevi.sqlite.schema_version(sqlite3.connect(path)) == following
 
 
 def test_a_table_changed_outside_a_step_is_refused(store):
@@ -127,7 +128,8 @@ def test_a_run_in_the_sqlite_store_verifies_and_is_recorded(store, tmp_path):
     check = verify_run(folder, store=store)
     assert check.ok, check.problems
     run = store.run(RUN)
-    assert run["status"] == "completed" and run["experiment_id"] == "acme/demo/dev/q" and run["actor"] == "you"
+    assert run["status"] == "completed" and run["agent_id"] == "acme/demo/dev/q" and run["actor"] == "you"
+    assert run["experiment_id"] is None and len(run["spec_sha256"]) == 64
     assert run["pinned_bundle"] is None and run["bundle_uri"] is None
     assert run["params"] == {"agent": "q", "backend": "litellm", "model": "m", "mode": "strict", "tools": [],
                              "limits": {}}  # never the settings, which may hold secrets
@@ -242,9 +244,9 @@ def test_queries_across_runs(store, tmp_path):
     assert store.runs_reading(DOC) == [a]
     assert store.runs_reading(f"{DOC}?at=commit:abc") == [a]
     assert store.runs_reading("lakefs://acme/main/docs/report") == []  # a prefix is not the URI
-    assert store.runs_of_experiment("acme/demo/dev/q") == [a, b]
-    assert store.runs_of_experiment("experiment://acme/demo/dev/q") == [a, b]
-    assert [e["id"] for e in store.experiments()] == ["acme/demo/dev/q"]
+    assert store.runs_of_agent("acme/demo/dev/q") == [a, b]
+    assert store.runs_of_experiment("acme/demo/dev/q") == [] and store.experiments() == []
+    assert [(x["id"], x["versions"], x["runs"]) for x in store.agents()] == [("acme/demo/dev/q", 1, 2)]
     assert [(x["decision"], x["uri"]) for x in store.access(b)] == [
         ("granted", "lakefs://acme/main/docs/other.txt"), ("denied", DOC)]
     assert store.inputs(a)[0]["pinned"] == f"{DOC}?at=commit:abc"
@@ -256,8 +258,8 @@ def test_prove_with_a_sqlite_store(store, tmp_path, capsys):
     s = ["--store", f"sqlite:///{store.path}"]  # an absolute path makes sqlite:////...
     assert main(s + ["runs"]) == 0 and capsys.readouterr().out.split() == [RUN]
     assert main(s + ["runs", "--reading", DOC]) == 0 and capsys.readouterr().out.split() == [RUN]
-    assert main(s + ["runs", "--experiment", "acme/demo/dev/q"]) == 0 and RUN in capsys.readouterr().out
-    assert main(s + ["experiments"]) == 0 and "acme/demo/dev/q" in capsys.readouterr().out
+    assert main(s + ["runs", "--agent", "acme/demo/dev/q"]) == 0 and RUN in capsys.readouterr().out
+    assert main(s + ["agents"]) == 0 and "acme/demo/dev/q" in capsys.readouterr().out
     assert main(s + ["access", RUN]) == 0 and "granted" in capsys.readouterr().out
     assert main(s + ["show", RUN]) == 0 and "input_staged" in capsys.readouterr().out
     assert main(s + ["verify", RUN]) == 0 and "verify" in capsys.readouterr().out
@@ -292,7 +294,9 @@ def test_open_store_resolves_a_relative_sqlite_path(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("sql, problem", [
     ("UPDATE provevi_runs SET status = 'failed'", "the run's status is 'failed'"),
-    ("UPDATE provevi_runs SET experiment_id = 'evil/x/y/z'", "the run's experiment_id"),
+    ("UPDATE provevi_runs SET experiment_id = 'evil/x/y/z/w'", "the run's experiment_id"),
+    ("UPDATE provevi_runs SET agent_id = 'evil/x/y/z'", "the run's agent_id"),
+    ("UPDATE provevi_runs SET spec_sha256 = 'f'", "the run's spec_sha256"),
     ("UPDATE provevi_runs SET actor = 'someone'", "the run's actor"),
     ("UPDATE provevi_runs SET org = 'other'", "the run's org"),
     ("UPDATE provevi_runs SET started_at = 'x'", "the run's started_at"),
@@ -300,8 +304,9 @@ def test_open_store_resolves_a_relative_sqlite_path(tmp_path, monkeypatch):
     ("UPDATE provevi_runs SET bundle_uri = 'run://x/y/z/w'", "bundle_uri differs from bundle.json"),
     ("UPDATE provevi_run_params SET value = '\"gpt-evil\"' WHERE key = 'model'", "settings differ"),
     ("DELETE FROM provevi_run_params WHERE key = 'tools'", "settings differ"),
-    ("UPDATE provevi_experiments SET name = 'other'", "experiment acme/demo/dev/q is missing or differs"),
-    ("DELETE FROM provevi_experiments", "experiment acme/demo/dev/q is missing or differs"),
+    ("UPDATE provevi_agents SET name = 'other'", "agent class acme/demo/dev/q is missing or differs"),
+    ("DELETE FROM provevi_agents", "agent class acme/demo/dev/q is missing or differs"),
+    ("DELETE FROM provevi_agent_versions", "of acme/demo/dev/q is missing"),
     ("UPDATE provevi_payloads SET size = 1", "its size is not 1"),
     ("UPDATE provevi_events SET trace_id = 'f' WHERE type = 'model_called'", "columns differ from its line"),
 ])
@@ -410,10 +415,11 @@ def test_a_file_that_cannot_be_put_in_wal_mode_is_refused(tmp_path, monkeypatch)
 
 
 def test_prove_refuses_an_older_schema_without_changing_it(store, monkeypatch, capsys):
-    monkeypatch.setattr(provevi.sqlite, "SCHEMA_VERSION", 2)
+    current = provevi.sqlite.SCHEMA_VERSION
+    monkeypatch.setattr(provevi.sqlite, "SCHEMA_VERSION", current + 1)
     assert main(["--store", f"sqlite:///{store.path}", "runs"]) == 1
     assert "open it to write" in capsys.readouterr().err
-    assert provevi.sqlite.schema_version(db(store)) == 1
+    assert provevi.sqlite.schema_version(db(store)) == current
 
 
 class FailingCommit:
@@ -468,9 +474,9 @@ def test_show_finds_a_run_as_verify_does(store, tmp_path, capsys):
         assert "run_created" in capsys.readouterr().out
 
 
-def test_an_experiment_keeps_no_agent_settings(store, tmp_path):
+def test_an_agent_version_keeps_no_agent_settings(store, tmp_path):
     write_run(store, tmp_path / "runs", RUN)
-    [spec] = db(store).execute("SELECT spec FROM provevi_experiments").fetchone()
+    [spec] = db(store).execute("SELECT spec FROM provevi_agent_versions").fetchone()
     assert "settings" not in json.loads(spec) and json.loads(spec)["model"] == "m"
 
 
