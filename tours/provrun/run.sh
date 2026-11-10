@@ -131,8 +131,22 @@ show 'cat $PROVRUN_RUNS/$R11/output/response.txt; echo'
 show 'cat $TOUR_DIR/live.yaml'
 show 'PROVRUN_TELEMETRY_POLICY=$TOUR_DIR/live.yaml uv run python tours/provrun/follow.py $TOUR_DIR/stream.yaml'
 
+step "Step 15: Name the experiment a run belongs to"
+show 'uv run python tours/provrun/experiment.py "Does the model find the revenue?" accuracy'
+show '{ echo "experiment: experiment://acme/demo/dev/revenue/retrieval"; cat $TOUR_DIR/run.yaml; } > $TOUR_DIR/exp.yaml'
+show 'E=sqlite:///$TOUR_DIR/experiments.db'
+show 'uv run provr --store $E run $TOUR_DIR/exp.yaml > $TOUR_DIR/r12.json'
+show 'R12=$(uv run python tours/provrun/field.py $TOUR_DIR/r12.json run_id)'
+show 'uv run python tours/provrun/event.py $R12 run_created experiment experiment_pin experiment_sha256'
+show 'uv run python tours/provrun/experiment.py "Does the model find the revenue, and say where?" accuracy recall'
+show 'uv run provr --store $E run $TOUR_DIR/exp.yaml > $TOUR_DIR/r13.json'
+show 'R13=$(uv run python tours/provrun/field.py $TOUR_DIR/r13.json run_id)'
+show 'uv run python tours/provrun/event.py $R13 run_created experiment_pin'
+show 'uv run prove --store $E experiments'
+show 'uv run prove --store $E verify --config $PROVCAT_CONFIG $R12'
+
 if [ "${1:-}" = "--online" ]; then
-  step "Step 15: Call a real model (needs ANTHROPIC_API_KEY)"
+  step "Step 16: Call a real model (needs ANTHROPIC_API_KEY)"
   show 'sed -e "s|openai/gpt-4o-mini|anthropic/claude-haiku-5-5|" -e "/settings:/,\$d" $TOUR_DIR/run.yaml > $TOUR_DIR/real.yaml'
   show 'cat $TOUR_DIR/online.yaml'
   show 'export PROVRUN_TELEMETRY_POLICY=$TOUR_DIR/online.yaml OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$TOUR_OTLP_PORT LOGFIRE_TOKEN=pylf_v1_us_example-token'
@@ -158,7 +172,7 @@ if [ "${1:-}" = "--online" ]; then
   show 'uv run provr --store $O verify $R10'
   show 'unset PROVRUN_TELEMETRY_POLICY OTEL_EXPORTER_OTLP_ENDPOINT LOGFIRE_TOKEN'
 
-  step "Step 16: Stream a real model in your own agent (needs ANTHROPIC_API_KEY)"
+  step "Step 17: Stream a real model in your own agent (needs ANTHROPIC_API_KEY)"
   show 'sed -n "/^model = /,/^    print()/p" tours/provrun/streamed.py'
   show 'uv run python tours/provrun/streamed.py $TOUR_DIR/streamed'
 fi

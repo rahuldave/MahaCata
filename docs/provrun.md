@@ -104,7 +104,9 @@ A run checks its settings before it makes the run folder. Each of these raises `
 - a bundle scheme that is not a plain scheme name, or that names a store;
 - a telemetry policy file that cannot be read, or a run file's `telemetry` section that would widen the policy;
 - in strict mode, a telemetry problem, which "Control of library telemetry" below lists;
-- an unknown backend.
+- an unknown backend;
+- an experiment that cannot be pinned, as in a store with no commits, or that the catalog refuses;
+- a `parent_run` that is not a run ID.
 
 An error after that fails the run. The outcome holds the error, and the evidence records it.
 
@@ -192,11 +194,12 @@ The server is an example, not a service to put on a network as it is. Any client
 
 ## The run file
 
-A run file has two sections:
+A run file has two sections, and two optional ones:
 
 - **`run`** names the org, the domain, the environment and the actor of the run. It can also hold `allow`, a list of more URIs that the stub broker allows, `bundle_scheme`, and `store`, the evidence store, such as `sqlite:///evidence.db`. [provevi's page](provevi.md) describes the stores. Any other key is refused. The org, the domain and the environment become parts of the run URI. So each must be one part, with no `/`, `?`, `#` or space. Each entry of `allow` must be a URI.
 - **`agent`** is an agent spec.
 - **`telemetry`**, which is optional, narrows the operator's telemetry policy for this run. "Control of library telemetry" below describes it.
+- **`experiment`**, which is optional, is the URI of the experiment that the run belongs to, such as `experiment://acme/risk/dev/credit/revenue`. "Name the experiment" below describes it.
 
 | Key of the agent spec | Meaning |
 |---|---|
@@ -210,6 +213,28 @@ A run file has two sections:
 | `settings` | Model settings, for example `temperature`. |
 | `limits` | `timeout` in seconds, `request_limit` and `retries`. |
 | `stream` | `true` asks the model for its reply in pieces, as "Streamed replies" below says. The default is `false`. |
+
+### Name the experiment
+
+An experiment is a folder in the catalog that holds `experiment.yaml`, and each commit of the folder is a version. [provevi's page](provevi.md) says how to write one. A run file names it at the top, beside `agent`:
+
+```yaml
+experiment: experiment://acme/risk/dev/credit/revenue
+agent:
+  ...
+```
+
+As the run starts, provrun pins the experiment through the run's catalog, so the catalog's checks and hooks see the read. `run_created` then records three keys, all of them or none:
+
+| Key | Meaning |
+|---|---|
+| `experiment` | The URI as the run file wrote it. |
+| `experiment_pin` | The URI pinned to the version, with `?at=commit:...`. |
+| `experiment_sha256` | The SHA-256 of `experiment.yaml` at that pin. |
+
+A URI with no `?at=` names the newest version, and one with `?at=commit:...` names that version. `prove verify --config` reads the experiment at the run's pin and checks its hash. `prove experiments` lists the experiments that runs name. An experiment that cannot be pinned stops the run before the run folder is made, with `RunSettingError`. A store with no commits, such as a folder on this machine, cannot pin one. [Step 15 of the tour](provrun-tour.md#step-15-name-the-experiment-a-run-belongs-to) runs one experiment at two versions.
+
+A run that another run starts names its parent. `run_agent(..., parent_run=parent.run_id)`, or the same argument to `run_file` or `start_run`, records `parent_run` in `run_created`. Without it, `run_created` has no `parent_run`.
 
 ### Streamed replies
 
@@ -244,7 +269,7 @@ In the PydanticAI backend, one PydanticAI capability writes `model_called` and `
 - the output tool, when the agent answers through one, as `tool_called` with `output_tool` set;
 - each tool that the provider ran itself, such as a web search, as `tool_called` with `provider_run` set and confidence `parsed`. provrun sees only the provider's account of such a call.
 
-The backend gives text output and no provider tools, so its runs have neither of the last two. Other code can pass the capability, `evidence_capability`, to its own agent, and stream; Step 16 of the [tour](provrun-tour.md) streams Claude Haiku this way. In a streamed request, the output tool's event comes before the `model_called` that asked for it.
+The backend gives text output and no provider tools, so its runs have neither of the last two. Other code can pass the capability, `evidence_capability`, to its own agent, and stream; Step 17 of the [tour](provrun-tour.md) streams Claude Haiku this way. In a streamed request, the output tool's event comes before the `model_called` that asked for it.
 
 Each `model_called` event lists the tool calls that the model asked for, under `tool_calls`. The list includes a call to an unknown tool, or a call with bad arguments. PydanticAI refuses such a call before the tool runs, so it has no `tool_called` event.
 

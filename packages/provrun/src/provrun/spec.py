@@ -126,7 +126,7 @@ class RunSpec:
     env: dict[str, str] = field(default_factory=dict)
 
 
-def _read_run_file(path: Path) -> tuple[dict, AgentSpec, Any]:
+def _read_run_file(path: Path) -> tuple[dict, AgentSpec, Any, str | None]:
     path = Path(path)
     try:
         doc = load_yaml(path.read_text()) or {}
@@ -134,7 +134,7 @@ def _read_run_file(path: Path) -> tuple[dict, AgentSpec, Any]:
         raise RunFileError(f"cannot read the run file {path}: {e}") from e
     if not isinstance(doc, dict):
         raise RunFileError(f"{path}: a run file is a mapping with run and agent sections")
-    unknown = set(doc) - {"run", "agent", "telemetry"}
+    unknown = set(doc) - {"run", "agent", "telemetry", "experiment"}
     if unknown:
         raise RunFileError(f"{path}: unknown sections {sorted(unknown)}")
     if "agent" not in doc:
@@ -147,19 +147,22 @@ def _read_run_file(path: Path) -> tuple[dict, AgentSpec, Any]:
     telemetry = doc.get("telemetry")
     if telemetry is not None and not isinstance(telemetry, dict):
         raise RunFileError(f"{path}: the telemetry section must be a mapping")
+    experiment = doc.get("experiment")
+    if experiment is not None and (not isinstance(experiment, str) or not experiment.startswith("experiment://")):
+        raise RunFileError(f"{path}: experiment is the URI of an experiment, which starts with experiment://")
     try:
         agent = AgentSpec.from_dict(doc["agent"])
     except (TypeError, ValueError) as e:
         raise RunFileError(f"{path}: the agent section: {e}") from e
-    return dict(run), agent, telemetry
+    return dict(run), agent, telemetry, experiment
 
 
 def load_run_file(path: Path) -> tuple[dict, AgentSpec]:
     """Read a run file: a ``run`` section with org, domain, env and actor, an
     ``agent`` section that is an agent spec, and an optional ``telemetry``
-    section, which ``RunFile.load`` keeps. A key written twice is refused. The
+    section and ``experiment``, which ``RunFile.load`` keeps. A key written twice is refused. The
     run section comes back as it is written; ``RunFile.load`` also checks it."""
-    run, agent, _ = _read_run_file(path)
+    run, agent, _, _ = _read_run_file(path)
     return run, agent
 
 
@@ -214,10 +217,12 @@ class RunFile:
     settings: RunSettings
     agent: AgentSpec
     telemetry: dict | None = None  # the telemetry section, which narrows the operator's policy
+    experiment: str | None = None  # the experiment the run belongs to, experiment://org/team/env/project/name
 
     @classmethod
     def load(cls, path: str | Path) -> RunFile:
         """Read and check a run file. Raises RunFileError. The telemetry
-        section is checked against the policy when the run starts."""
-        run, agent, telemetry = _read_run_file(Path(path))
-        return cls(RunSettings.from_dict(run, f"{path}: the run section"), agent, telemetry)
+        section is checked against the policy, and the experiment is pinned,
+        when the run starts."""
+        run, agent, telemetry, experiment = _read_run_file(Path(path))
+        return cls(RunSettings.from_dict(run, f"{path}: the run section"), agent, telemetry, experiment)

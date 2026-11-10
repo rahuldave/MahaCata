@@ -374,7 +374,7 @@ the file at experiment://acme/risk/dev/credit/revenue:
 refused: experiment://acme/risk/dev/credit/revenue/experiment.yaml: name the experiment's folder, not its file
 ```
 
-A run will name its experiment beside its agent, once provrun records the pin. Then `prove experiments` lists the experiments that runs named, and `prove experiment show` lists each version with its runs. `prove verify` reads the experiment at the run's pin, and checks its hash. [The reference](provevi.md#experiments-and-agent-classes) gives the file's keys.
+A run names its experiment beside its agent, and provrun records the pin. `prove experiments` lists the experiments that runs named, and `prove experiment show` lists each version with its runs. `prove verify` reads the experiment at the run's pin, and checks its hash. [The reference](provevi.md#experiments-and-agent-classes) gives the file's keys.
 
 ## Use it from Python
 

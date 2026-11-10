@@ -353,7 +353,7 @@ refused: experiment://acme/risk/dev/credit/revenue/experiment.yaml: name the exp
 **What happened:**
 - Each `write_experiment` wrote the file and committed the folder, so each made a version with its own pin.
 - `read_experiment` with the URI read the newest version. With version 1's pin, it read version 1, which is still there.
-- The file holds no agent spec, so one experiment can try many agents. A run will name it beside its agent, once provrun records the pin.
+- The file holds no agent spec, so one experiment can try many agents. A run names it beside its agent, and provrun records the pin, as Step 15 of [provrun's tour](provrun-tour.md#step-15-name-the-experiment-a-run-belongs-to) shows.
 
 ## Open MLflow's viewer
 

@@ -1,7 +1,7 @@
 """The runnable tour: tours/provrun/run.sh runs, and docs/provrun-tour.md shows its output.
 
 The script starts its own moto server and collector on free ports, in a
-scratch folder, and deletes the folder when it ends. Steps 15 and 16 call a
+scratch folder, and deletes the folder when it ends. Steps 16 and 17 call a
 real model, so these tests run the script without --online, and compare the
 steps before them with the page.
 """
@@ -23,7 +23,7 @@ SCRIPT = TOURS / "run.sh"
 PAGE = ROOT / "docs" / "provrun-tour.md"
 FEATURES = ROOT / "docs" / "provrun-features.md"
 OVERVIEW = ROOT / "docs" / "overview.md"  # the overview of all three packages copies some steps
-ONLINE = ("Step 15", "Step 16")  # the steps that call a real model
+ONLINE = ("Step 16", "Step 17")  # the steps that call a real model
 PAGE_DIR = "/tmp/provrun-tour"
 PAGE_OTLP_PORT = "4318"
 

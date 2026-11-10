@@ -79,7 +79,7 @@ _tour_start() {
   # The policy of Step 12 names the collector's port.
   printf 'version: 1\nlibraries:\n  litellm:\n    versions: "==1.83.0"\ndestinations:\n  collector:\n    kind: otlp\n    receives: names\n    endpoint: http://127.0.0.1:%s/v1/traces\nhosts:\n  - api.openai.com\n  - 127.0.0.1\n' \
     "$TOUR_OTLP_PORT" > "$TOUR_DIR/send.yaml" || return 1
-  # The policy of Step 15: the collector, and a copy in MLflow, both with
+  # The policy of Step 16: the collector, and a copy in MLflow, both with
   # token counts, for runs that call Anthropic.
   printf 'version: 1\nlibraries:\n  litellm:\n    versions: "==1.83.0"\ndestinations:\n  collector:\n    kind: otlp\n    receives: usage\n    endpoint: http://127.0.0.1:%s/v1/traces\n  own:\n    kind: mlflow\n    receives: usage\nhosts:\n  - api.anthropic.com\n  - 127.0.0.1\n' \
     "$TOUR_OTLP_PORT" > "$TOUR_DIR/online.yaml" || return 1
@@ -99,7 +99,7 @@ _tour_start() {
     tail -n 5 "$TOUR_DIR/moto.log" "$TOUR_DIR/collector.log" >&2
     return 1
   fi
-  uv run python tours/provrun/make_bucket.py data runs
+  uv run python tours/provrun/make_bucket.py data runs experiments
 }
 # If the start fails halfway, stop what it started and give the shell back.
 # A start that a check refused, such as a second start, leaves the tour that
