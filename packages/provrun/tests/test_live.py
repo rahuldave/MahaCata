@@ -348,3 +348,40 @@ def test_a_run_cancelled_while_it_is_sealed_ends_its_feed_as_replay_does(rf, cat
     later = list(replay(FileStore(), folder.name, "names", folder=folder / "evidence"))
     assert items[-1] == later[-1] and items[-1]["status"] == "completed"
     assert items == later
+
+
+def test_at_bodies_the_feed_keeps_no_payload_and_reads_it_for_each_viewer(tmp_path, docs, catalog, runs):
+    f = tmp_path / "flat.yaml"
+    f.write_text(RUN.replace("INPUT", f"file://{docs}/report.txt").replace("  stream: true\n", ""))
+
+    async def go():
+        live = start_run(RunFile.load(f), **kw(catalog, runs, "bodies"))
+        items = await collect(live.follow())
+        out = await live.result()
+        return live.feed, items, await collect(live.follow()), out
+
+    feed, items, late, out = asyncio.run(go())
+    assert out.status == "completed", out.error
+    # The feed holds each payload's name only, and no reply; a viewer gets
+    # the payload, which holds the input's text, and the reply.
+    assert all("payload" not in i and "text" not in i for i in feed.items)
+    assert sum("_payload" in i for i in feed.items) == sum("payload" in i for i in items) > 0
+    called = next(i for i in items if i.get("event") == "model_called")
+    assert "Costs were 30 million." in json.dumps(called["payload"])
+    from provevi import FileStore
+
+    later = list(replay(FileStore(), out.run_id, "bodies", folder=out.folder / "evidence"))
+    # A reply that did not stream comes whole after model_called, so the feed is replay's.
+    assert items[:-1] == later[:-1] and late == items
+    [text] = [i for i in items if i["type"] == "text"]
+    assert text["text"] == "Revenue was 42 million."
+    assert items[text["n"] - 2]["event"] == "model_called"
+
+
+def test_a_streamed_reply_is_not_given_again_whole(catalog, runs, rf):
+    async def go():
+        live = start_run(rf, **kw(catalog, runs, "bodies"))
+        return await collect(live.follow())
+
+    items = asyncio.run(go())
+    assert "".join(i["text"] for i in items if i["type"] == "text") == "Revenue was 42 million."

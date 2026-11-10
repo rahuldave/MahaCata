@@ -3,7 +3,20 @@
 The broker decides whether a run may use one URI in one mode, and returns a
 grant. A grant names the decision, not a credential. Later brokers will read
 profiles and identities; ``StubBroker`` checks an allow list and the
-environment, and grants only read-only snapshots.
+environment, and grants only reads: a read-only snapshot of an input, and a
+read of one version of the run's experiment.
+
+The modes:
+
+- ``mounted_snapshot``: a read-only snapshot of an input, staged for the agent.
+- ``pinned_read``: provrun reads one version of a catalog object itself, as it
+  reads the run's experiment. The agent never sees it.
+- ``mounted_readwrite``, ``retrieval`` and ``api``: kept for later brokers;
+  the stub grants none of them.
+
+A run asks for its experiment before its run folder is made, so the broker
+decides it with a ``RunScope``, which has the run's ID, org, domain,
+environment and actor, and the run records the grant once it has opened.
 
 The stub's rules:
 
@@ -25,7 +38,7 @@ from __future__ import annotations
 import secrets
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -36,7 +49,8 @@ from .errors import ProvrunError
 if TYPE_CHECKING:
     from .context import RunContext
 
-MODES = ("mounted_snapshot", "mounted_readwrite", "retrieval", "api")
+MODES = ("mounted_snapshot", "pinned_read", "mounted_readwrite", "retrieval", "api")
+GRANTED_BY_STUB = ("mounted_snapshot", "pinned_read")
 
 
 class AccessDenied(ProvrunError):
@@ -64,11 +78,21 @@ class Grant:
                 "expires_at": self.expires_at, "policy": self.policy}
 
 
+@dataclass(frozen=True)
+class RunScope:
+    """Who asks, for a request decided before the run opens: the fields of a
+    RunContext that a broker reads."""
+    run_id: str
+    org: str
+    domain: str
+    env: str
+    actor: str
+
+
 class Broker(ABC):
     def request(self, ctx: RunContext, uri: str, mode: str, purpose: str = "") -> Grant:
         """Decide one request and write its evidence. Raises AccessDenied on a deny."""
-        if mode not in MODES:
-            raise ValueError(f"access mode must be one of {MODES}, not {mode!r}")
+        _check_mode(mode)
         name = self.__class__.__name__
         ctx.recorder.emit("access_requested", name, refs=[uri], data={"mode": mode, "purpose": purpose})
         grant = self.decide(ctx, uri, mode, purpose)
@@ -78,8 +102,53 @@ class Broker(ABC):
             raise AccessDenied(grant)
         return grant
 
+    def decide_early(self, scope: RunScope, uri: str, mode: str, purpose: str = "") -> Grant:
+        """Decide one request before the run opens, and write nothing. Raises
+        AccessDenied on a deny. The run writes the grant with ``record``. It
+        calls decide with scope, so a broker's decide must read only the
+        fields that a RunScope has; and it does not go through request, so a
+        broker that changes request must change these two methods too."""
+        _check_mode(mode)
+        grant = self.decide(scope, uri, mode, purpose)  # type: ignore[arg-type]  # a RunScope has the fields read
+        if not grant.granted:
+            raise AccessDenied(grant)
+        expiry(grant)  # a time that does not parse fails here, before the run opens
+        return grant
+
+    def record(self, ctx: RunContext, grant: Grant, purpose: str = "") -> None:
+        """Write the evidence of a grant that decide_early gave. A grant that
+        has expired since is written as a deny, and raises AccessDenied."""
+        name = self.__class__.__name__
+        ctx.recorder.emit("access_requested", name, refs=[grant.uri], data={"mode": grant.mode, "purpose": purpose})
+        ends = expiry(grant)
+        if ends is not None and ends <= datetime.now(UTC):
+            grant = replace(grant, decision="deny", reason=f"the grant expired at {grant.expires_at}, "
+                                                          "before the run opened")
+            ctx.recorder.emit("access_denied", name, refs=[grant.uri], data=grant.as_dict())
+            raise AccessDenied(grant)
+        ctx.recorder.emit("access_granted", name, refs=[grant.uri], data=grant.as_dict())
+
     @abstractmethod
-    def decide(self, ctx: RunContext, uri: str, mode: str, purpose: str) -> Grant: ...
+    def decide(self, ctx: RunContext, uri: str, mode: str, purpose: str) -> Grant:
+        """The decision for one request. ctx is the run's context, or a
+        RunScope for a request decided before the run opens."""
+
+
+def expiry(grant: Grant) -> datetime | None:
+    """When grant expires, or None if it does not. A time with no time zone
+    is in UTC. Raises ValueError for one that is not an ISO 8601 time."""
+    if grant.expires_at is None:
+        return None
+    try:
+        ends = datetime.fromisoformat(grant.expires_at)
+    except (TypeError, ValueError):
+        raise ValueError(f"the grant's expires_at {grant.expires_at!r} is not an ISO 8601 time") from None
+    return ends if ends.tzinfo is not None else ends.replace(tzinfo=UTC)
+
+
+def _check_mode(mode: str) -> None:
+    if mode not in MODES:
+        raise ValueError(f"access mode must be one of {MODES}, not {mode!r}")
 
 
 class StubBroker(Broker):
@@ -108,8 +177,8 @@ class StubBroker(Broker):
                          reason, expires, "stub")
 
         u = parse(uri)
-        if mode != "mounted_snapshot":
-            return answer(False, f"the stub broker grants only mounted_snapshot, not {mode}")
+        if mode not in GRANTED_BY_STUB:
+            return answer(False, f"the stub broker grants only {' and '.join(GRANTED_BY_STUB)}, not {mode}")
         if u.selector is not None:
             if not any(parse(entry) == u for entry in self.allow if "?at=" in entry):
                 return answer(False, f"the selector ?at={u.selector} is not in the allow list; "

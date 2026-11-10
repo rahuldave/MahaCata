@@ -1,8 +1,10 @@
 """Run one agent spec from start to end.
 
-The steps, each of which writes its evidence:
+Before the run folder is made, the broker decides the run's experiment, if
+it names one, and provrun pins it. Then the steps, each of which writes its
+evidence:
 
-1. Open the run context.
+1. Open the run context, and record the experiment's grant.
 2. Ask the broker for each input.
 3. Resolve each grant to a snapshot.
 4. Stage the snapshots.
@@ -30,13 +32,13 @@ from pathlib import Path
 from typing import Any, Literal
 
 from provcat import Catalog, ProvcatError
-from provevi import EvidenceStore
+from provevi import EvidenceStore, default_runs_root
 from provevi.telemetry import TelemetryPolicy
 
-from .access import Broker, StubBroker
+from .access import AccessDenied, Broker, Grant, RunScope, StubBroker
 from .backends import Backend, RunResult, load_backend
 from . import otel
-from .context import Bundle, RunContext, evidence_mode, new_run_id
+from .context import Bundle, RunContext, check_segment, evidence_mode, new_run_id
 from .errors import RunSettingError
 from .outputs import Artifact, Outputter
 from .resolve import ProvcatResolver, Resolver
@@ -100,11 +102,15 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
     piece of a streamed reply as they come; start_run makes one.
 
     experiment is the URI of the experiment that the run belongs to. The run
+    asks the broker for it first, in the mode pinned_read, and records the
+    grant once it opens; a refusal raises RunSettingError. The run then
     pins it through catalog, so the catalog's checks and hooks see it, and
     run_created records the URI, the pin and the SHA-256 of its file. An
     experiment that cannot be pinned raises RunSettingError before the run
     folder is made. parent_run is the ID of the run that started this one,
-    which run_created records too."""
+    which run_created records too. It must be a run in the same evidence
+    store, or under runs_root for the file store, or RunSettingError is
+    raised; a store that cannot read runs back is not checked."""
     if parent_run is not None and (not isinstance(parent_run, str) or not _RUN_ID.fullmatch(parent_run)):
         raise RunSettingError(f"parent_run must be a run ID, such as run-20260101T000000Z-0a1b2c3d; got {parent_run!r}")
     tel = Telemetry.prepare(load_policy(policy), telemetry, evidence_mode(env, mode))
@@ -134,11 +140,17 @@ async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org:
             backend = load_backend(agent.backend)
         except ValueError as e:
             raise RunSettingError(str(e)) from e
+    for i in agent.inputs:
+        if i.mode == "pinned_read":  # the agent sees an input, and pinned_read is a read that it never sees
+            raise RunSettingError(f"the input {i.uri} asks for pinned_read, which is only for provrun's own reads")
     if broker is None:
-        allow = list(allow or []) + [i.uri for i in agent.inputs]
+        allow = list(allow or []) + [i.uri for i in agent.inputs] + _own_experiment(experiment)
         broker = StubBroker(allow, physical_schemes=catalog.stores.keys())
-    lineage = await _lineage(catalog, experiment, parent_run)
+    for name, value in (("org", org), ("domain", domain), ("env", env)):
+        check_segment(name, value)  # before the broker or the catalog hears of the run
     run_id = new_run_id()
+    scope = RunScope(run_id, org, domain, env, actor)
+    lineage, grant = await _lineage(catalog, experiment, parent_run, store, runs_root, broker, scope)
     # The root span of the run: each top-level step is its child, so the run is
     # one trace. run_created and the event that ends the run record its IDs.
     with otel.run(run_id, agent.name) as root:
@@ -158,7 +170,7 @@ async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org:
             feed.writer = ctx.recorder.writer
             ctx.on_text = feed.text
         tel.attach(ctx.recorder, trace.get("trace_id"))
-        outcome, error = await _steps(ctx, agent, stager, backend)
+        outcome, error = await _steps(ctx, agent, stager, backend, grant)
         if error is not None:
             root.set_status(otel.ERROR, f"{error.__class__.__name__}: {error}")
     if error is not None and not isinstance(error, Exception):
@@ -169,21 +181,70 @@ async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org:
 _RUN_ID = re.compile(r"run-\d{8}T\d{6}Z-[0-9a-f]{8}")
 
 
-async def _lineage(catalog: Catalog, experiment: str | None, parent_run: str | None) -> dict:
+async def _lineage(catalog: Catalog, experiment: str | None, parent_run: str | None,
+                   store: EvidenceStore | None, runs_root: Path | None, broker: Broker,
+                   scope: RunScope) -> tuple[dict, Grant | None]:
     """What run_created records of where the run belongs: the experiment, its
-    pin and the SHA-256 of its file, and the parent run, each if given."""
+    pin and the SHA-256 of its file, and the parent run, each if given, with
+    the broker's grant for the experiment. The broker decides the experiment
+    before it is read, and the parent run must be one that the run's store
+    holds."""
     out: dict = {}
+    grant = None
     if experiment is not None:
         from provevi import ProveviError, read_experiment
 
+        try:
+            grant = await _off_loop(broker.decide_early, scope, experiment, "pinned_read", "experiment")
+        except AccessDenied as e:
+            raise RunSettingError(f"the broker refused the experiment: {e}") from e
+        except Exception as e:  # such as a broker that reads a field a RunScope does not have
+            raise RunSettingError(f"the broker could not decide the experiment: {e.__class__.__name__}: {e}") from e
         try:
             pinned = await _off_loop(read_experiment, catalog, experiment)
         except (ProveviError, ProvcatError, OSError) as e:  # OSError from a store or a hook outside provcat
             raise RunSettingError(f"cannot pin the experiment {experiment}: {e}") from e
         out.update(experiment=experiment, experiment_pin=pinned.pin, experiment_sha256=pinned.sha256)
     if parent_run is not None:
+        await _off_loop(_check_parent, parent_run, store, runs_root)
         out["parent_run"] = parent_run
-    return out
+    return out, grant
+
+
+def _own_experiment(experiment: str | None) -> list[str]:
+    """The run's experiment, for the default broker's allow list. A selector
+    other than a commit can name another branch, and so another environment,
+    so an experiment with one must be in the allow list itself. So must one
+    whose commit does not look like a commit ID, because some stores take a
+    branch name there too."""
+    if experiment is None or experiment.endswith("/"):  # an allow entry that ends with / allows a whole folder
+        return []
+    from provcat import parse
+
+    try:
+        selector = parse(experiment).selector
+    except ProvcatError as e:
+        raise RunSettingError(f"the experiment {experiment!r} is not a URI: {e}") from e
+    return [experiment] if selector is None or (selector.kind == "commit" and _COMMIT_ID.fullmatch(selector.value)) else []
+
+
+_COMMIT_ID = re.compile(r"[0-9a-f]{7,64}")  # a commit ID in hex, as lakeFS, git and the object stores write it
+
+
+def _check_parent(parent_run: str, store: EvidenceStore | None, runs_root: Path | None) -> None:
+    from provevi import CannotReadBack, FileStore, ProveviError, RunNotFound
+
+    # The file store writes each run under runs_root, so that is where to look.
+    if store is None or isinstance(store, FileStore):
+        store = FileStore(runs_root if runs_root is not None else default_runs_root())
+    try:
+        store.read_run(parent_run)
+    except CannotReadBack:
+        return
+    except RunNotFound as e:
+        raise RunSettingError(f"the parent run {parent_run} is not in the evidence store: {e}") from e
+    except (ProveviError, OSError) as e:
+        raise RunSettingError(f"cannot check the parent run {parent_run}: {e}") from e
 
 
 def _live(tel: Telemetry, feed: Any) -> dict:
@@ -226,14 +287,16 @@ def _snapshots(ctx: RunContext, agent: AgentSpec) -> list:
     return out
 
 
-async def _steps(ctx: RunContext, agent: AgentSpec, stager: Stager | None,
-                 backend: Backend) -> tuple[RunOutcome, BaseException | None]:
+async def _steps(ctx: RunContext, agent: AgentSpec, stager: Stager | None, backend: Backend,
+                 grant: Grant | None = None) -> tuple[RunOutcome, BaseException | None]:
     stager = stager or InProcessStager()
     outcome = RunOutcome(ctx.run_id, "failed", ctx.folder, Bundle(ctx.folder))
     error = None
     run = None
     cancelled = False
     try:
+        if grant is not None:  # the experiment's, decided before the run opened
+            ctx.broker.record(ctx, grant, purpose="experiment")
         # Fetching, staging, checking and sealing block, so each runs in a thread.
         snapshots = await _off_loop(_snapshots, ctx, agent)
         run = await _off_loop(stager.stage, ctx, snapshots)
