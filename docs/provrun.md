@@ -105,11 +105,11 @@ A run checks its settings before it makes the run folder. Each of these raises `
 - a telemetry policy file that cannot be read, or a run file's `telemetry` section that would widen the policy;
 - in strict mode, a telemetry problem, which "Control of library telemetry" below lists;
 - an unknown backend;
-- an experiment that the broker refuses or cannot decide, that cannot be pinned, as in a store with no commits, or that the catalog refuses;
+- an experiment that the broker cannot decide, that cannot be pinned, as in a store with no commits, or that the catalog refuses;
 - an input whose mode is `pinned_read`;
 - a `parent_run` that is not a run ID, or that names no run in the run's evidence store.
 
-An error after that fails the run. The outcome holds the error, and the evidence records it.
+An error after that fails the run. The outcome holds the error, and the evidence records it. An experiment that the broker refuses fails the run in this way too.
 
 Every error that provrun raises on purpose is a `ProvrunError`, so a program can catch them in one place. An error from the system, such as a runs root that cannot be written, comes through as it is. The checks behind `provr verify` are in provevi's library, and [provevi's page](provevi.md) shows how a program calls them.
 
@@ -227,13 +227,15 @@ agent:
   ...
 ```
 
-As the run starts, provrun first asks the broker for the experiment, in the mode `pinned_read`. The stub broker allows the run's own experiment, and checks its org and environment as it checks an input's. So a run in `dev` cannot name an experiment whose URI says `prod`. A refusal stops the run with `RunSettingError` before the run folder is made, and before the experiment is read.
+As the run starts, provrun first asks the broker for the experiment, in the mode `pinned_read`. The stub broker allows the run's own experiment, and checks its org and environment as it checks an input's. So a run in `dev` cannot name an experiment whose URI says `prod`.
+
+A refusal is evidence, as an input's is. The run opens, and its first steps after `run_created` are `access_requested` and `access_denied` for the experiment. Then the run fails. Nothing reads the experiment, so `run_created` does not name it, and the run is not one of the experiment's runs. The two access events name it. A parent run that the store does not hold still stops the run before its folder is made, and then the refusal is not recorded.
 
 A selector other than a commit, such as `?at=branch:prod`, can name another branch, and so another environment. So the stub allows an experiment with such a selector only if the run's `allow` list names it, selector and all. Some stores take a branch name where a commit goes, so a `commit:` selector needs an entry too, unless its value looks like a commit ID. A commit ID here is 7 to 64 hex digits, in lower case. An experiment with no selector, or pinned to such an ID, needs no entry. A branch named like a commit ID, such as `deadbeef`, would still get past this check.
 
-The broker decides before the run folder exists, so the run records the grant once it opens. `access_requested` and `access_granted` for the experiment are the run's first steps after `run_created`, with the purpose `experiment`. A grant that has expired by then is written as `access_denied`, and the run fails.
+The broker decides before the run folder exists, so the run records its decision once it opens. For a grant, `access_requested` and `access_granted` for the experiment are the run's first steps after `run_created`, with the purpose `experiment`. A grant that has expired by then is written as `access_denied`, and the run fails.
 
-A broker that you pass in decides the experiment too, so its allow list must name it. Its `decide` gets a `RunScope` for the experiment, which holds the run's ID, org, domain, environment and actor, and nothing else. A broker that reads anything more stops the run with `RunSettingError`.
+A broker that you pass in decides the experiment too, so its allow list must name it. Its `decide` gets a `RunScope` for the experiment, which holds the run's ID, org, domain, environment and actor, and nothing else. A broker that reads anything more stops the run with `RunSettingError`. So does a broker whose grant is for another URI or mode than the experiment's.
 
 Then provrun pins the experiment through the run's catalog, so the catalog's checks and hooks see the read. `run_created` records three keys, all of them or none:
 

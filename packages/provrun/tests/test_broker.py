@@ -108,8 +108,14 @@ def test_a_request_decided_before_the_run_opens_is_recorded_once_it_opens(tmp_pa
     events = read_events(c.folder / "evidence")
     assert [e.type for e in events] == ["run_created", "access_requested", "access_granted"]
     assert events[2].data["grant_id"] == g.id and events[1].data == {"mode": "pinned_read", "purpose": "experiment"}
-    with pytest.raises(AccessDenied, match="environment prod"):
+    with pytest.raises(AccessDenied, match="environment prod") as denied:
         c.broker.decide_early(scope, "experiment://acme/benefits/prod/plans/q", "pinned_read")
+    # The deny is recorded once the run opens, as a deny.
+    with pytest.raises(AccessDenied, match="environment prod"):
+        c.broker.record(c, denied.value.grant, purpose="experiment")
+    events = read_events(c.folder / "evidence")
+    assert [e.type for e in events][3:] == ["access_requested", "access_denied"]
+    assert events[4].data["decision"] == "deny" and events[4].refs == ("experiment://acme/benefits/prod/plans/q",)
 
 
 def test_the_stub_grants_no_mode_beyond_the_two_reads(tmp_path, catalog, docs):

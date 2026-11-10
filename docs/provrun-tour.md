@@ -861,7 +861,7 @@ run-20261110T045534Z-11b04ed6: the evidence and the outputs verify, and match th
 - Each version of the experiment has its own pin, so a run says which version it ran, though the run file names no version.
 - `prove verify` read the first run's experiment at that run's pin, after the second version was written, and its hash matched.
 - The broker granted the experiment before the run read it. It checks the experiment's org and environment as it checks an input's, so a `dev` run cannot name an experiment whose URI says `prod`. An experiment on a branch, such as `?at=branch:prod`, must be in the run's `allow` list, and so must a `commit:` whose value is not a commit ID.
-- An experiment that the broker refuses, or that cannot be pinned, such as one in a store with no commits, stops the run before the run folder is made. A grant that has expired by the time the run opens fails the run instead, and the evidence records the deny.
+- An experiment that cannot be pinned, such as one in a store with no commits, stops the run before the run folder is made. An experiment that the broker refuses fails the run instead, and so does a grant that has expired by the time the run opens. The evidence records the deny.
 - The second run records the first as its parent. A parent that the store does not hold stops the run before the run folder is made.
 
 ## Step 16: Call a real model (needs ANTHROPIC_API_KEY)

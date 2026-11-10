@@ -356,7 +356,7 @@ $ uv run prove --store $E verify --config $PROVCAT_CONFIG $R12
 run-20261110T045534Z-11b04ed6: the evidence and the outputs verify, and match the committed bundle; its experiment matches experiment://acme/demo/dev/revenue/retrieval?at=commit:a0b99d93dd3e6e032c08fa7987f6fd841c70b61b3d698cc73ad8a0a2ce1f816a
 ```
 
-The broker decides the experiment before it is read, as it decides each input. An experiment that the broker refuses, or that cannot be pinned, stops the run before the run folder is made. A run that another run starts records `parent_run`, from `provr run --parent-run RUN_ID` or the `parent_run` argument. The parent must be in the run's evidence store. [provrun's page](provrun.md#name-the-experiment) says more.
+The broker decides the experiment before it is read, as it decides each input. An experiment that cannot be pinned stops the run before the run folder is made. One that the broker refuses fails the run, and the evidence records the deny. A run that another run starts records `parent_run`, from `provr run --parent-run RUN_ID` or the `parent_run` argument. The parent must be in the run's evidence store. [provrun's page](provrun.md#name-the-experiment) says more.
 
 ## Use it from a program
 

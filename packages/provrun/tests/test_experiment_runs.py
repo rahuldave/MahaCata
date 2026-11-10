@@ -221,6 +221,20 @@ def test_the_broker_grants_the_experiment_and_the_run_records_it(tmp_path, docs,
     assert verify_run(out.folder, catalog=catalog).ok
 
 
+def refused(out, catalog, experiment, reason):
+    """Check that out is a run that the broker's refusal of experiment failed."""
+    assert out.status == "failed" and reason in str(out.error), out.error
+    events = read_events(out.folder / "evidence")
+    assert [e.type for e in events][:3] == ["run_created", "access_requested", "access_denied"]
+    assert events[-1].type == "run_failed"
+    assert events[1].refs == events[2].refs == (experiment,) and events[1].data["purpose"] == "experiment"
+    assert events[2].data["decision"] == "deny" and reason in events[2].data["reason"]
+    assert not {"experiment", "experiment_pin", "experiment_sha256"} & events[0].data.keys()
+    assert not any(e.type == "access_requested" and e.data["purpose"] != "experiment" for e in events)
+    check = verify_run(out.folder, catalog=catalog)
+    assert check.ok, check.problems
+
+
 def test_the_broker_refuses_an_experiment_of_another_environment_before_it_is_read(tmp_path, docs, catalog,
                                                                                     runs, monkeypatch):
     prod = "experiment://acme/risk/prod/credit/q"
@@ -229,9 +243,9 @@ def test_the_broker_refuses_an_experiment_of_another_environment_before_it_is_re
 
     read = []
     monkeypatch.setattr(provevi, "read_experiment", lambda *a: read.append(a))
-    with pytest.raises(RunSettingError, match="broker refused the experiment.*environment prod"):
-        run_file_sync(run_file(tmp_path, docs, prod), catalog=catalog, runs_root=runs)
-    assert read == [] and (not runs.exists() or not list(runs.iterdir()))
+    out = run_file_sync(run_file(tmp_path, docs, prod), catalog=catalog, runs_root=runs)
+    assert read == []
+    refused(out, catalog, prod, "environment prod")
 
 
 def test_a_broker_passed_in_decides_the_experiment_too(tmp_path, docs, catalog, runs):
@@ -239,8 +253,8 @@ def test_a_broker_passed_in_decides_the_experiment_too(tmp_path, docs, catalog, 
 
     write_experiment(catalog, EXP, EVAL, "first")
     only_inputs = StubBroker([f"file://{docs}/report.txt"], physical_schemes=catalog.stores.keys())
-    with pytest.raises(RunSettingError, match="allow list"):
-        run_file_sync(run_file(tmp_path, docs), catalog=catalog, runs_root=runs, broker=only_inputs)
+    refused(run_file_sync(run_file(tmp_path, docs), catalog=catalog, runs_root=runs, broker=only_inputs),
+            catalog, EXP, "allow list")
     both = StubBroker([f"file://{docs}/report.txt", EXP], physical_schemes=catalog.stores.keys())
     assert run_file_sync(run_file(tmp_path, docs), catalog=catalog, runs_root=runs, broker=both).status == "completed"
 
@@ -303,8 +317,8 @@ def test_a_grant_that_expired_before_the_run_opened_fails_the_run(tmp_path, docs
 def test_an_experiment_on_a_branch_must_be_in_the_allow_list_itself(tmp_path, docs, catalog, runs):
     write_experiment(catalog, EXP, EVAL, "first")
     branch = EXP + "?at=branch:main"
-    with pytest.raises(RunSettingError, match="broker refused the experiment.*selector"):
-        run_file_sync(run_file(tmp_path, docs, branch), catalog=catalog, runs_root=runs)
+    refused(run_file_sync(run_file(tmp_path, docs, branch), catalog=catalog, runs_root=runs), catalog, branch,
+            "selector")
     agent = run_file(tmp_path, docs).agent
     out = asyncio.run(run_agent(agent, catalog=catalog, runs_root=runs, org="acme", domain="risk", env="dev",
                                 actor="t", experiment=branch, allow=[branch]))
@@ -331,8 +345,8 @@ def test_a_bad_environment_is_refused_before_the_broker_or_the_catalog_hears_of_
 @pytest.mark.parametrize("value", ["prod", "main", "ABCDEF1", "abc"])
 def test_a_commit_selector_that_names_no_commit_id_must_be_in_the_allow_list(tmp_path, docs, catalog, runs, value):
     # Some stores take a branch name where a commit goes, so commit:prod could read the prod branch.
-    with pytest.raises(RunSettingError, match="broker refused the experiment.*selector"):
-        run_file_sync(run_file(tmp_path, docs, f"{EXP}?at=commit:{value}"), catalog=catalog, runs_root=runs)
+    uri = f"{EXP}?at=commit:{value}"
+    refused(run_file_sync(run_file(tmp_path, docs, uri), catalog=catalog, runs_root=runs), catalog, uri, "selector")
 
 
 @pytest.mark.parametrize("expires, ok", [("2999-01-01T00:00:00", True), ("tomorrow", False), (12345, False)])
@@ -362,5 +376,98 @@ def test_an_experiment_that_ends_with_a_slash_allows_no_folder(tmp_path, docs, c
     from provrun.runner import _own_experiment
 
     assert _own_experiment(EXP + "/") == []
-    with pytest.raises(RunSettingError, match="broker refused the experiment.*allow list"):
-        run_file_sync(run_file(tmp_path, docs, EXP + "/"), catalog=catalog, runs_root=runs)
+    refused(run_file_sync(run_file(tmp_path, docs, EXP + "/"), catalog=catalog, runs_root=runs), catalog, EXP + "/",
+            "allow list")
+
+
+def test_a_refused_experiment_is_in_the_store_s_access_rows_but_has_no_runs(tmp_path, docs, catalog, runs):
+    from provevi import SqliteStore
+
+    prod = "experiment://acme/risk/prod/credit/q"
+    store = SqliteStore(tmp_path / "evidence.db")
+    out = run_file_sync(run_file(tmp_path, docs, prod), catalog=catalog, runs_root=runs, store=store)
+    refused(out, catalog, prod, "environment prod")
+    assert store.run(out.run_id)["status"] == "failed"
+    assert [a["decision"] for a in store.access(out.run_id)] == ["denied"]
+    assert store.experiments() == [] and store.runs_of_experiment("acme/risk/prod/credit/q") == []
+    assert verify_run(out.folder, catalog=catalog, store=store).ok
+
+
+def test_a_broker_that_raises_access_denied_with_a_grant_still_refuses(tmp_path, docs, catalog, runs, monkeypatch):
+    from dataclasses import replace
+
+    from provrun.access import AccessDenied, StubBroker
+
+    class Muddled(StubBroker):
+        def decide_early(self, scope, uri, mode, purpose=""):
+            raise AccessDenied(replace(super().decide(scope, uri, mode, purpose), reason="no, after all"))
+
+    import provevi
+
+    read = []
+    monkeypatch.setattr(provevi, "read_experiment", lambda *a: read.append(a))
+    write_experiment(catalog, EXP, EVAL, "first")
+    muddled = Muddled([f"file://{docs}/report.txt", EXP], physical_schemes=catalog.stores.keys())
+    out = run_file_sync(run_file(tmp_path, docs), catalog=catalog, runs_root=runs, broker=muddled)
+    assert read == []
+    refused(out, catalog, EXP, "no, after all")
+
+
+def test_a_refusal_with_no_grant_is_a_setting_error(tmp_path, docs, catalog, runs):
+    from provrun.access import AccessDenied, Grant, StubBroker
+
+    class NoGrant(StubBroker):
+        def decide_early(self, scope, uri, mode, purpose=""):
+            e = AccessDenied(Grant("g", uri, mode, "deny", "x", None, "p"))
+            e.grant = None
+            raise e
+
+    broker = NoGrant([f"file://{docs}/report.txt", EXP], physical_schemes=catalog.stores.keys())
+    with pytest.raises(RunSettingError, match="refused the experiment with no grant"):
+        run_file_sync(run_file(tmp_path, docs), catalog=catalog, runs_root=runs, broker=broker)
+    assert not runs.exists() or not list(runs.iterdir())
+
+
+def test_a_refusal_is_recorded_for_the_experiment_whatever_uri_the_grant_names(tmp_path, docs, catalog, runs):
+    from dataclasses import replace
+
+    from provrun.access import AccessDenied, StubBroker
+
+    class Elsewhere(StubBroker):
+        def decide_early(self, scope, uri, mode, purpose=""):
+            g = super().decide(scope, uri, mode, purpose)
+            raise AccessDenied(replace(g, uri="file:///elsewhere", mode="mounted_snapshot", reason="not this one"))
+
+    broker = Elsewhere([f"file://{docs}/report.txt", EXP], physical_schemes=catalog.stores.keys())
+    out = run_file_sync(run_file(tmp_path, docs), catalog=catalog, runs_root=runs, broker=broker)
+    refused(out, catalog, EXP, "not this one")
+    events = read_events(out.folder / "evidence")
+    assert events[1].data["mode"] == events[2].data["mode"] == "pinned_read"
+
+
+def test_a_refused_experiment_with_a_parent_not_in_the_store_is_a_setting_error(tmp_path, docs, catalog, runs):
+    prod = "experiment://acme/risk/prod/credit/q"
+    agent = run_file(tmp_path, docs, prod).agent
+    with pytest.raises(RunSettingError, match="not in the evidence store"):
+        asyncio.run(run_agent(agent, catalog=catalog, runs_root=runs, org="acme", domain="risk", env="dev",
+                              actor="t", experiment=prod, parent_run="run-20260101T000000Z-00000000"))
+    assert not runs.exists() or not list(runs.iterdir())
+
+
+@pytest.mark.parametrize("answer", ["none", "elsewhere", "other mode"])
+def test_a_grant_for_another_request_than_the_experiment_is_a_setting_error(tmp_path, docs, catalog, runs, answer):
+    from dataclasses import replace
+
+    from provrun.access import StubBroker
+
+    class Odd(StubBroker):
+        def decide_early(self, scope, uri, mode, purpose=""):
+            g = super().decide_early(scope, uri, mode, purpose)
+            return {"none": None, "elsewhere": replace(g, uri="file:///elsewhere"),
+                    "other mode": replace(g, mode="mounted_snapshot")}[answer]
+
+    write_experiment(catalog, EXP, EVAL, "first")
+    odd = Odd([f"file://{docs}/report.txt", EXP], physical_schemes=catalog.stores.keys())
+    with pytest.raises(RunSettingError, match="answered for another request"):
+        run_file_sync(run_file(tmp_path, docs), catalog=catalog, runs_root=runs, broker=odd)
+    assert not runs.exists() or not list(runs.iterdir())
