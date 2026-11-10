@@ -162,3 +162,205 @@ def test_an_experiment_argument_takes_the_place_of_the_run_file_s(tmp_path, docs
     write_experiment(catalog, EXP, Experiment("agent-eval", "Later.", EVAL.inputs, ("recall",)), "two")
     out = run_file_sync(run_file(tmp_path, docs), catalog=catalog, runs_root=runs, experiment=first.pin)
     assert created(out)["experiment"] == first.pin == created(out)["experiment_pin"]
+
+
+def test_a_parent_run_that_is_not_in_the_store_stops_the_run_before_it_starts(docs, catalog, runs):
+    agent = AgentSpec(name="q", backend="litellm", model="m", prompt="p", settings={"mock_response": "x"},
+                      inputs=[InputSpec(f"file://{docs}/report.txt")])
+    kw = dict(catalog=catalog, runs_root=runs, org="acme", domain="r", env="dev", actor="t")
+    with pytest.raises(RunSettingError, match="not in the evidence store"):
+        asyncio.run(run_agent(agent, parent_run="run-20260101T000000Z-0a1b2c3d", **kw))
+    assert not runs.exists() or not list(runs.iterdir())
+
+
+def test_a_parent_run_is_looked_for_in_the_run_s_own_store(tmp_path, docs, catalog, runs):
+    from provevi import SqliteStore
+
+    agent = AgentSpec(name="q", backend="litellm", model="m", prompt="p", settings={"mock_response": "x"},
+                      inputs=[InputSpec(f"file://{docs}/report.txt")])
+    kw = dict(catalog=catalog, runs_root=runs, org="acme", domain="r", env="dev", actor="t")
+    in_files = asyncio.run(run_agent(agent, **kw))
+    store = SqliteStore(tmp_path / "evidence.db")
+    in_db = asyncio.run(run_agent(agent, store=store, **kw))
+    child = asyncio.run(run_agent(agent, store=store, parent_run=in_db.run_id, **kw))
+    assert created(child)["parent_run"] == in_db.run_id
+    # A run that only the file store holds is not in the sqlite store.
+    with pytest.raises(RunSettingError, match="not in the evidence store"):
+        asyncio.run(run_agent(agent, store=store, parent_run=in_files.run_id, **kw))
+
+
+def test_a_store_that_cannot_read_runs_back_takes_the_parent_unchecked(docs, catalog, runs):
+    from provevi import FileRunWriter
+    from provevi.store import EvidenceStore
+
+    class WriteOnly(EvidenceStore):
+        def open_run(self, run_id, folder):
+            return FileRunWriter(folder)
+
+    agent = AgentSpec(name="q", backend="litellm", model="m", prompt="p", settings={"mock_response": "x"},
+                      inputs=[InputSpec(f"file://{docs}/report.txt")])
+    out = asyncio.run(run_agent(agent, catalog=catalog, runs_root=runs, org="acme", domain="r", env="dev",
+                                actor="t", store=WriteOnly(), parent_run="run-20260101T000000Z-0a1b2c3d"))
+    assert created(out)["parent_run"] == "run-20260101T000000Z-0a1b2c3d"
+
+
+def grants(out):
+    return [(e.type, e.refs[0], e.data.get("mode"), e.data.get("purpose")) for e in read_events(out.folder / "evidence")
+            if e.type.startswith("access_")]
+
+
+def test_the_broker_grants_the_experiment_and_the_run_records_it(tmp_path, docs, catalog, runs):
+    write_experiment(catalog, EXP, EVAL, "first")
+    out = run_file_sync(run_file(tmp_path, docs), catalog=catalog, runs_root=runs)
+    assert out.status == "completed", out.error
+    events = read_events(out.folder / "evidence")
+    assert [e.type for e in events[:3]] == ["run_created", "access_requested", "access_granted"]
+    assert grants(out)[:2] == [("access_requested", EXP, "pinned_read", "experiment"),
+                               ("access_granted", EXP, "pinned_read", None)]
+    assert events[2].data["decision"] == "grant" and events[2].data["policy"] == "stub"
+    assert verify_run(out.folder, catalog=catalog).ok
+
+
+def test_the_broker_refuses_an_experiment_of_another_environment_before_it_is_read(tmp_path, docs, catalog,
+                                                                                    runs, monkeypatch):
+    prod = "experiment://acme/risk/prod/credit/q"
+    write_experiment(catalog, prod, EVAL, "first")
+    import provevi
+
+    read = []
+    monkeypatch.setattr(provevi, "read_experiment", lambda *a: read.append(a))
+    with pytest.raises(RunSettingError, match="broker refused the experiment.*environment prod"):
+        run_file_sync(run_file(tmp_path, docs, prod), catalog=catalog, runs_root=runs)
+    assert read == [] and (not runs.exists() or not list(runs.iterdir()))
+
+
+def test_a_broker_passed_in_decides_the_experiment_too(tmp_path, docs, catalog, runs):
+    from provrun.access import StubBroker
+
+    write_experiment(catalog, EXP, EVAL, "first")
+    only_inputs = StubBroker([f"file://{docs}/report.txt"], physical_schemes=catalog.stores.keys())
+    with pytest.raises(RunSettingError, match="allow list"):
+        run_file_sync(run_file(tmp_path, docs), catalog=catalog, runs_root=runs, broker=only_inputs)
+    both = StubBroker([f"file://{docs}/report.txt", EXP], physical_schemes=catalog.stores.keys())
+    assert run_file_sync(run_file(tmp_path, docs), catalog=catalog, runs_root=runs, broker=both).status == "completed"
+
+
+def test_an_input_cannot_ask_for_pinned_read(docs, catalog, runs):
+    agent = AgentSpec(name="q", backend="litellm", model="m", prompt="p", settings={"mock_response": "x"},
+                      inputs=[InputSpec(f"file://{docs}/report.txt", mode="pinned_read")])
+    with pytest.raises(RunSettingError, match="pinned_read"):
+        asyncio.run(run_agent(agent, catalog=catalog, runs_root=runs, org="acme", domain="r", env="dev", actor="t"))
+    assert not runs.exists() or not list(runs.iterdir())
+
+
+def test_a_broker_that_reads_more_than_a_run_scope_has_gives_a_setting_error(tmp_path, docs, catalog, runs):
+    from provrun.access import StubBroker
+
+    class Nosy(StubBroker):
+        def decide(self, ctx, uri, mode, purpose):
+            ctx.folder  # a RunContext has it; a RunScope does not
+            return super().decide(ctx, uri, mode, purpose)
+
+    write_experiment(catalog, EXP, EVAL, "first")
+    nosy = Nosy([f"file://{docs}/report.txt", EXP], physical_schemes=catalog.stores.keys())
+    with pytest.raises(RunSettingError, match="could not decide the experiment: AttributeError"):
+        run_file_sync(run_file(tmp_path, docs), catalog=catalog, runs_root=runs, broker=nosy)
+    assert not runs.exists() or not list(runs.iterdir())
+
+
+def test_a_grant_that_cannot_be_recorded_fails_the_run_and_seals_it(tmp_path, docs, catalog, runs):
+    from provrun.access import StubBroker
+
+    class Down(StubBroker):
+        def record(self, ctx, grant, purpose=""):
+            raise RuntimeError("audit down")
+
+    write_experiment(catalog, EXP, EVAL, "first")
+    down = Down([f"file://{docs}/report.txt", EXP], physical_schemes=catalog.stores.keys())
+    out = run_file_sync(run_file(tmp_path, docs), catalog=catalog, runs_root=runs, broker=down)
+    assert out.status == "failed" and "audit down" in str(out.error)
+    assert read_events(out.folder / "evidence")[-1].type == "run_failed"
+    check = verify_run(out.folder, catalog=catalog)
+    assert check.ok, check.problems
+
+
+def test_a_grant_that_expired_before_the_run_opened_fails_the_run(tmp_path, docs, catalog, runs):
+    from datetime import timedelta
+
+    from provrun.access import StubBroker
+
+    write_experiment(catalog, EXP, EVAL, "first")
+    stale = StubBroker([f"file://{docs}/report.txt", EXP], physical_schemes=catalog.stores.keys(),
+                       ttl=timedelta(seconds=-1))
+    out = run_file_sync(run_file(tmp_path, docs), catalog=catalog, runs_root=runs, broker=stale)
+    assert out.status == "failed" and "expired" in str(out.error)
+    types = [e.type for e in read_events(out.folder / "evidence")]
+    assert types[:3] == ["run_created", "access_requested", "access_denied"] and types[-1] == "run_failed"
+    check = verify_run(out.folder, catalog=catalog)
+    assert check.ok, check.problems
+
+
+def test_an_experiment_on_a_branch_must_be_in_the_allow_list_itself(tmp_path, docs, catalog, runs):
+    write_experiment(catalog, EXP, EVAL, "first")
+    branch = EXP + "?at=branch:main"
+    with pytest.raises(RunSettingError, match="broker refused the experiment.*selector"):
+        run_file_sync(run_file(tmp_path, docs, branch), catalog=catalog, runs_root=runs)
+    agent = run_file(tmp_path, docs).agent
+    out = asyncio.run(run_agent(agent, catalog=catalog, runs_root=runs, org="acme", domain="risk", env="dev",
+                                actor="t", experiment=branch, allow=[branch]))
+    assert out.status == "completed", out.error
+    # A commit names one version only, so the run's own may be pinned to it.
+    pinned = created(out)["experiment_pin"]
+    assert run_file_sync(run_file(tmp_path, docs, pinned), catalog=catalog, runs_root=runs).status == "completed"
+
+
+def test_a_bad_environment_is_refused_before_the_broker_or_the_catalog_hears_of_it(docs, catalog, runs,
+                                                                                    monkeypatch):
+    import provevi
+
+    asked = []
+    monkeypatch.setattr(provevi, "read_experiment", lambda *a: asked.append(a))
+    agent = AgentSpec(name="q", backend="litellm", model="m", prompt="p", settings={"mock_response": "x"},
+                      inputs=[InputSpec(f"file://{docs}/report.txt")])
+    with pytest.raises(RunSettingError, match="env"):
+        asyncio.run(run_agent(agent, catalog=catalog, runs_root=runs, org="acme", domain="r", env="Bad Env",
+                              actor="t", experiment=EXP))
+    assert asked == []
+
+
+@pytest.mark.parametrize("value", ["prod", "main", "ABCDEF1", "abc"])
+def test_a_commit_selector_that_names_no_commit_id_must_be_in_the_allow_list(tmp_path, docs, catalog, runs, value):
+    # Some stores take a branch name where a commit goes, so commit:prod could read the prod branch.
+    with pytest.raises(RunSettingError, match="broker refused the experiment.*selector"):
+        run_file_sync(run_file(tmp_path, docs, f"{EXP}?at=commit:{value}"), catalog=catalog, runs_root=runs)
+
+
+@pytest.mark.parametrize("expires, ok", [("2999-01-01T00:00:00", True), ("tomorrow", False), (12345, False)])
+def test_a_grant_s_expiry_with_no_zone_is_utc_and_one_that_does_not_parse_stops_the_run(tmp_path, docs, catalog,
+                                                                                         runs, expires, ok):
+    from dataclasses import replace
+
+    from provrun.access import StubBroker
+
+    class Odd(StubBroker):
+        def decide(self, ctx, uri, mode, purpose):
+            return replace(super().decide(ctx, uri, mode, purpose), expires_at=expires)
+
+    write_experiment(catalog, EXP, EVAL, "first")
+    odd = Odd([f"file://{docs}/report.txt", EXP], physical_schemes=catalog.stores.keys())
+    if ok:
+        out = run_file_sync(run_file(tmp_path, docs), catalog=catalog, runs_root=runs, broker=odd)
+        assert out.status == "completed", out.error
+    else:
+        with pytest.raises(RunSettingError, match="could not decide the experiment.*not an ISO 8601 time"):
+            run_file_sync(run_file(tmp_path, docs), catalog=catalog, runs_root=runs, broker=odd)
+        assert not runs.exists() or not list(runs.iterdir())
+
+
+def test_an_experiment_that_ends_with_a_slash_allows_no_folder(tmp_path, docs, catalog, runs):
+    # In the allow list, an entry that ends with / allows every URI under it.
+    from provrun.runner import _own_experiment
+
+    assert _own_experiment(EXP + "/") == []
+    with pytest.raises(RunSettingError, match="broker refused the experiment.*allow list"):
+        run_file_sync(run_file(tmp_path, docs, EXP + "/"), catalog=catalog, runs_root=runs)

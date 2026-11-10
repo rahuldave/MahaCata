@@ -93,3 +93,27 @@ def test_the_stub_needs_its_physical_schemes():
     # No built-in list, which would miss configured stores.
     with pytest.raises(TypeError):
         StubBroker(["file:///x"])
+
+
+def test_a_request_decided_before_the_run_opens_is_recorded_once_it_opens(tmp_path, catalog):
+    from provrun.access import RunScope
+
+    uri = "experiment://acme/benefits/dev/plans/q"
+    c = ctx(tmp_path, catalog, allow=[uri, "experiment://acme/benefits/prod/plans/q"])
+    scope = RunScope(c.run_id, "acme", "benefits", "dev", "tester")
+    g = c.broker.decide_early(scope, uri, "pinned_read", "experiment")
+    assert g.granted and g.mode == "pinned_read"
+    assert [e.type for e in read_events(c.folder / "evidence")] == ["run_created"]  # nothing written yet
+    c.broker.record(c, g, purpose="experiment")
+    events = read_events(c.folder / "evidence")
+    assert [e.type for e in events] == ["run_created", "access_requested", "access_granted"]
+    assert events[2].data["grant_id"] == g.id and events[1].data == {"mode": "pinned_read", "purpose": "experiment"}
+    with pytest.raises(AccessDenied, match="environment prod"):
+        c.broker.decide_early(scope, "experiment://acme/benefits/prod/plans/q", "pinned_read")
+
+
+def test_the_stub_grants_no_mode_beyond_the_two_reads(tmp_path, catalog, docs):
+    uri = f"file://{docs}/report.txt"
+    c = ctx(tmp_path, catalog, allow=[uri])
+    for mode in ("mounted_readwrite", "retrieval", "api"):
+        assert not c.broker.decide(c, uri, mode, "").granted

@@ -105,8 +105,9 @@ A run checks its settings before it makes the run folder. Each of these raises `
 - a telemetry policy file that cannot be read, or a run file's `telemetry` section that would widen the policy;
 - in strict mode, a telemetry problem, which "Control of library telemetry" below lists;
 - an unknown backend;
-- an experiment that cannot be pinned, as in a store with no commits, or that the catalog refuses;
-- a `parent_run` that is not a run ID.
+- an experiment that the broker refuses or cannot decide, that cannot be pinned, as in a store with no commits, or that the catalog refuses;
+- an input whose mode is `pinned_read`;
+- a `parent_run` that is not a run ID, or that names no run in the run's evidence store.
 
 An error after that fails the run. The outcome holds the error, and the evidence records it.
 
@@ -136,16 +137,18 @@ outcome = await live.result()
 `start_run` takes the same arguments as `run_file`. It starts the run as a task, and returns at once. The feed gives numbered items in the order the run made them:
 
 - `{"n": 1, "type": "event", "run_id": ..., "seq": 0, "time": ..., "event": "run_created", "data": {...}}` for each evidence event, as provevi's `shown_at` cuts it;
-- `{"n": 8, "type": "text", "text": "Revenue "}` for each piece of a streamed reply, at the `bodies` level only;
+- `{"n": 8, "type": "text", "text": "Revenue "}` at the `bodies` level only, for each piece of a streamed reply, or once for the whole of a reply that does not stream;
 - `{"n": 14, "type": "done", "status": "completed", "run_id": ...}` last. The status is `completed`, `failed` or `cancelled`, as the run's last event says. A run that ended before it opened has no events, so its status is that of its task, and its run ID is `null`.
 
 The run's telemetry policy sets the level, as the level of its destination of kind `live`. A run file's `telemetry` section can lower it, or leave the viewer out. A policy with no live viewer shows nothing but the `done` item. [provevi's page](provevi.md#show-a-run-to-a-live-viewer) says what each level shows:
 
 - At `names`, an event shows its data under keys that hold names, such as `model` and `status`, when each value is a plain name. Its component and actor show when they are plain names.
 - `usage` adds the counts and timings, such as the tokens in and out.
-- `bodies` adds all the data, the refs, and the payload, read from the run's evidence as it is written. Only `bodies` gets the pieces of a streamed reply. The feed keeps each payload in memory, as it keeps every item, so a run with large payloads makes a large feed.
+- `bodies` adds all the data, the refs, the payload and the text of each reply. Only `bodies` gets `text` items.
 
-The event items are those that provevi's `replay` gives from the evidence once the run has ended. So a viewer that comes after the end can read them from the evidence instead, with the same numbers below `bodies`. At `bodies`, `replay` gives each answer as one `text` item, where the live feed gives the pieces of a streamed reply as they come. A reply that does not stream shows only in its event's payload.
+The feed keeps every item as long as the program runs. At `bodies` it keeps only the name of each payload, and reads the payload from the run's evidence each time it gives the item to a viewer. So a large payload is not held in memory. The feed does keep the pieces of each streamed reply, and each event's data.
+
+The event items are those that provevi's `replay` gives from the evidence once the run has ended. So a viewer that comes after the end can read them from the evidence instead, with the same numbers below `bodies`. At `bodies`, both give a reply that does not stream as one `text` item after its `model_called` event, so the two feeds are the same. A streamed reply differs. The live feed gives its pieces as they come, and `replay` gives it as one `text` item.
 
 `run_created` records the live viewer under `telemetry.live`, with its destination and its level. Its `feed` says whether the run had a feed. [Step 14 of the tour](provrun-tour.md#step-14-ask-for-the-reply-in-pieces) follows a run.
 
@@ -224,7 +227,15 @@ agent:
   ...
 ```
 
-As the run starts, provrun pins the experiment through the run's catalog, so the catalog's checks and hooks see the read. `run_created` then records three keys, all of them or none:
+As the run starts, provrun first asks the broker for the experiment, in the mode `pinned_read`. The stub broker allows the run's own experiment, and checks its org and environment as it checks an input's. So a run in `dev` cannot name an experiment whose URI says `prod`. A refusal stops the run with `RunSettingError` before the run folder is made, and before the experiment is read.
+
+A selector other than a commit, such as `?at=branch:prod`, can name another branch, and so another environment. So the stub allows an experiment with such a selector only if the run's `allow` list names it, selector and all. Some stores take a branch name where a commit goes, so a `commit:` selector needs an entry too, unless its value looks like a commit ID. A commit ID here is 7 to 64 hex digits, in lower case. An experiment with no selector, or pinned to such an ID, needs no entry. A branch named like a commit ID, such as `deadbeef`, would still get past this check.
+
+The broker decides before the run folder exists, so the run records the grant once it opens. `access_requested` and `access_granted` for the experiment are the run's first steps after `run_created`, with the purpose `experiment`. A grant that has expired by then is written as `access_denied`, and the run fails.
+
+A broker that you pass in decides the experiment too, so its allow list must name it. Its `decide` gets a `RunScope` for the experiment, which holds the run's ID, org, domain, environment and actor, and nothing else. A broker that reads anything more stops the run with `RunSettingError`.
+
+Then provrun pins the experiment through the run's catalog, so the catalog's checks and hooks see the read. `run_created` records three keys, all of them or none:
 
 | Key | Meaning |
 |---|---|
@@ -234,7 +245,9 @@ As the run starts, provrun pins the experiment through the run's catalog, so the
 
 A URI with no `?at=` names the newest version, and one with `?at=commit:...` names that version. `prove verify --config` reads the experiment at the run's pin and checks its hash. `prove experiments` lists the experiments that runs name. An experiment that cannot be pinned stops the run before the run folder is made, with `RunSettingError`. A store with no commits, such as a folder on this machine, cannot pin one. [Step 15 of the tour](provrun-tour.md#step-15-name-the-experiment-a-run-belongs-to) runs one experiment at two versions.
 
-A run that another run starts names its parent. `run_agent(..., parent_run=parent.run_id)`, or the same argument to `run_file` or `start_run`, records `parent_run` in `run_created`. Without it, `run_created` has no `parent_run`.
+A run that another run starts names its parent. `run_agent(..., parent_run=parent.run_id)`, the same argument to `run_file` or `start_run`, or `provr run run.yaml --parent-run RUN_ID`, records `parent_run` in `run_created`. Without it, `run_created` has no `parent_run`.
+
+The parent must be a run that the child's evidence store holds. For the file store, that is a run under the runs root. For a SQLite store, it is a run in the store's file. Otherwise the run stops with `RunSettingError` before the run folder is made. A store that cannot read runs back cannot be asked, so its runs take any run ID as their parent.
 
 ### Streamed replies
 
@@ -248,7 +261,7 @@ A stream can fail partway, after some pieces were handed on. Then its `step_fail
 
 Each step writes an evidence event:
 
-1. `RunContext` makes the run ID and the run folder, and writes `run_created`.
+1. `RunContext` makes the run ID and the run folder, and writes `run_created`. For a run that names an experiment, the broker writes `access_requested` and `access_granted` for it next, with the mode `pinned_read`. The broker decided it before the run folder was made, as [Name the experiment](#name-the-experiment) says.
 2. The broker writes `access_requested`, and then `access_granted` or `access_denied`, for each input.
 3. The resolver writes `context_resolved` and `snapshot_materialized`. The snapshot event holds the pinned URI and the SHA-256.
 4. The stager copies each snapshot into the input folder of the run, and writes `input_staged`. It hashes each copy, and a copy that differs from its snapshot fails the run before the agent starts.
@@ -519,9 +532,9 @@ The run's end waits for the copy, for 120 seconds at most, `COPY_SECONDS` in `pr
 
 The stub broker grants a URI if all of these are true:
 
-- The URI, without its selector, is an input of the agent or is in the `allow` list. An `allow` entry that ends with `/` allows every URI under it.
+- The URI, without its selector, is an input of the agent, the run's experiment, or in the `allow` list. An `allow` entry that ends with `/` allows every URI under it.
 - A URI with a selector, such as `?at=branch:prod`, is in the `allow` list with that same selector. A selector can name another branch, and the branch is often the environment.
-- The mode is `mounted_snapshot`.
+- The mode is `mounted_snapshot`, a read-only snapshot of an input for the agent, or `pinned_read`, a read of one version of the run's experiment that provrun makes itself. The stub grants no other mode. An input that asks for `pinned_read` stops the run with `RunSettingError`, because the agent sees its inputs.
 - For a logical URI, of the form `scheme://org/domain/env/...`, the org and the environment are those of the run.
 - For a physical URI, the run is in the `dev` environment. A URI is physical if its scheme names a store of the catalog. The store can be built in, such as `file` or `s3`, or added by the configuration, such as `lakefs-acme`. A physical URI names no environment, so the stub does not grant one in `staging` or `prod`.
 

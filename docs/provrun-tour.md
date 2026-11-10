@@ -806,11 +806,11 @@ An experiment is a folder in the catalog that holds `experiment.yaml`, with its 
 
 ```
 $ uv run python tours/provrun/experiment.py "Does the model find the revenue?" accuracy
-experiment://acme/demo/dev/revenue/retrieval?at=commit:da23bf672a844fa165113a8a24ae5ba22cc10a7565b79611efca7047e15fcd76
+experiment://acme/demo/dev/revenue/retrieval?at=commit:a0b99d93dd3e6e032c08fa7987f6fd841c70b61b3d698cc73ad8a0a2ce1f816a
 8386baf7befc41bccec929be03e8a1dec4c9f37b2422a5d5eb11f4333fa3faef
 ```
 
-A run file names its experiment beside its agent. provrun pins it through the run's catalog as the run starts, so the catalog's checks and hooks see it, and `run_created` records the URI, the pin and the hash:
+A run file names its experiment beside its agent. As the run starts, the broker decides the experiment, before anything reads it. Then provrun pins it through the run's catalog, so the catalog's checks and hooks see it, and `run_created` records the URI, the pin and the hash. `prove access` lists the broker's grants. The experiment's grant, in the mode `pinned_read`, comes before the input's:
 
 ```
 $ { echo "experiment: experiment://acme/demo/dev/revenue/retrieval"; cat $TOUR_DIR/run.yaml; } > $TOUR_DIR/exp.yaml
@@ -823,23 +823,28 @@ $ R12=$(uv run python tours/provrun/field.py $TOUR_DIR/r12.json run_id)
 
 $ uv run python tours/provrun/event.py $R12 run_created experiment experiment_pin experiment_sha256
 experiment://acme/demo/dev/revenue/retrieval
-experiment://acme/demo/dev/revenue/retrieval?at=commit:da23bf672a844fa165113a8a24ae5ba22cc10a7565b79611efca7047e15fcd76
+experiment://acme/demo/dev/revenue/retrieval?at=commit:a0b99d93dd3e6e032c08fa7987f6fd841c70b61b3d698cc73ad8a0a2ce1f816a
 8386baf7befc41bccec929be03e8a1dec4c9f37b2422a5d5eb11f4333fa3faef
+
+$ uv run prove --store $E access $R12
+   2 granted  pinned_read        experiment://acme/demo/dev/revenue/retrieval  in the allow list; org and environment match
+   4 granted  mounted_snapshot   data://acme/demo/dev/reports/report.txt  in the allow list; org and environment match
 ```
 
-Write a second version, and run the same file again. The run names the new pin:
+Write a second version, and run the same file again, with the first run as its parent. The run names the new pin, and its parent. `--parent-run` takes only a run that the store holds:
 
 ```
 $ uv run python tours/provrun/experiment.py "Does the model find the revenue, and say where?" accuracy recall
-experiment://acme/demo/dev/revenue/retrieval?at=commit:7311e8221f7268c01fb243ef177028736e0595bf8425a5276a126dbc7ea71a7f
+experiment://acme/demo/dev/revenue/retrieval?at=commit:ca9ff89d485801a3e6dffc19df9c6967b89b5c7f6b3a48fadd5d41067b11a4da
 d05067a5d622287ef12e9ca6a4b3f59d1d96c7faac4f9f85678587e161e8f0be
 
-$ uv run provr --store $E run $TOUR_DIR/exp.yaml > $TOUR_DIR/r13.json
+$ uv run provr --store $E run $TOUR_DIR/exp.yaml --parent-run $R12 > $TOUR_DIR/r13.json
 
 $ R13=$(uv run python tours/provrun/field.py $TOUR_DIR/r13.json run_id)
 
-$ uv run python tours/provrun/event.py $R13 run_created experiment_pin
-experiment://acme/demo/dev/revenue/retrieval?at=commit:7311e8221f7268c01fb243ef177028736e0595bf8425a5276a126dbc7ea71a7f
+$ uv run python tours/provrun/event.py $R13 run_created experiment_pin parent_run
+experiment://acme/demo/dev/revenue/retrieval?at=commit:ca9ff89d485801a3e6dffc19df9c6967b89b5c7f6b3a48fadd5d41067b11a4da
+run-20261110T045534Z-11b04ed6
 ```
 
 `prove` lists each experiment that runs name, and checks a run's experiment at its own pin:
@@ -849,13 +854,15 @@ $ uv run prove --store $E experiments
 experiment://acme/demo/dev/revenue/retrieval  2 versions, 2 runs
 
 $ uv run prove --store $E verify --config $PROVCAT_CONFIG $R12
-run-20261110T021826Z-5d709442: the evidence and the outputs verify, and match the committed bundle; its experiment matches experiment://acme/demo/dev/revenue/retrieval?at=commit:da23bf672a844fa165113a8a24ae5ba22cc10a7565b79611efca7047e15fcd76
+run-20261110T045534Z-11b04ed6: the evidence and the outputs verify, and match the committed bundle; its experiment matches experiment://acme/demo/dev/revenue/retrieval?at=commit:a0b99d93dd3e6e032c08fa7987f6fd841c70b61b3d698cc73ad8a0a2ce1f816a
 ```
 
 **What happened:**
 - Each version of the experiment has its own pin, so a run says which version it ran, though the run file names no version.
 - `prove verify` read the first run's experiment at that run's pin, after the second version was written, and its hash matched.
-- An experiment that cannot be pinned, such as one in a store with no commits, stops the run before the run folder is made.
+- The broker granted the experiment before the run read it. It checks the experiment's org and environment as it checks an input's, so a `dev` run cannot name an experiment whose URI says `prod`. An experiment on a branch, such as `?at=branch:prod`, must be in the run's `allow` list, and so must a `commit:` whose value is not a commit ID.
+- An experiment that the broker refuses, or that cannot be pinned, such as one in a store with no commits, stops the run before the run folder is made. A grant that has expired by the time the run opens fails the run instead, and the evidence records the deny.
+- The second run records the first as its parent. A parent that the store does not hold stops the run before the run folder is made.
 
 ## Step 16: Call a real model (needs ANTHROPIC_API_KEY)
 
