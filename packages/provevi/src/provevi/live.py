@@ -143,10 +143,6 @@ def answer_of(payload: Any) -> str | None:
     return None
 
 
-# The private names that provrun imported before these were public.
-_payload, _answer = payload_of, answer_of
-
-
 def replay(store: EvidenceStore, run_id: str, level: str, *, folder: Path | None = None) -> Iterator[dict]:
     """The feed of a run that has ended, at level, from its evidence: an
     ``event`` item for each event, a ``text`` item at ``bodies`` after each
