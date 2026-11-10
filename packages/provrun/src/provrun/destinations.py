@@ -628,8 +628,11 @@ def _cut(span: Any, level: str):
 def _plain(attributes: dict, level: str) -> dict:
     # The attributes at level, as provevi's copy in MLflow cuts them: below
     # bodies, a text that passes as a name but holds a URL, a user and
-    # password, a setting or a path is left out. A model's name may have more
-    # than one /, as openrouter/meta-llama/llama-3-70b has.
+    # password, a setting or a path is left out. Under a key in MODEL_KEYS,
+    # such as gen_ai.request.model, a model's name may have more than one /,
+    # as openrouter/meta-llama/llama-3-70b has. A library's plain model key is
+    # not in MODEL_KEYS. provrun's own spans put the model under
+    # gen_ai.request.model.
     return {k: v for k, v in attributes_for(attributes, level).items()
             if not isinstance(v, (str, list, tuple)) or plain_attribute(k, v)}
 

@@ -43,8 +43,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
-from provevi import LEVELS, EvidenceEvent, Sink, shown_at
-from provevi.live import _answer, _payload
+from provevi import LEVELS, EvidenceEvent, Sink, answer_of, payload_of, shown_at
 
 from .runner import RunOutcome, run_file
 from .spec import RunFile
@@ -95,7 +94,7 @@ class LiveFeed(Sink):
         if self.level == "bodies" and event.type in ("model_called", "step_failed"):
             # A reply that did not stream comes whole, as replay gives it. Its
             # text is read here only to see if it has any.
-            if event.payload and not self._streamed and _answer(_payload(_Payloads(self.writer), event.payload)):
+            if event.payload and not self._streamed and answer_of(payload_of(_Payloads(self.writer), event.payload)):
                 self.loop.call_soon_threadsafe(self._push, {"type": "text", _ANSWER: event.payload})
             self._streamed = False
 
@@ -178,9 +177,9 @@ _PAYLOAD, _ANSWER = "_payload", "_answer"  # the payload names that _full reads
 def _read(item: dict, record: _Payloads) -> dict:
     out = {k: v for k, v in item.items() if k not in (_PAYLOAD, _ANSWER)}
     if _PAYLOAD in item:
-        out["payload"] = _payload(record, item[_PAYLOAD])
+        out["payload"] = payload_of(record, item[_PAYLOAD])
     if _ANSWER in item:
-        out["text"] = _answer(_payload(record, item[_ANSWER])) or ""
+        out["text"] = answer_of(payload_of(record, item[_ANSWER])) or ""
     return out
 
 
