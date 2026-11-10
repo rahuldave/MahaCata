@@ -26,6 +26,8 @@ and backend can be passed in.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import functools
 import re
 import warnings
 from dataclasses import dataclass, replace
@@ -117,7 +119,16 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
         raise RunSettingError(f"parent_run must be a run ID, such as run-20260101T000000Z-0a1b2c3d; got {parent_run!r}")
     tel = Telemetry.prepare(load_policy(policy), telemetry, evidence_mode(env, mode))
     try:
-        with tel.applied(store, close=False):
+        # The start's checks scan the libraries, which takes a fifth of a second,
+        # so entering runs in a thread. A cancel waits for it, and then leaves.
+        applied = tel.applied(store, close=False)
+        entered, cancelled = await _in_thread(applied.__enter__)
+        with contextlib.ExitStack() as stack:
+            if entered.exception() is None:
+                stack.push(applied)
+            if cancelled:
+                raise asyncio.CancelledError
+            entered.result()
             # The environment is set now, before the backend imports its library.
             outcome = await _run_agent(agent, tel, catalog=catalog, org=org, domain=domain, env=env, actor=actor,
                                        allow=allow, broker=broker, resolver=resolver, stager=stager,
@@ -160,19 +171,25 @@ async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org:
         trace = {k: ids[k] for k in ("trace_id", "span_id") if k in ids}
         if feed is not None:
             feed.level = tel.policy.live_level()
-        ctx = RunContext.open(org=org, domain=domain, env=env, actor=actor, broker=broker,
-                              resolver=resolver or ProvcatResolver(catalog), catalog=catalog,
-                              runs_root=runs_root, mode=mode, bundle_scheme=bundle_scheme, store=store,
-                              run_id=run_id, trace=trace,
-                              data={"agent": agent.name, "backend": agent.backend, "spec": agent.to_dict(),
-                                    "telemetry": {**tel.record(), "live": _live(tel, feed)}, **lineage},
-                              sinks=[feed] if feed is not None else None)
+        # Opening makes the folder, opens the store and writes run_created, so
+        # it runs in a thread too. A cancel waits for it, and then seals the run.
+        opened, cancelled = await _in_thread(functools.partial(
+            RunContext.open, org=org, domain=domain, env=env, actor=actor, broker=broker,
+            resolver=resolver or ProvcatResolver(catalog), catalog=catalog,
+            runs_root=runs_root, mode=mode, bundle_scheme=bundle_scheme, store=store,
+            run_id=run_id, trace=trace,
+            data={"agent": agent.name, "backend": agent.backend, "spec": agent.to_dict(),
+                  "telemetry": {**tel.record(), "live": _live(tel, feed)}, **lineage},
+            sinks=[feed] if feed is not None else None))
+        if cancelled and opened.exception() is not None:
+            raise asyncio.CancelledError  # no run was opened, so there is none to seal
+        ctx = opened.result()
         ctx.telemetry = tel
         if feed is not None:
             feed.writer = ctx.recorder.writer
             ctx.on_text = feed.text
         tel.attach(ctx.recorder, trace.get("trace_id"))
-        outcome, error = await _steps(ctx, agent, stager, backend, grant)
+        outcome, error = await _steps(ctx, agent, stager, backend, grant, cancelled_opening=cancelled)
         if error is not None:
             root.set_status(otel.ERROR, f"{error.__class__.__name__}: {error}")
     if error is not None and not isinstance(error, Exception):
@@ -277,6 +294,8 @@ async def _in_thread(fn, *args) -> tuple[asyncio.Future, bool]:
             await asyncio.shield(task)
         except asyncio.CancelledError:
             cancelled = True
+        except BaseException:  # the step's own error, which the caller reads from the task
+            pass
     return task, cancelled
 
 
@@ -298,13 +317,16 @@ def _snapshots(ctx: RunContext, agent: AgentSpec) -> list:
 
 
 async def _steps(ctx: RunContext, agent: AgentSpec, stager: Stager | None, backend: Backend,
-                 grant: Grant | None = None) -> tuple[RunOutcome, BaseException | None]:
+                 grant: Grant | None = None, *, cancelled_opening: bool = False
+                 ) -> tuple[RunOutcome, BaseException | None]:
     stager = stager or InProcessStager()
     outcome = RunOutcome(ctx.run_id, "failed", ctx.folder, Bundle(ctx.folder))
     error = None
     run = None
     cancelled = False
     try:
+        if cancelled_opening:  # the cancel came while the run opened; the run is only sealed
+            raise asyncio.CancelledError
         if grant is not None:  # the experiment's, decided before the run opened; a deny fails the run here
             ctx.broker.record(ctx, grant, purpose="experiment")
         # Fetching, staging, checking and sealing block, so each runs in a thread.
@@ -312,15 +334,15 @@ async def _steps(ctx: RunContext, agent: AgentSpec, stager: Stager | None, backe
         run = await _off_loop(stager.stage, ctx, snapshots)
         outcome.result = await backend.run(ctx, agent, run)
         if ctx.telemetry is not None:
-            ctx.telemetry.end()  # the full scan; a strict run with a problem fails here
+            await _off_loop(ctx.telemetry.end)  # the full scan; a strict run with a problem fails here
         await _off_loop(stager.verify_inputs, ctx, run)
         outcome.artifacts = await _off_loop(Outputter().collect, ctx, run)
     except BaseException as e:  # the run failed; its evidence says why
         error = e
         if ctx.telemetry is not None and isinstance(e, Exception):
-            try:  # the end scan still runs, but the run keeps its own error
-                ctx.telemetry.end(fail=False)
-            except Exception as end_error:
+            # The end scan still runs, but the run keeps its own error. A cancel waits for it.
+            ended, cancelled = await _in_thread(functools.partial(ctx.telemetry.end, fail=False))
+            if (end_error := ended.exception()) is not None:
                 try:
                     warnings.warn(f"provrun: telemetry: the end check failed: {end_error}", stacklevel=2)
                 except Exception:
@@ -328,7 +350,8 @@ async def _steps(ctx: RunContext, agent: AgentSpec, stager: Stager | None, backe
         if run is not None and outcome.artifacts is None:
             # Record what a failed run left in output/, so the bundle holds no file the evidence lacks.
             # A cancel here waits too, and is passed on once the run is sealed.
-            collected, cancelled = await _in_thread(Outputter().collect, ctx, run)
+            collected, cancelled_collecting = await _in_thread(Outputter().collect, ctx, run)
+            cancelled = cancelled or cancelled_collecting
             if not collected.exception():
                 outcome.artifacts = collected.result()
     sealed, cancelled_sealing = await _in_thread(ctx.finish, error)

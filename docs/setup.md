@@ -29,7 +29,7 @@ You do not need the `aws` command. The AWS SDK reads `~/.aws/credentials` and `~
 
 ## Run the tests
 
-The provcat tests are in three folders, and each test gets the marker of its folder. The provrun tests are in `packages/provrun/tests` and get no marker. The provevi tests are in `packages/provevi/tests`, and the tour's tests and those that start a server are marked `integration`. So `-m unit` selects provcat tests only.
+The provcat tests are in three folders, and each test gets the marker of its folder. The provrun tests are in `packages/provrun/tests` and get no marker, except those in its `system` folder. The provevi tests are in `packages/provevi/tests`, and the tour's tests and those that start a server are marked `integration`. So `-m unit` selects provcat tests only.
 
 | Folder | Marker | What the tests use |
 |---|---|---|
@@ -63,6 +63,7 @@ Run the system tests with `-m system`. "Set up each cloud for the system tests" 
 | `PROVCAT_SYSTEM_GITHUB=1` | github.com. |
 | `PROVCAT_SYSTEM_HF=1` | huggingface.co, with public repositories and no token. |
 | `PROVCAT_SYSTEM_ETCD=<host:port>` | etcd. |
+| `PROVRUN_SYSTEM_MODEL=<model>` | A real model, through LiteLLM, such as `anthropic/claude-haiku-5-5`, with its provider's key, such as `ANTHROPIC_API_KEY`. A test streams one reply and makes one in one piece, and checks that provrun records the token counts that the provider reports. With `-s`, it prints them. Each call costs a fraction of a cent. |
 
 For example:
 
