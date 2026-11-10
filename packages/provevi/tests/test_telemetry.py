@@ -8,7 +8,7 @@ import re
 
 import pytest
 
-from provevi import MODEL_KEYS, EvidenceEvent, FileStore, ProveviError, sha256_bytes
+from provevi import MODEL_KEYS, RUN_MODEL_KEYS, EvidenceEvent, FileStore, ProveviError, sha256_bytes
 from provevi.cli import main
 from provevi.telemetry import (BLOCKED, PROBLEM, TelemetryPolicy, attributes_for, blocked_data, level_of,
                                normal_endpoint, otlp_traces_target, split_body)
@@ -569,7 +569,6 @@ def test_a_declared_name_may_have_more_than_one_slash_and_nothing_else():
 @pytest.mark.parametrize("key, value, plain", [
     ("gen_ai.request.model", "openrouter/meta-llama/llama-3-70b", True),
     ("gen_ai.response.model", "accounts/fireworks/models/llama-v3p1-70b-instruct", True),
-    ("model", "bedrock/arn:aws:bedrock:us-east-1:1:inference-profile/us.anthropic.x", True),
     ("mlflow.llm.model", "projects/p/locations/us/publishers/google/models/gemini", True),
     ("gen_ai.request.model", "https://h.example/a/b", False), ("gen_ai.request.model", "token=x", False),
     ("gen_ai.system", "tmp/a/b", False), ("gen_ai.tool.name", "org/tool", True)])
@@ -579,7 +578,7 @@ def test_a_model_s_name_may_have_more_than_one_slash(key, value, plain):
     assert plain_attribute(key, value) is plain
 
 
-@pytest.mark.parametrize("key", sorted(MODEL_KEYS) + ["gen_ai.system"])
+@pytest.mark.parametrize("key", sorted(RUN_MODEL_KEYS) + ["gen_ai.system"])
 @pytest.mark.parametrize("value", [
     "home/alice/.ssh/id_rsa", "Users/alice/secrets/key.pem", "home/alice/key", "tmp/x", "etc/passwd", "root/x",
     "C:/Users/alice/key", "C:foo/bar", "private/var/x", "a/.env", ".ssh/id_rsa", "VAR/lib/x", "Volumes/disk/key",
@@ -593,10 +592,11 @@ def test_a_model_s_name_may_have_more_than_one_slash(key, value, plain):
 def test_a_path_is_not_a_model_s_name(key, value):
     from provevi import plain_attribute, plain_name
 
-    assert plain_attribute(key, value) is False and plain_name(value) is False
+    assert plain_attribute(key, value) is False
+    assert plain_attribute(key, value, model_keys=RUN_MODEL_KEYS) is False and plain_name(value) is False
 
 
-@pytest.mark.parametrize("key", sorted(MODEL_KEYS) + ["gen_ai.system", "status"])
+@pytest.mark.parametrize("key", sorted(RUN_MODEL_KEYS) + ["gen_ai.system", "status"])
 @pytest.mark.parametrize("value", [
     "https:/host/x", "http:/evil.com/a/b", "s3:/bucket/a/b", "gs:/bucket/key/x", "https:/host", "s3:bucket/x",
     "bucket.s3.amazonaws.com/a/b", "host.com/x", "user@host.com/a/b", "a@b/c", "10.0.0.1/admin",
@@ -607,7 +607,8 @@ def test_a_path_is_not_a_model_s_name(key, value):
 def test_a_url_host_or_email_with_a_path_is_not_a_name(key, value):
     from provevi import plain_attribute, plain_name
 
-    assert plain_attribute(key, value) is False and plain_name(value) is False
+    assert plain_attribute(key, value) is False
+    assert plain_attribute(key, value, model_keys=RUN_MODEL_KEYS) is False and plain_name(value) is False
 
 
 @pytest.mark.parametrize("value", [
@@ -739,3 +740,54 @@ def test_a_scope_whose_module_no_library_holds_names_no_library(scope):
     from provevi import span_libraries
 
     assert span_libraries(scope) == ()
+
+
+def test_a_library_s_plain_model_key_is_not_a_model_s_name_but_a_run_s_is():
+    from provevi import RUN_MODEL_KEYS, plain_attribute
+
+    model = "bedrock/arn:aws:bedrock:us-east-1:1:inference-profile/us.anthropic.x"
+    assert "model" not in MODEL_KEYS
+    assert plain_attribute("model", "data/weights/llama") is False
+    assert plain_attribute("model", model) is False
+    assert plain_attribute("model", model, model_keys=RUN_MODEL_KEYS) is True
+    assert plain_attribute("model", "gpt-4o") is True
+    assert plain_attribute("model", "home/alice/.ssh/id_rsa", model_keys=RUN_MODEL_KEYS) is False
+
+
+def test_each_name_in_a_list_under_a_model_key_may_have_more_slashes():
+    from provevi import plain_attribute
+
+    a, b = "openrouter/meta-llama/llama-3-70b", "projects/p/locations/us/publishers/google/models/g"
+    assert plain_attribute("gen_ai.response.model", [a, b]) is True
+    assert plain_attribute("gen_ai.response.model", (a, "gpt-4o")) is True
+    assert plain_attribute("gen_ai.response.model", [a, "x/y/z"]) is True  # each is a declared model name
+    assert plain_attribute("gen_ai.response.model", [a, "home/alice/.ssh/id_rsa"]) is False
+    assert plain_attribute("gen_ai.response.model", [a, "https://h.example/a/b"]) is False
+    assert plain_attribute("gen_ai.system", [a]) is False
+    assert plain_attribute("gen_ai.response.model", []) is False
+
+
+@pytest.mark.parametrize("value", [
+    "experiment://acme/risk/dev/credit/q",
+    "experiment://acme/risk/dev/credit/q?at=commit:7311e8221f7268c01fb243ef177028736e0595bf8425a5276a126dbc7ea71a7f",
+    "experiment://acme/q", "experiment://acme/risk/dev/credit/q_2.v1"])
+def test_an_experiment_s_uri_and_pin_are_plain(value):
+    from provevi import plain_experiment
+
+    assert plain_experiment(value) is True
+
+
+@pytest.mark.parametrize("value", [
+    "experiment://acme/risk/dev/credit/q?at=branch:main", "experiment://acme/q?at=commit:abc",
+    "experiment://acme/q?at=commit:7311e8221f&token=abc", "experiment://acme/q#x", "experiment://acme/q?token=x",
+    "experiment://user:pw@host/q", "experiment://acme.com/q", "experiment://host.example/a/b",
+    "experiment://acme/../etc/q", "experiment://acme/./q", "experiment://acme//q", "experiment://acme/q/",
+    "experiment:///etc/passwd", "experiment://home/alice/.ssh/id_rsa", "experiment://acme/.env",
+    "experiment://acme/secrets.json", "experiment://acme/sk-abcdefghijklmnopqrstuv", "experiment://",
+    "data://acme/q", "https://acme/q", "experiment://acme/q\n", "experiment://acme/q?at=commit:7311E8221F",
+    "experiment://acme/Jane Doe", "experiment://x/evil.com", "experiment://x/10.0.0.1", "experiment://x/localhost",
+    "experiment://x/evil.com?at=commit:7311e8221f", None, 3, ["experiment://acme/q"]])
+def test_an_experiment_with_a_branch_host_path_or_setting_is_not_plain(value):
+    from provevi import plain_experiment
+
+    assert plain_experiment(value) is False

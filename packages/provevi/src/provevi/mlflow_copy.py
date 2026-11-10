@@ -60,7 +60,7 @@ from .checks import verify
 from .errors import ProveviError
 from .events import EvidenceEvent, sha256_bytes
 from .store import EvidenceStore, FileStore
-from .telemetry import TelemetryPolicy, attributes_for, normal_endpoint, plain_attribute, plain_name, \
+from .telemetry import RUN_MODEL_KEYS, TelemetryPolicy, attributes_for, normal_endpoint, plain_attribute, plain_name, \
     plain_span_name, span_libraries
 
 #: The MLflow minor release that the copy is tested against.
@@ -398,7 +398,8 @@ def _fill(client, experiment_id: str, mlflow_run_id: str, events: list[EvidenceE
     params = {k: v if isinstance(v, str) else json.dumps(v, sort_keys=True) for k, v in params.items()}
     from mlflow.entities import Dataset, DatasetInput, Param
 
-    kept = [Param(k, v) for k, v in sorted(params.items()) if level == "bodies" or plain_attribute(k, v)]
+    kept = [Param(k, v) for k, v in sorted(params.items()) if level == "bodies"
+            or plain_attribute(k, v, model_keys=RUN_MODEL_KEYS)]
     client.log_batch(mlflow_run_id, params=kept,
                      metrics=_metrics(events, created.time) if level != "names" else [])
     datasets = [_dataset(e, Dataset, level) for e in events if e.type == "input_staged" and e.refs]

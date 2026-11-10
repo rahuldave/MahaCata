@@ -26,9 +26,9 @@ from .experiments import KINDS, Experiment, PinnedExperiment, read_experiment, w
 from .live import replay, shown_at
 from .runs import default_runs_root, find_run, list_runs
 from .sqlite import SCHEMA_VERSION, SqliteRecord, SqliteRunWriter, SqliteStore
-from .telemetry import (BLOCKED, LEVELS, MLFLOW_DATABASES, MODEL_KEYS, PROBLEM, Destination, Library, TelemetryPolicy,
+from .telemetry import (BLOCKED, LEVELS, MLFLOW_DATABASES, MODEL_KEYS, PROBLEM, RUN_MODEL_KEYS, Destination, Library, TelemetryPolicy,
                         attributes_for, blocked_data, distribution_of, normal_endpoint, otlp_traces_target,
-                        plain_attribute, plain_name, plain_span_name, span_libraries, split_body)
+                        plain_attribute, plain_experiment, plain_name, plain_span_name, span_libraries, split_body)
 from .store import (EvidenceStore, FileRunWriter, FileStore, FolderRecord, JsonlSink, PayloadStore, RunRecord,
                     RunWriter, Sink, check_store_uri, open_store)
 
@@ -40,7 +40,7 @@ __all__ = [
     "shown_at", "verify",
     "verify_against", "verify_bundle", "verify_experiment", "verify_outputs", "verify_run", "verify_store_copy",
     "KINDS", "Experiment", "PinnedExperiment", "read_experiment", "write_experiment",
-    "BLOCKED", "LEVELS", "MLFLOW_DATABASES", "PROBLEM", "MODEL_KEYS", "Destination", "Library", "TelemetryPolicy", "attributes_for",
-    "blocked_data", "distribution_of", "normal_endpoint", "otlp_traces_target", "plain_attribute", "plain_name", "plain_span_name",
+    "BLOCKED", "LEVELS", "MLFLOW_DATABASES", "PROBLEM", "MODEL_KEYS", "RUN_MODEL_KEYS", "Destination", "Library", "TelemetryPolicy", "attributes_for",
+    "blocked_data", "distribution_of", "normal_endpoint", "otlp_traces_target", "plain_attribute", "plain_experiment", "plain_name", "plain_span_name",
     "span_libraries", "split_body",
 ]

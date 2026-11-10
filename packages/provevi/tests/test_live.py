@@ -253,3 +253,32 @@ def test_a_stream_that_failed_part_way_replays_its_text_so_far(tmp_path):
     failed = [x for x in items(s, "usage") if x.get("event") == "step_failed"][0]
     assert failed["data"] == {"pieces": 3}
     assert not [x for x in items(s, "usage") if x["type"] == "text"]
+
+
+def test_below_bodies_a_run_shows_its_parent_and_its_experiment():
+    pin = "experiment://acme/risk/dev/credit/q?at=commit:7311e8221f7268c01fb243ef177028736e0595bf"
+    data = {"experiment": "experiment://acme/risk/dev/credit/q", "experiment_pin": pin,
+            "experiment_sha256": "ab" * 32, "parent_run": "run-20261109T221005Z-0a1b2c3d", "agent": "q"}
+    shown = shown_at(event("run_created", data), "names")["data"]
+    assert shown == {"experiment": data["experiment"], "experiment_pin": pin, "parent_run": "run-20261109T221005Z-0a1b2c3d",
+                     "agent": "q"}
+
+
+@pytest.mark.parametrize("data", [
+    {"experiment": "experiment://acme/q?at=branch:JaneDoe-review"},
+    {"experiment_pin": "experiment://acme.example/q?at=commit:7311e8221f"},
+    {"experiment": "experiment://home/alice/.ssh/id_rsa"},
+    {"parent_run": "run/home/alice/x"}, {"parent_run": "token=abc"},
+    {"experiment": {"uri": "experiment://acme/q"}},
+])
+def test_below_bodies_a_parent_or_experiment_that_is_not_plain_stays_out(data):
+    assert shown_at(event("run_created", data), "names")["data"] == {}
+    assert shown_at(event("run_created", data), "bodies")["data"] == data
+
+
+def test_below_bodies_the_run_s_own_model_may_have_two_slashes_but_a_span_s_plain_model_key_may_not():
+    model = "openrouter/meta-llama/llama-3-70b"
+    called = event("model_called", {"model": model, "answered_by": model})
+    assert shown_at(called, "names")["data"] == {"model": model, "answered_by": model}
+    span = event("span_recorded", {"name": "chat", "attributes": {"model": model, "gen_ai.request.model": model}})
+    assert shown_at(span, "names")["data"]["attributes"] == {"gen_ai.request.model": model}

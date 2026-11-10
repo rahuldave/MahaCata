@@ -37,7 +37,7 @@ from .checks import verify
 from .errors import ProveviError
 from .events import EvidenceEvent
 from .store import EvidenceStore, RunRecord
-from .telemetry import LEVELS, attributes_for, plain_attribute, plain_name, plain_span_name
+from .telemetry import LEVELS, RUN_MODEL_KEYS, attributes_for, plain_attribute, plain_experiment, plain_name, plain_span_name
 
 # A library's span, whose data holds its own attributes.
 _SPAN = "span_recorded"
@@ -49,8 +49,11 @@ _SPAN = "span_recorded"
 _NAME_KEYS = frozenset({
     "agent", "backend", "model", "answered_by", "tool", "org", "domain", "env", "mode", "decision", "status",
     "kind", "sha256", "finish_reason", "streamed", "unchanged", "library", "grant_id", "policy",
-    "trace_id", "span_id", "parent_span_id", "started_at",
+    "trace_id", "span_id", "parent_span_id", "started_at", "parent_run",
 })
+# The keys that hold an experiment's URI or pin, which show if plain_experiment
+# says so.
+_EXPERIMENT_KEYS = frozenset({"experiment", "experiment_pin"})
 # The keys whose numbers a viewer at usage may see: counts and timings.
 _USAGE_KEYS = frozenset({"input_tokens", "output_tokens", "first_token_ms", "duration", "size", "messages",
                          "pieces", "start_time", "end_time"})
@@ -79,7 +82,9 @@ def _shown_data(event: EvidenceEvent, level: str) -> dict:
         elif k in _USAGE_KEYS:
             if level == "usage" and _number(v):
                 data[k] = v
-        elif k in _NAME_KEYS and not _number(v) and plain_attribute(k, v):
+        elif k in _NAME_KEYS and not _number(v) and plain_attribute(k, v, model_keys=RUN_MODEL_KEYS):
+            data[k] = v
+        elif k in _EXPERIMENT_KEYS and plain_experiment(v):
             data[k] = v
     return data
 
