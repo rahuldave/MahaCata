@@ -1,4 +1,4 @@
-"""The example run files load, and a spec refuses settings that can carry a key."""
+"""The example run files and policies load, and a spec refuses settings that can carry a key."""
 from pathlib import Path
 
 import pytest
@@ -6,7 +6,9 @@ import pytest
 from provrun.backends.litellm import SETTINGS
 from provrun.spec import AgentSpec, load_run_file
 
-EXAMPLES = sorted((Path(__file__).parent.parent / "examples").glob("*.yaml"))
+FILES = sorted((Path(__file__).parent.parent / "examples").glob("*.yaml"))
+POLICIES = [p for p in FILES if p.name.endswith("-policy.yaml")]
+EXAMPLES = [p for p in FILES if p not in POLICIES]
 
 
 @pytest.mark.parametrize("path", EXAMPLES, ids=lambda p: p.name)
@@ -15,6 +17,13 @@ def test_example_loads(path):
     assert {"org", "domain", "env", "actor"} <= set(run)
     if agent.backend == "litellm":
         assert set(agent.settings) <= SETTINGS
+
+
+@pytest.mark.parametrize("path", POLICIES, ids=lambda p: p.name)
+def test_example_policy_loads(path):
+    from provevi import TelemetryPolicy
+
+    assert TelemetryPolicy.load(path).live_level() == "names"
 
 
 def test_real_model_examples_exist():
