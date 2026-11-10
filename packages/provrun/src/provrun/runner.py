@@ -1,10 +1,11 @@
 """Run one agent spec from start to end.
 
 Before the run folder is made, the broker decides the run's experiment, if
-it names one, and provrun pins it. Then the steps, each of which writes its
-evidence:
+it names one, and provrun pins it if the broker allows it. Then the steps,
+each of which writes its evidence:
 
-1. Open the run context, and record the experiment's grant.
+1. Open the run context, and record the broker's decision on the experiment.
+   A refusal fails the run here.
 2. Ask the broker for each input.
 3. Resolve each grant to a snapshot.
 4. Stage the snapshots.
@@ -27,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import re
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -103,7 +104,8 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
 
     experiment is the URI of the experiment that the run belongs to. The run
     asks the broker for it first, in the mode pinned_read, and records the
-    grant once it opens; a refusal raises RunSettingError. The run then
+    decision once it opens. A refusal is recorded as access_denied, and the
+    run fails without reading the experiment. Otherwise the run
     pins it through catalog, so the catalog's checks and hooks see it, and
     run_created records the URI, the pin and the SHA-256 of its file. An
     experiment that cannot be pinned raises RunSettingError before the run
@@ -186,9 +188,10 @@ async def _lineage(catalog: Catalog, experiment: str | None, parent_run: str | N
                    scope: RunScope) -> tuple[dict, Grant | None]:
     """What run_created records of where the run belongs: the experiment, its
     pin and the SHA-256 of its file, and the parent run, each if given, with
-    the broker's grant for the experiment. The broker decides the experiment
-    before it is read, and the parent run must be one that the run's store
-    holds."""
+    the broker's decision for the experiment. The broker decides the
+    experiment before it is read, and the parent run must be one that the
+    run's store holds. A refused experiment is not read, and run_created does
+    not name it: the run records the refusal once it opens, and fails."""
     out: dict = {}
     grant = None
     if experiment is not None:
@@ -197,14 +200,21 @@ async def _lineage(catalog: Catalog, experiment: str | None, parent_run: str | N
         try:
             grant = await _off_loop(broker.decide_early, scope, experiment, "pinned_read", "experiment")
         except AccessDenied as e:
-            raise RunSettingError(f"the broker refused the experiment: {e}") from e
+            if not isinstance(e.grant, Grant):
+                raise RunSettingError(f"the broker refused the experiment with no grant: {e}") from e
+            # A deny, of this experiment, whatever the broker's grant says.
+            grant = replace(e.grant, decision="deny", uri=experiment, mode="pinned_read")
         except Exception as e:  # such as a broker that reads a field a RunScope does not have
             raise RunSettingError(f"the broker could not decide the experiment: {e.__class__.__name__}: {e}") from e
-        try:
-            pinned = await _off_loop(read_experiment, catalog, experiment)
-        except (ProveviError, ProvcatError, OSError) as e:  # OSError from a store or a hook outside provcat
-            raise RunSettingError(f"cannot pin the experiment {experiment}: {e}") from e
-        out.update(experiment=experiment, experiment_pin=pinned.pin, experiment_sha256=pinned.sha256)
+        if not isinstance(grant, Grant) or (grant.uri, grant.mode) != (experiment, "pinned_read"):
+            raise RunSettingError(f"the broker answered for another request than the experiment {experiment}: "
+                                  f"{grant!r}")
+        if grant.granted:
+            try:
+                pinned = await _off_loop(read_experiment, catalog, experiment)
+            except (ProveviError, ProvcatError, OSError) as e:  # OSError from a store or a hook outside provcat
+                raise RunSettingError(f"cannot pin the experiment {experiment}: {e}") from e
+            out.update(experiment=experiment, experiment_pin=pinned.pin, experiment_sha256=pinned.sha256)
     if parent_run is not None:
         await _off_loop(_check_parent, parent_run, store, runs_root)
         out["parent_run"] = parent_run
@@ -295,7 +305,7 @@ async def _steps(ctx: RunContext, agent: AgentSpec, stager: Stager | None, backe
     run = None
     cancelled = False
     try:
-        if grant is not None:  # the experiment's, decided before the run opened
+        if grant is not None:  # the experiment's, decided before the run opened; a deny fails the run here
             ctx.broker.record(ctx, grant, purpose="experiment")
         # Fetching, staging, checking and sealing block, so each runs in a thread.
         snapshots = await _off_loop(_snapshots, ctx, agent)

@@ -116,10 +116,15 @@ class Broker(ABC):
         return grant
 
     def record(self, ctx: RunContext, grant: Grant, purpose: str = "") -> None:
-        """Write the evidence of a grant that decide_early gave. A grant that
-        has expired since is written as a deny, and raises AccessDenied."""
+        """Write the evidence of a decision made before the run opened: a
+        grant that decide_early gave, or the deny in the AccessDenied that it
+        raised. A deny, and a grant that has expired since, are written as
+        access_denied, and raise AccessDenied."""
         name = self.__class__.__name__
         ctx.recorder.emit("access_requested", name, refs=[grant.uri], data={"mode": grant.mode, "purpose": purpose})
+        if not grant.granted:
+            ctx.recorder.emit("access_denied", name, refs=[grant.uri], data=grant.as_dict())
+            raise AccessDenied(grant)
         ends = expiry(grant)
         if ends is not None and ends <= datetime.now(UTC):
             grant = replace(grant, decision="deny", reason=f"the grant expired at {grant.expires_at}, "
