@@ -9,16 +9,23 @@ a FastAPI app that sends it to a browser:
 The feed gives numbered items, in the order the run made them:
 
 - ``{"n": 1, "type": "event", "event": "run_created", "seq": 0, ...}`` for each
-  evidence event;
+  evidence event, as provevi's ``shown_at`` cuts it;
 - ``{"n": 7, "type": "text", "text": "Revenue "}`` for each piece of a
   streamed reply, at the ``bodies`` level only;
 - ``{"n": 12, "type": "done", "status": "completed", "run_id": ...}`` last. The
-  status is that of the run's task: ``completed``, ``failed`` or ``cancelled``.
-  The run ID is None for a run that ended before it opened.
+  status is ``completed``, ``failed`` or ``cancelled``, as the run's last event
+  says, so a run cancelled while it was sealed shows as it was sealed. A run
+  that ended before it opened has no events; its status is that of its task,
+  and its run ID is None.
 
-The feed shows only the ``names`` level for now: each event's type, number,
-time and component, when the component is a plain name, and no text. The run's telemetry policy will decide the
-level, once provevi can name a live viewer in it.
+The run's telemetry policy sets the level, as the level of its destination of
+kind ``live``, which a run file's ``telemetry`` section can lower. A policy
+with no such destination shows a viewer no event and no text, only the end.
+The event items are those that provevi's ``replay`` gives once the run has
+ended, so a viewer that comes late can read the evidence instead. A text item
+comes only from a streamed reply; at ``bodies``, each event's payload holds
+the whole reply. At ``bodies`` the feed reads each payload as its event is
+written, and keeps it, as it keeps every item, as long as the program runs.
 
 A viewer that falls behind by more than ``QUEUE`` items is dropped: it gets
 each item it was given, then ``{"type": "dropped"}``, and the run never waits
@@ -30,17 +37,15 @@ record; the feed lives only as long as the program.
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator
 from typing import Any
 
-from provevi import Sink, plain_name
+from provevi import LEVELS, EvidenceEvent, Sink, shown_at
 
 from .runner import RunOutcome, run_file
 from .spec import RunFile
 
 QUEUE = 1000  # the items a viewer may fall behind by before it is dropped
-LEVELS = ("names", "usage", "bodies")
 
 
 class LiveFeed(Sink):
@@ -48,13 +53,17 @@ class LiveFeed(Sink):
     an evidence sink, so it gets each event as it is written, from any
     thread; each item goes to the event loop, so items keep their order."""
 
-    def __init__(self, loop: asyncio.AbstractEventLoop, level: str = "names"):
-        if level not in LEVELS:
-            raise ValueError(f"level must be one of {LEVELS}, not {level!r}")
+    def __init__(self, loop: asyncio.AbstractEventLoop, level: str | None = None):
+        if level is not None and level not in LEVELS:
+            raise ValueError(f"level must be one of {LEVELS} or None, not {level!r}")
+        # The run sets level from its policy as it starts, and writer, the
+        # run's evidence writer, which holds the payloads that bodies shows.
         self.loop, self.level = loop, level
+        self.writer: Any = None
         self.items: list[dict] = []
         self.ended = False
         self.run_id: str | None = None  # from the first event; a run that failed before it opened has none
+        self.ending: str | None = None  # the status that the run's last event gives, once it is written
         self._viewers: list[asyncio.Queue] = []
 
     def append(self, line: str) -> None:
@@ -66,12 +75,13 @@ class LiveFeed(Sink):
             pass
 
     def _event(self, line: str) -> None:
-        event = json.loads(line)
-        self.run_id = self.run_id or event["run_id"]
-        item = {"type": "event", "event": event["type"], "seq": event["seq"], "time": event["time"]}
-        if plain_name(event["component"]):  # a component such as tool:<name> can carry a name that is not plain
-            item["component"] = event["component"]
-        self.loop.call_soon_threadsafe(self._push, item)
+        event = EvidenceEvent.from_line(line)
+        self.run_id = self.run_id or event.run_id
+        if event.type in ("run_completed", "run_failed"):
+            self.ending = _status(event)
+        item = shown_at(event, self.level, _Payloads(self.writer))
+        if item is not None:
+            self.loop.call_soon_threadsafe(self._push, item)
 
     def text(self, piece: str) -> None:
         """A piece of a streamed reply, which only the bodies level shows."""
@@ -137,6 +147,29 @@ class LiveFeed(Sink):
                 self._viewers.remove(queue)
 
 
+def _status(ending: EvidenceEvent) -> str:
+    # As provevi's replay reads the end of a run: a run that provrun cancelled
+    # ends with run_failed, whose error is CancelledError.
+    if ending.type == "run_completed":
+        return "completed"
+    error = ending.data.get("error")
+    return "cancelled" if isinstance(error, str) and error.startswith("CancelledError") else "failed"
+
+
+class _Payloads:
+    """The payloads of a run that is going, read as shown_at reads a sealed
+    run's. The recorder writes a payload before the event that names it."""
+
+    def __init__(self, writer: Any):
+        self.writer = writer
+
+    def payload_bytes(self, name: str) -> bytes | None:
+        try:
+            return self.writer.get_payload(name)
+        except Exception:  # no writer yet, or a store that cannot read back
+            return None
+
+
 class LiveRun:
     """A run that has started, with its feed."""
 
@@ -166,13 +199,15 @@ def start_run(rf: RunFile, **kw: Any) -> LiveRun:
     task = loop.create_task(run_file(rf, feed=feed, **kw))
 
     def ended(t: asyncio.Task) -> None:
+        # The evidence's end decides the status, as it does for replay, so a
+        # run cancelled while it was sealed shows as it was sealed.
         if t.cancelled():
-            feed.end({"type": "done", "status": "cancelled", "run_id": feed.run_id})
+            status = feed.ending or "cancelled"
         elif t.exception() is not None:
-            feed.end({"type": "done", "status": "failed", "run_id": feed.run_id})
+            status = feed.ending or "failed"
         else:
-            out = t.result()
-            feed.end({"type": "done", "status": out.status, "run_id": out.run_id})
+            status = feed.ending or t.result().status
+        feed.end({"type": "done", "status": status, "run_id": feed.run_id})
 
     task.add_done_callback(ended)
     return LiveRun(task, feed)

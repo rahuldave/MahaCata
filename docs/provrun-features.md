@@ -250,23 +250,23 @@ The data also holds `first_token_ms`, the milliseconds to the first piece. A str
 
 ## Watch a run as it goes
 
-A program, such as a web server, can show a run as it goes. `start_run` starts the run and gives its live feed, one item per event and a last item for the end:
+A program, such as a web server, can show a run as it goes. `start_run` starts the run and gives its live feed, one item per event and a last item for the end. The telemetry policy names the viewer as a destination of kind `live`, and its level decides what each item shows. Here the viewer receives `names`, so each event shows only the keys of its data that hold names:
 
 ```
-$ uv run python tours/provrun/follow.py $TOUR_DIR/stream.yaml
-1 event run_created
-2 event access_requested
-3 event access_granted
-4 event context_resolved
-5 event snapshot_materialized
-6 event input_staged
-7 event sandbox_started
+$ PROVRUN_TELEMETRY_POLICY=$TOUR_DIR/live.yaml uv run python tours/provrun/follow.py $TOUR_DIR/stream.yaml
+1 event run_created agent backend domain env mode org span_id trace_id
+2 event access_requested mode
+3 event access_granted decision grant_id mode policy
+4 event context_resolved grant_id parent_span_id span_id started_at trace_id
+5 event snapshot_materialized kind parent_span_id sha256 span_id started_at trace_id
+6 event input_staged kind parent_span_id sha256 span_id started_at trace_id
+7 event sandbox_started agent backend model
 8 event prompt_rendered
-9 event model_called
-10 event sandbox_completed
-11 event input_verified
-12 event output_artifact_created
-13 event run_completed
+9 event model_called finish_reason model parent_span_id span_id started_at streamed trace_id
+10 event sandbox_completed status
+11 event input_verified parent_span_id sha256 span_id started_at trace_id unchanged
+12 event output_artifact_created parent_span_id sha256 span_id started_at trace_id
+13 event run_completed span_id trace_id
 14 done completed
 ```
 

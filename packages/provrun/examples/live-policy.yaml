@@ -1,0 +1,7 @@
+# A telemetry policy for live_server.py: a viewer of the live feed that
+# receives names, and nothing sent anywhere else.
+version: 1
+destinations:
+  browser:
+    kind: live
+    receives: names

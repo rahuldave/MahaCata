@@ -1,11 +1,13 @@
 """A small FastAPI server that starts a run and sends its live feed to a
 browser, as server-sent events. Run it from the top folder of the repository:
 
+    PROVRUN_TELEMETRY_POLICY=packages/provrun/examples/live-policy.yaml \\
     PROVRUN_LIVE_RUN_FILE=packages/provrun/examples/file-run.yaml \\
         uv run uvicorn --app-dir packages/provrun/examples live_server:app --port 8001
 
 Then open http://127.0.0.1:8001/ and press Start. The server runs only the
-run file it was given: a browser cannot name a file on the server.
+run file it was given: a browser cannot name a file on the server. The
+policy's live viewer decides what the browser sees; with none, only the end.
 
     POST   /runs              start a run; gives {"key": ...}
     GET    /runs/{key}/events the run's feed, one event per item; a browser
