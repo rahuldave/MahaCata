@@ -229,7 +229,9 @@ agent:
 
 As the run starts, provrun first asks the broker for the experiment, in the mode `pinned_read`. The stub broker allows the run's own experiment, and checks its org and environment as it checks an input's. So a run in `dev` cannot name an experiment whose URI says `prod`.
 
-A refusal is evidence, as an input's is. The run opens, and its first steps after `run_created` are `access_requested` and `access_denied` for the experiment. Then the run fails. Nothing reads the experiment, so `run_created` does not name it, and the run is not one of the experiment's runs. The two access events name it. A parent run that the store does not hold still stops the run before its folder is made, and then the refusal is not recorded.
+A refusal is evidence, as an input's is. The run opens, and its first steps after `run_created` are `access_requested` and `access_denied` for the experiment. Then the run fails. Nothing reads the experiment, so `run_created` does not name it, and the run is not one of the experiment's runs.
+
+The two access events name the experiment. `prove show RUN` shows them in any store, and `prove access RUN` shows the refusal in a SQLite store. `prove experiment show`, which needs a SQLite store too, does not count the run among the experiment's runs. A parent run that the store does not hold still stops the run before its folder is made, and then the refusal is not recorded.
 
 A selector other than a commit, such as `?at=branch:prod`, can name another branch, and so another environment. So the stub allows an experiment with such a selector only if the run's `allow` list names it, selector and all. Some stores take a branch name where a commit goes, so a `commit:` selector needs an entry too, unless its value looks like a commit ID. A commit ID here is 7 to 64 hex digits, in lower case. An experiment with no selector, or pinned to such an ID, needs no entry. A branch named like a commit ID, such as `deadbeef`, would still get past this check.
 
