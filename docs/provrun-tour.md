@@ -44,7 +44,7 @@ Run the script. It takes about 45 seconds.
 bash tours/provrun/run.sh
 ```
 
-Add `--online` to run Steps 15 and 16 too, which call a real model. The script starts moto and a small collector, runs the steps, stops both and deletes its scratch folder.
+Add `--online` to run Steps 16 and 17 too, which call a real model. The script starts moto and a small collector, runs the steps, stops both and deletes its scratch folder.
 
 ## Or run it step by step
 
@@ -84,9 +84,10 @@ Add `--online` to run Steps 15 and 16 too, which call a real model. The script s
 | `tours/provrun/quiet.py` | The program of Step 11. |
 | `tours/provrun/collector.py` | The collector of Step 12. |
 | `tours/provrun/mlflow.yaml` | The telemetry policy of Step 13, with an MLflow destination. |
-| `tours/provrun/agent.yaml` | The PydanticAI agent of Step 15, which needs a real model. |
+| `tours/provrun/agent.yaml` | The PydanticAI agent of Step 16, which needs a real model. |
+| `tours/provrun/experiment.py` | The script of Step 15 that writes a version of the tour's experiment. |
 | `tours/provrun/follow.py`, `live.yaml` | The program of Step 14 that follows a run's live feed, and the policy that names its viewer. |
-| `tours/provrun/streamed.py` | The streamed PydanticAI agent of Step 16, which needs a real model, or `PROVRUN_TOUR_MODEL=test`. |
+| `tours/provrun/streamed.py` | The streamed PydanticAI agent of Step 17, which needs a real model, or `PROVRUN_TOUR_MODEL=test`. |
 | `tours/provrun/field.py`, `event.py`, `spans.py`, `event_types.py`, `mlflow_spans.py`, `modes.py`, `drop_event.py` | Small helpers that print one field of a run's output or evidence, or change the evidence. |
 
 The run file holds this:
@@ -799,7 +800,64 @@ Each event of the run is one item, in order, and the last item says how the run 
 
 A viewer that receives `usage` also gets the counts. One that receives `bodies` gets all the data, each event's payload and the pieces of the reply as they come. A program that connects after the end gets the same event items from provevi's `replay`. [provrun's page](provrun.md#watch-a-run-as-it-goes) says how a server sends the feed on.
 
-## Step 15: Call a real model (needs ANTHROPIC_API_KEY)
+## Step 15: Name the experiment a run belongs to
+
+An experiment is a folder in the catalog that holds `experiment.yaml`, with its kind, a description and its metrics. Each commit of the folder is a version. The tour's catalog maps `experiment://` to the bucket `experiments`. `experiment.py` writes the experiment and commits it, and prints the version's pin and the SHA-256 of its file:
+
+```
+$ uv run python tours/provrun/experiment.py "Does the model find the revenue?" accuracy
+experiment://acme/demo/dev/revenue/retrieval?at=commit:da23bf672a844fa165113a8a24ae5ba22cc10a7565b79611efca7047e15fcd76
+8386baf7befc41bccec929be03e8a1dec4c9f37b2422a5d5eb11f4333fa3faef
+```
+
+A run file names its experiment beside its agent. provrun pins it through the run's catalog as the run starts, so the catalog's checks and hooks see it, and `run_created` records the URI, the pin and the hash:
+
+```
+$ { echo "experiment: experiment://acme/demo/dev/revenue/retrieval"; cat $TOUR_DIR/run.yaml; } > $TOUR_DIR/exp.yaml
+
+$ E=sqlite:///$TOUR_DIR/experiments.db
+
+$ uv run provr --store $E run $TOUR_DIR/exp.yaml > $TOUR_DIR/r12.json
+
+$ R12=$(uv run python tours/provrun/field.py $TOUR_DIR/r12.json run_id)
+
+$ uv run python tours/provrun/event.py $R12 run_created experiment experiment_pin experiment_sha256
+experiment://acme/demo/dev/revenue/retrieval
+experiment://acme/demo/dev/revenue/retrieval?at=commit:da23bf672a844fa165113a8a24ae5ba22cc10a7565b79611efca7047e15fcd76
+8386baf7befc41bccec929be03e8a1dec4c9f37b2422a5d5eb11f4333fa3faef
+```
+
+Write a second version, and run the same file again. The run names the new pin:
+
+```
+$ uv run python tours/provrun/experiment.py "Does the model find the revenue, and say where?" accuracy recall
+experiment://acme/demo/dev/revenue/retrieval?at=commit:7311e8221f7268c01fb243ef177028736e0595bf8425a5276a126dbc7ea71a7f
+d05067a5d622287ef12e9ca6a4b3f59d1d96c7faac4f9f85678587e161e8f0be
+
+$ uv run provr --store $E run $TOUR_DIR/exp.yaml > $TOUR_DIR/r13.json
+
+$ R13=$(uv run python tours/provrun/field.py $TOUR_DIR/r13.json run_id)
+
+$ uv run python tours/provrun/event.py $R13 run_created experiment_pin
+experiment://acme/demo/dev/revenue/retrieval?at=commit:7311e8221f7268c01fb243ef177028736e0595bf8425a5276a126dbc7ea71a7f
+```
+
+`prove` lists each experiment that runs name, and checks a run's experiment at its own pin:
+
+```
+$ uv run prove --store $E experiments
+experiment://acme/demo/dev/revenue/retrieval  2 versions, 2 runs
+
+$ uv run prove --store $E verify --config $PROVCAT_CONFIG $R12
+run-20261110T021826Z-5d709442: the evidence and the outputs verify, and match the committed bundle; its experiment matches experiment://acme/demo/dev/revenue/retrieval?at=commit:da23bf672a844fa165113a8a24ae5ba22cc10a7565b79611efca7047e15fcd76
+```
+
+**What happened:**
+- Each version of the experiment has its own pin, so a run says which version it ran, though the run file names no version.
+- `prove verify` read the first run's experiment at that run's pin, after the second version was written, and its hash matched.
+- An experiment that cannot be pinned, such as one in a store with no commits, stops the run before the run folder is made.
+
+## Step 16: Call a real model (needs ANTHROPIC_API_KEY)
 
 This step runs only with `--online`. It needs `ANTHROPIC_API_KEY` in the environment, and it costs a few cents. It runs a real model twice, once with LiteLLM and once as a PydanticAI agent with tools. Both runs go under a policy with two places, and with three variables set.
 
@@ -896,7 +954,7 @@ Now run an agent with tools. `tours/provrun/agent.yaml` asks the same question o
 
 ```
 $ cat $TOUR_DIR/agent.yaml
-# The agent of Step 15: a real PydanticAI agent with tools, on the tour's report.
+# The agent of Step 16: a real PydanticAI agent with tools, on the tour's report.
 run:
   org: acme
   domain: demo
@@ -1010,7 +1068,7 @@ $ unset PROVRUN_TELEMETRY_POLICY OTEL_EXPORTER_OTLP_ENDPOINT LOGFIRE_TOKEN
 
 The examples `claude-run.yaml` and `claude-agent.yaml` in `packages/provrun/examples` run the same two on a local file, with no store and no policy.
 
-## Step 16: Stream a real model in your own agent (needs ANTHROPIC_API_KEY)
+## Step 17: Stream a real model in your own agent (needs ANTHROPIC_API_KEY)
 
 This step also runs only with `--online`, and costs less than a cent. A run file asks for a streamed reply with `stream: true`, as Step 14 showed. Your own code can stream too, and still get provrun's evidence, by giving its PydanticAI agent provrun's capability, `evidence_capability`. The script `streamed.py` does this, with one tool. It prints the reply as it arrives, then the events that the capability wrote.
 

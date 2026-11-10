@@ -112,7 +112,7 @@ So a run keeps them, records them, and sends provrun's own spans where they poin
 
 **Done when:** MLflow, Logfire and an OpenTelemetry exporter are installed, with their variables set. Then a real PydanticAI run and a real LiteLLM run write no telemetry of their own. Their evidence records each thing that was turned off, and the variables that were set. provrun's spans reach each approved destination, and no other. For MLflow, that is the copy of Phase 4.
 
-**Checked on 2026-11-02,** with Claude Haiku, in Step 15 of [provrun's tour](provrun-tour.md#step-15-call-a-real-model-needs-anthropic_api_key). A real LiteLLM run and a real PydanticAI run had a collector, a Logfire token and the store's own MLflow file to send to. The approved collector got their spans, and MLflow got a copy of each. Logfire, which the policy does not approve, got nothing. Each run records what was blocked, and verifies. The collector is local, and Logfire was only named by a token, so no Logfire service was reached.
+**Checked on 2026-11-02,** with Claude Haiku, in Step 16 of [provrun's tour](provrun-tour.md#step-16-call-a-real-model-needs-anthropic_api_key). A real LiteLLM run and a real PydanticAI run had a collector, a Logfire token and the store's own MLflow file to send to. The approved collector got their spans, and MLflow got a copy of each. Logfire, which the policy does not approve, got nothing. Each run records what was blocked, and verifies. The collector is local, and Logfire was only named by a token, so no Logfire service was reached.
 
 **Open:**
 
@@ -122,7 +122,7 @@ So a run keeps them, records them, and sends provrun's own spans where they poin
 - **Decided on 2026-11-02: `prove telemetry RUN` lists `telemetry_problem` events** as well as `telemetry_blocked` events.
 
 - The SDKs of OpenAI and Anthropic send `X-Stainless-*` headers, with the operating system, the processor, and the Python and SDK versions, to the model provider. The research did not settle whether `default_headers` can remove them.
-- The OpenAI Agents SDK and the Claude Agent SDK are not tested yet. A streamed PydanticAI request was checked with Claude Haiku on 2026-11-03, in [Step 16 of provrun's tour](provrun-tour.md#step-16-stream-a-real-model-in-your-own-agent-needs-anthropic_api_key). A run file asks for one with `stream: true`, which [Step 14](provrun-tour.md#step-14-ask-for-the-reply-in-pieces) shows.
+- The OpenAI Agents SDK and the Claude Agent SDK are not tested yet. A streamed PydanticAI request was checked with Claude Haiku on 2026-11-03, in [Step 17 of provrun's tour](provrun-tour.md#step-17-stream-a-real-model-in-your-own-agent-needs-anthropic_api_key). A run file asks for one with `stream: true`, which [Step 14](provrun-tour.md#step-14-ask-for-the-reply-in-pieces) shows.
 
 ## Phase 4: the copy in MLflow
 
@@ -160,15 +160,15 @@ provevi writes all three through MLflow's client, `MlflowClient(tracking_uri=...
 
 ## Phase 5: experiments and agent classes
 
-**Status: provevi's part is built; provrun's part is next.** [The design](provevi-design.md#experiments-agents-and-workflows) says what an experiment, an agent class and a parent run are. Decided on 2026-11-05.
+**Status: built.** [The design](provevi-design.md#experiments-agents-and-workflows) says what an experiment, an agent class and a parent run are. Decided on 2026-11-05.
 
 1. **provevi:** write the experiment file, `experiment.yaml`, and functions that write and commit it, and read it at a pin, through provcat.
 2. **provevi:** bring the store's schema to version 2. It keeps agent classes and their versions, derived from the runs, and the versions of each experiment that runs report. An earlier store's experiment rows become agent classes.
 3. **provevi:** write `prove agents`, `prove agent show`, `prove experiments`, `prove experiment show` and `prove runs --agent`.
 4. **provevi:** let `prove verify --config` read a run's experiment at its pin, and check its hash.
 5. **provcat:** map `experiment://org/team/env/project/name` to a folder, in the example configuration.
-6. **provrun:** let a run file name `experiment:`, beside `agent:`. Pin it through the run's catalog and record `experiment`, `experiment_pin` and `experiment_sha256` in `run_created`.
-7. **provrun:** record `parent_run` in `run_created`, for a run that another run starts.
+6. **provrun, built:** let a run file name `experiment:`, beside `agent:`. Pin it through the run's catalog and record `experiment`, `experiment_pin` and `experiment_sha256` in `run_created`.
+7. **provrun, built:** record `parent_run` in `run_created`, for a run that another run starts.
 
 **Tests:** two runs of one experiment version name the same pin, and a run after the experiment changes names the new pin. Two runs of one agent with different prompts are one version, and changed instructions make a new one. An earlier store's rows move to the agent tables, and its runs still verify.
 

@@ -165,7 +165,7 @@ A file with another key is refused, and so is a single text where a list belongs
 
 `write_experiment(catalog, uri, experiment, message)` writes the file and commits the folder. It returns a `PinnedExperiment`, with the URI, the pin, which is the URI with `?at=commit:...`, and the file's SHA-256. `read_experiment(catalog, uri)` reads the newest version, or the version that the URI's `?at=` names. Both go through the catalog's hooks. A store whose pin names no commit, such as a local folder, is refused.
 
-A run names its experiment beside its agent. provrun records the fields `experiment`, `experiment_pin` and `experiment_sha256` in `run_created`. provrun's part is not built yet. The store keeps each version that runs report.
+A run names its experiment beside its agent. provrun records the fields `experiment`, `experiment_pin` and `experiment_sha256` in `run_created`. [provrun's page](provrun.md#name-the-experiment) shows the run file. The store keeps each version that runs report.
 
 `verify_run` reads the file at the run's pin through the catalog, and checks its hash. The pin must name a commit, as a branch moves. A run may name a branch, such as `?at=branch:main`, and its pin is then the branch's commit at the start of the run. With no catalog, a run that names an experiment does not verify.
 

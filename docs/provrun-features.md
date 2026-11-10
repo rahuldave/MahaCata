@@ -315,6 +315,36 @@ $ test -e $TOUR_DIR/elsewhere.db || echo "no copy"
 no copy
 ```
 
+## Name the experiment a run belongs to
+
+An experiment is a versioned folder in the catalog, such as `experiment://acme/demo/dev/revenue/retrieval`. A run file names it with `experiment:`, beside `agent:`. As the run starts, provrun pins the experiment through the catalog, and `run_created` records the URI, the pin and the SHA-256 of its file:
+
+```
+$ uv run python tours/provrun/event.py $R12 run_created experiment experiment_pin experiment_sha256
+experiment://acme/demo/dev/revenue/retrieval
+experiment://acme/demo/dev/revenue/retrieval?at=commit:da23bf672a844fa165113a8a24ae5ba22cc10a7565b79611efca7047e15fcd76
+8386baf7befc41bccec929be03e8a1dec4c9f37b2422a5d5eb11f4333fa3faef
+```
+
+After a second version is written, the same run file names the new pin:
+
+```
+$ uv run python tours/provrun/event.py $R13 run_created experiment_pin
+experiment://acme/demo/dev/revenue/retrieval?at=commit:7311e8221f7268c01fb243ef177028736e0595bf8425a5276a126dbc7ea71a7f
+```
+
+`prove` lists the experiment, and checks a run's experiment at that run's own pin:
+
+```
+$ uv run prove --store $E experiments
+experiment://acme/demo/dev/revenue/retrieval  2 versions, 2 runs
+
+$ uv run prove --store $E verify --config $PROVCAT_CONFIG $R12
+run-20261110T021826Z-5d709442: the evidence and the outputs verify, and match the committed bundle; its experiment matches experiment://acme/demo/dev/revenue/retrieval?at=commit:da23bf672a844fa165113a8a24ae5ba22cc10a7565b79611efca7047e15fcd76
+```
+
+An experiment that cannot be pinned stops the run before the run folder is made. A run that another run starts records `parent_run`. [provrun's page](provrun.md#name-the-experiment) says more.
+
 ## Use it from a program
 
 `provr` only reads its arguments, calls provrun's library and prints. A program can call the same functions, such as `RunFile.load` and `run_file_sync`, and gets the outcome back:
@@ -419,6 +449,6 @@ run-20261102T224225Z-8e0c9702: the evidence and the outputs verify, and match th
 | Examples | Where they ran |
 |---|---|
 | Every example on this page but "Run a real model" | The tour's script, `bash tours/provrun/run.sh`, with moto and a small collector. |
-| "Run a real model" | Step 15 of the tour's script, `bash tours/provrun/run.sh --online`, with Claude Haiku. It needs `ANTHROPIC_API_KEY`, and the tests do not run it. `packages/provrun/examples/claude-run.yaml` and `claude-agent.yaml` run the same on a local file. |
+| "Run a real model" | Step 16 of the tour's script, `bash tours/provrun/run.sh --online`, with Claude Haiku. It needs `ANTHROPIC_API_KEY`, and the tests do not run it. `packages/provrun/examples/claude-run.yaml` and `claude-agent.yaml` run the same on a local file. |
 
 The run IDs, times, version IDs and hashes differ on each run.

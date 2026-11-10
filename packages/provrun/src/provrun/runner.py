@@ -23,12 +23,13 @@ and backend can be passed in.
 from __future__ import annotations
 
 import asyncio
+import re
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from provcat import Catalog
+from provcat import Catalog, ProvcatError
 from provevi import EvidenceStore
 from provevi.telemetry import TelemetryPolicy
 
@@ -81,7 +82,8 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
                     backend: Backend | None = None, runs_root: Path | None = None,
                     mode: str | None = None, bundle_scheme: str | None = None,
                     store: EvidenceStore | None = None, policy: TelemetryPolicy | str | Path | None = None,
-                    telemetry: dict | None = None, feed: Any = None) -> RunOutcome:
+                    telemetry: dict | None = None, feed: Any = None, experiment: str | None = None,
+                    parent_run: str | None = None) -> RunOutcome:
     """Run agent once. With no broker, a StubBroker allows the inputs of the
     spec and the URIs in allow. The evidence goes through store, a provevi
     store, by default the file store in the run folder.
@@ -95,7 +97,16 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
     backend raises RunSettingError before the run folder is made; so does a
     telemetry problem in strict mode. Any later error fails the run, and the
     outcome holds it. feed, a provrun.live.LiveFeed, gets each event and each
-    piece of a streamed reply as they come; start_run makes one."""
+    piece of a streamed reply as they come; start_run makes one.
+
+    experiment is the URI of the experiment that the run belongs to. The run
+    pins it through catalog, so the catalog's checks and hooks see it, and
+    run_created records the URI, the pin and the SHA-256 of its file. An
+    experiment that cannot be pinned raises RunSettingError before the run
+    folder is made. parent_run is the ID of the run that started this one,
+    which run_created records too."""
+    if parent_run is not None and (not isinstance(parent_run, str) or not _RUN_ID.fullmatch(parent_run)):
+        raise RunSettingError(f"parent_run must be a run ID, such as run-20260101T000000Z-0a1b2c3d; got {parent_run!r}")
     tel = Telemetry.prepare(load_policy(policy), telemetry, evidence_mode(env, mode))
     try:
         with tel.applied(store, close=False):
@@ -103,7 +114,8 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
             outcome = await _run_agent(agent, tel, catalog=catalog, org=org, domain=domain, env=env, actor=actor,
                                        allow=allow, broker=broker, resolver=resolver, stager=stager,
                                        backend=backend, runs_root=runs_root, mode=mode,
-                                       bundle_scheme=bundle_scheme, store=store, feed=feed)
+                                       bundle_scheme=bundle_scheme, store=store, feed=feed,
+                                       experiment=experiment, parent_run=parent_run)
     finally:
         if tel.routes is not None:
             # Sending the last spans can take seconds, so it goes in a thread too.
@@ -116,7 +128,7 @@ async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str
 
 async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org: str, domain: str, env: str,
                      actor: str, allow, broker, resolver, stager, backend, runs_root, mode, bundle_scheme,
-                     store, feed=None) -> RunOutcome:
+                     store, feed=None, experiment=None, parent_run=None) -> RunOutcome:
     if backend is None:
         try:
             backend = load_backend(agent.backend)
@@ -125,6 +137,7 @@ async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org:
     if broker is None:
         allow = list(allow or []) + [i.uri for i in agent.inputs]
         broker = StubBroker(allow, physical_schemes=catalog.stores.keys())
+    lineage = await _lineage(catalog, experiment, parent_run)
     run_id = new_run_id()
     # The root span of the run: each top-level step is its child, so the run is
     # one trace. run_created and the event that ends the run record its IDs.
@@ -138,7 +151,7 @@ async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org:
                               runs_root=runs_root, mode=mode, bundle_scheme=bundle_scheme, store=store,
                               run_id=run_id, trace=trace,
                               data={"agent": agent.name, "backend": agent.backend, "spec": agent.to_dict(),
-                                    "telemetry": {**tel.record(), "live": _live(tel, feed)}},
+                                    "telemetry": {**tel.record(), "live": _live(tel, feed)}, **lineage},
                               sinks=[feed] if feed is not None else None)
         ctx.telemetry = tel
         if feed is not None:
@@ -151,6 +164,26 @@ async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org:
     if error is not None and not isinstance(error, Exception):
         raise error  # a cancel or an interrupt goes on after the run is recorded
     return outcome
+
+
+_RUN_ID = re.compile(r"run-\d{8}T\d{6}Z-[0-9a-f]{8}")
+
+
+async def _lineage(catalog: Catalog, experiment: str | None, parent_run: str | None) -> dict:
+    """What run_created records of where the run belongs: the experiment, its
+    pin and the SHA-256 of its file, and the parent run, each if given."""
+    out: dict = {}
+    if experiment is not None:
+        from provevi import ProveviError, read_experiment
+
+        try:
+            pinned = await _off_loop(read_experiment, catalog, experiment)
+        except (ProveviError, ProvcatError, OSError) as e:  # OSError from a store or a hook outside provcat
+            raise RunSettingError(f"cannot pin the experiment {experiment}: {e}") from e
+        out.update(experiment=experiment, experiment_pin=pinned.pin, experiment_sha256=pinned.sha256)
+    if parent_run is not None:
+        out["parent_run"] = parent_run
+    return out
 
 
 def _live(tel: Telemetry, feed: Any) -> dict:
@@ -239,8 +272,9 @@ async def run_file(rf: RunFile, *, catalog: Catalog, runs_root: Path | None = No
                    bundle_scheme: str | Literal[False] | None = None, **parts) -> RunOutcome:
     """Run a checked run file. bundle_scheme, when given, takes the place of
     the run file's; False writes no bundle through the catalog. The other
-    keyword arguments (broker, resolver, stager, backend, store, policy, feed) go
-    to run_agent, with the run file's telemetry section. Without store, the run file's store setting opens one, and
+    keyword arguments (broker, resolver, stager, backend, store, policy, feed,
+    parent_run) go to run_agent, with the run file's telemetry section and
+    experiment; an experiment argument takes the place of the run file's. Without store, the run file's store setting opens one, and
     without that the file store is used."""
     s = rf.settings
     if parts.get("store") is None and s.store is not None:
@@ -250,7 +284,7 @@ async def run_file(rf: RunFile, *, catalog: Catalog, runs_root: Path | None = No
     scheme = s.bundle_scheme if bundle_scheme is None else (None if bundle_scheme is False else bundle_scheme)
     return await run_agent(rf.agent, catalog=catalog, org=s.org, domain=s.domain, env=s.env, actor=s.actor,
                            allow=list(s.allow), runs_root=runs_root, mode=mode, bundle_scheme=scheme,
-                           telemetry=rf.telemetry, **parts)
+                           telemetry=rf.telemetry, experiment=parts.pop("experiment", rf.experiment), **parts)
 
 
 def run_file_sync(rf: RunFile, **kw) -> RunOutcome:

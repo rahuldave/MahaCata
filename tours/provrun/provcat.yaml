@@ -22,3 +22,10 @@ schemes:
     rest: path
     target: "local-s3://runs/{ref}/{org}/{domain}/{env}/{path}"
     ref: main
+  # experiment://org/team/env/project/name -> a folder in the bucket experiments,
+  # which holds experiment.yaml; each commit of the folder is a version
+  experiment:
+    parts: [org, team, env, project, name]
+    rest: path
+    target: "local-s3://experiments/{ref}/{org}/{team}/{env}/{project}/{name}/{path}"
+    ref: main
