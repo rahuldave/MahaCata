@@ -121,6 +121,7 @@ When the telemetry policy approves an MLflow destination, provrun has provevi co
 
 | To do this | Read |
 |---|---|
+| Learn the whole path step by step, with an explanation of each step | [The tutorial](tutorial.md) |
 | Run the whole path on your own machine, from one file in a store to the evidence of its runs | [A runnable tour of provrun](provrun-tour.md) |
 | See what provcat does, with examples | [What provcat does](provcat-features.md), and [its tour](tour.md) |
 | See what provrun does, with examples | [What provrun does](provrun-features.md), and [provrun's reference](provrun.md) |

@@ -1,0 +1,9 @@
+# A telemetry policy. LiteLLM is approved at the version that the workspace
+# pins, and its telemetry feeds no destination. The host list names where a
+# destination may send. Nothing from a run goes anywhere but the evidence.
+version: 1
+libraries:
+  litellm:
+    versions: "==1.83.0"
+hosts:
+  - api.anthropic.com

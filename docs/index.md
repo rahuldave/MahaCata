@@ -14,6 +14,10 @@ provrun depends on provevi and provcat, and provevi depends on provcat. provcat 
 
 | To do this | Read |
 |---|---|
+| Learn the three packages together, by running an agent on a report and checking what it did | [The tutorial](tutorial.md) |
+| Learn provcat alone, step by step | [The provcat tutorial](provcat-tutorial.md) |
+| Learn provrun alone, step by step | [The provrun tutorial](provrun-tutorial.md) |
+| Learn provevi alone, step by step | [The provevi tutorial](provevi-tutorial.md) |
 | See how the three packages work together, with one example from each | [What MahaCata does](overview.md) |
 | See what provcat does, with examples | [What provcat does](provcat-features.md) |
 | Run provcat on your own machine, step by step | [A runnable tour of provcat](tour.md) |

@@ -262,7 +262,7 @@ Before this, provevi called each agent class an experiment. Version 2 of the sto
 ### Context packs and outside information
 
 1. **A context pack is a named, versioned set of pinned inputs.** A run, an experiment or a promoted agent would name packs, and a run would record each pack's pin. Packs come before promotion, since a promoted agent's spec names the packs it needs. Packs are not built.
-2. **A tool may bring in outside information, such as a web search.** Each call would be an event, holding the query and the answer's hash, with the answer as a payload. A promoted agent's spec would say what it may reach, and a check would compare the two. Events for outside calls are not built. provrun's tools today, `grep` and `note`, reach nothing outside the run.
+2. **A tool may bring in outside information, such as a web search.** Each call would be an event that holds the query and the answer's hash, with the answer as a payload. A promoted agent's spec would say what it may reach, and a check would compare the two. Events for outside calls are not built. provrun's tools today, `grep` and `note`, reach nothing outside the run.
 
 ## Libraries first, with a command line on top
 

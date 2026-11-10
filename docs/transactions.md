@@ -200,7 +200,7 @@ A head pointer, `.provcat/heads/<folder>`, updated with `If-Match`, would give t
 
 On S3, `If-None-Match` checks only the current version. Someone who deletes log entry N lets a later writer make N again. Treat any delete in `.provcat/` as damage. [doc]
 
-### What is not guaranteed
+### What provcat does not guarantee
 
 - **Commits that outlive their versions.** A lifecycle rule that expires old versions, or a person who deletes one, breaks the commits that name it. A read then fails with "not found". [src]
 - **One order across folders.** Each folder has its own log. A pin compares the commits of a folder and of the folders above it by their time, which comes from each writer's clock. A commit records its time to the microsecond. If a folder and a folder above it have the same time, the folder above counts as newer. So a pin gives the same answer every time, but the answer is wrong when the folder below came second. When two writers' clocks differ, a later commit can also get an earlier time and sort as older. [src]

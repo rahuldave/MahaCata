@@ -1,0 +1,26 @@
+# The catalog of the provcat tutorial: two stores and two names.
+cache:
+  root: ${oc.env:TOUR_DIR}/cache
+
+stores:
+  # Files on this machine, under one folder.
+  local-files:
+    driver: file
+    root: ${oc.env:TOUR_DIR}/files
+  # moto, a local server that speaks the S3 protocol.
+  local-s3:
+    driver: s3
+    endpoint_url: http://localhost:${oc.env:TOUR_S3_PORT,5055}
+
+schemes:
+  # notes://project/path is a file under the folder files.
+  notes:
+    parts: [project]
+    rest: path
+    target: "local-files:///{project}/{path}"
+  # data://project/path is a file in the bucket of the project, on a branch.
+  data:
+    parts: [project]
+    rest: path
+    target: "local-s3://{project}/{ref}/{path}"
+    ref: main

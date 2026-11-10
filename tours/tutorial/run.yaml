@@ -1,0 +1,17 @@
+# One question about one report. mock_response fixes the answer, so the
+# tutorial needs no model and no key.
+run:
+  org: acme
+  domain: finance
+  env: dev
+  actor: you@example.com
+agent:
+  name: revenue-question
+  backend: litellm
+  model: anthropic/claude-haiku-5-5
+  instructions: Answer from the report only.
+  prompt: What was revenue in the third quarter?
+  inputs:
+    - data://acme/finance/dev/reports/q3.txt
+  settings:
+    mock_response: Revenue in the third quarter was 42 million.

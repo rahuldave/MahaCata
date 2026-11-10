@@ -31,8 +31,10 @@ website:
     contents:
       - index.md
       - overview.md
+      - tutorial.md
       - section: provcat
         contents:
+          - provcat-tutorial.md
           - provcat-features.md
           - tour.md
           - reference.md
@@ -43,12 +45,14 @@ website:
           - access-notes.md
       - section: provrun
         contents:
+          - provrun-tutorial.md
           - provrun-features.md
           - provrun-tour.md
           - provrun.md
           - provrun-plan.md
       - section: provevi
         contents:
+          - provevi-tutorial.md
           - provevi-features.md
           - provevi-tour.md
           - provevi.md
