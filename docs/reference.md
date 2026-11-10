@@ -265,9 +265,13 @@ The cache folder is `~/.cache/provcat`, or `$XDG_CACHE_HOME/provcat` if that var
 <cache>/<store name>/<bucket>/<key>                   an object store; for lakeFS the key holds the commit
 <cache>/<store name>@version-<ID>/<bucket>/<key>      a fixed version of a file
 <cache>/<store name>@commit-<ID>/<bucket>/<key>       a file or folder at a provcat commit
-<cache>/.provcat/        versions, finished folders and pinned refs
+<cache>/.provcat/        versions, finished folders, pinned refs, snapshots and locks
 ```
 
 provcat stores a GitHub or Hugging Face file under its commit, so the file never goes stale. provcat checks a file of an object store against its version before each use, and downloads it again when the version changed. The version is the ETag on S3 and Azure, and the generation on GCS. With `--offline`, provcat reads only the cache. For a branch, it uses the last commit that it pinned.
+
+Each write of a key takes that key's lock, a file under `<cache>/.provcat/locks/`, so two processes never write one key at once. The lock files stay after the write, one for each key. The locks need a filesystem with `flock`, such as a local disk. On a network share without it, each fetch fails with `cannot write ... in the cache`, so keep the cache on a local disk. A lock is not shared between a host and a container through Docker Desktop's bind mount.
+
+The record of a file holds its size, modification time, inode and SHA-256. provcat hashes the file again when the time or the inode changed, as after a copy of the cache. A rewrite in place that keeps all three is not noticed.
 
 A fetch can rewrite a cached file in place when a branch moves. So do not mount a cached path into a container. Mount a snapshot instead. `Catalog.snapshot(uri)` pins the URI, fetches that version, and copies it into `<cache>/.provcat/snapshots/<kind>/<sha256>/<name>`. The kind is `file` or `folder`, the folder name is the SHA-256 of the content, and the copy is read-only. Before provcat uses a snapshot again, it checks the digest, and it replaces a snapshot that someone changed.

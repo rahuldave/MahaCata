@@ -304,17 +304,50 @@ def plain_name(value: Any, *, declared: Collection[str] = ()) -> bool:
                    or (t.count("/") > 1 and t not in declared) for t in texts)
 
 
-#: The keys whose value is a model's name, which may have more than one ``/``.
-MODEL_KEYS = frozenset({"model", "gen_ai.request.model", "gen_ai.response.model", "mlflow.llm.model"})
+#: The keys of a library's span whose value is a model's name, which may have
+#: more than one ``/``. A library's plain ``model`` key may hold anything, such
+#: as a folder of weights, so it is not one of them.
+MODEL_KEYS = frozenset({"gen_ai.request.model", "gen_ai.response.model", "mlflow.llm.model"})
+
+#: The keys of provrun's own events and settings whose value is a model's
+#: name: MODEL_KEYS, ``model``, which a run file names, and ``answered_by``,
+#: the model that the provider says answered.
+RUN_MODEL_KEYS = MODEL_KEYS | {"model", "answered_by"}
 
 
-def plain_attribute(key: str, value: Any) -> bool:
+def plain_attribute(key: str, value: Any, *, model_keys: Collection[str] = MODEL_KEYS) -> bool:
     """True if value is a plain name for key. A model's name, under one of
-    MODEL_KEYS, may have more than one ``/``, as
-    ``openrouter/meta-llama/llama-3-70b`` or a Vertex model's path has. Any
-    other value is a plain name as plain_name says."""
-    declared = [value] if key in MODEL_KEYS and isinstance(value, str) else []
+    model_keys, may have more than one ``/``, as
+    ``openrouter/meta-llama/llama-3-70b`` or a Vertex model's path has, and so
+    may each name in a list of them. Any other value is a plain name as
+    plain_name says. Pass RUN_MODEL_KEYS for provrun's own events."""
+    declared: list[str] = []
+    if key in model_keys:
+        if isinstance(value, str):
+            declared = [value]
+        elif isinstance(value, (list, tuple)):
+            declared = [v for v in value if isinstance(v, str)]
     return plain_name(value, declared=declared)
+
+
+# An experiment's URI, or its pin: experiment://, then parts of name
+# characters, then perhaps ?at=commit: and a hash.
+_EXPERIMENT = re.compile(r"experiment://([A-Za-z0-9_][A-Za-z0-9_.-]{0,199}/){0,15}[A-Za-z0-9_][A-Za-z0-9_.-]{0,199}"
+                         r"(\?at=commit:[0-9a-f]{7,128})?")
+
+
+def plain_experiment(value: Any) -> bool:
+    """True if value is an experiment's URI or pin that a place below bodies
+    may get, such as ``experiment://acme/risk/dev/credit/q?at=commit:7311e8...``.
+    Its path, and each part of it, is a plain name, though the path may have
+    more than one ``/``, and the pin names a commit. A URI with a branch, a
+    host or any other setting is not plain."""
+    if not isinstance(value, str) or _EXPERIMENT.fullmatch(value) is None:
+        return False
+    path = value[len("experiment://"):].split("?", 1)[0]
+    # A host's name is caught only before a "/", so each part is tested with one after it.
+    return (plain_name(path, declared=[path]) and plain_name(path + "/x", declared=[path + "/x"])
+            and all(plain_name(p) for p in path.split("/")))
 
 
 def plain_span_name(name: Any) -> bool:

@@ -21,7 +21,11 @@ time or the inode differs, as after the cache was copied, the file is hashed
 again and kept if the hash matches. On Linux a time's tick can be a few
 milliseconds, so the inode tells apart two files of one size from one tick.
 Writes of one key take its lock, so the last record describes the last file,
-and a read that saw the record change while it looked returns nothing. If anything else changed the bytes, the file is fetched again.
+and a read that saw the record change while it looked returns nothing. If the
+size differs, or the bytes differ from the hash, the file is fetched again. A
+rewrite in place that keeps the size, the time and the inode, as
+``rsync --inplace -t`` makes, is not noticed. The locks need a filesystem with
+``flock``, such as a local disk. On a share without it, every write fails.
 
 Two names that differ only in case or in Unicode form land in one file on macOS
 and Windows. ``find_twins`` finds such names, and the stores refuse a folder

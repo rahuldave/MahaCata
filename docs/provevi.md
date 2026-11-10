@@ -229,7 +229,9 @@ The list of schemes cannot hold every one, so a scheme that is not on it passes,
 
 A shape test cannot catch every path. A path with one `/` to a file of another name passes under any key, such as `x/notes`. A model's name may have more than one `/`, so under a model key a deeper path passes too, such as `scratch/x/notes`. One word passes, such as `id_rsa` or `.env`.
 
-Some model names have more than one `/`, such as `openrouter/meta-llama/llama-3-70b` or a Vertex model's path. So `plain_name(value, declared=[...])` lets a text in `declared` have more, though it must pass every other test. `plain_attribute(key, value)` declares the value when its key names a model, such as `gen_ai.request.model`. The keys are in `MODEL_KEYS`. The copy in MLflow checks each setting and attribute with `plain_attribute`. A mapping, such as MLflow's token usage, goes in only if each of its keys is a plain name.
+Some model names have more than one `/`, such as `openrouter/meta-llama/llama-3-70b` or a Vertex model's path. So `plain_name(value, declared=[...])` lets a text in `declared` have more, though it must pass every other test. `plain_attribute(key, value)` declares the value when its key names a model, such as `gen_ai.request.model`, and declares each name in a list under such a key. The keys are in `MODEL_KEYS`.
+
+A library's plain `model` key is not one of them, as it may hold anything, such as a folder of weights. provrun's own `model` key names the run file's model, so the copy's settings and the live feed's events use `RUN_MODEL_KEYS`. It adds `model`, and `answered_by`, the model that the provider says answered. The copy in MLflow checks each setting and attribute with `plain_attribute`. A mapping, such as MLflow's token usage, goes in only if each of its keys is a plain name.
 
 `plain_name` also refuses a common API key or token, by its start and the run of characters after it. Examples are `sk-…` keys, Stripe's `sk_live_…`, GitHub's `ghp_…`, Slack's `xoxb-…`, AWS's `AKIA…`, Hugging Face's `hf_…` and JSON web tokens, `eyJ…`. A name such as `hf_transfer` or `sk-learn` is too short to be a key, so it stays plain. A shape test cannot catch every secret, so a secret written as a plain word still passes. It also refuses a name such as `ns:model@tag`, which looks like `user:password@host`. A number and a yes or no are plain.
 
@@ -444,11 +446,13 @@ The feed is a list of items, each a JSON object with a `type` and `n`, its numbe
 `shown_at(event, level, record=None)` gives the `event` item of one event, or `None` when the level is `None`:
 
 - Below `bodies`, the item keeps only the data under keys that hold names or counts, such as `model`, `status`, `sha256` and `input_tokens`. Any other key stays out. It may hold what a person or a model wrote, such as a note's text, a purpose or a file's name.
-- At `names`, a listed key's value shows if it passes `plain_attribute`. The component and the actor show if each is a plain name. A library span's attributes are cut as for any destination, and its name shows if `plain_span_name` says so.
+- At `names`, a listed key's value shows if it passes `plain_attribute` with `RUN_MODEL_KEYS`. A run's `parent_run` is one of the listed keys. Its `experiment` and `experiment_pin` show if `plain_experiment` says so. It allows only an `experiment://` URI of plain parts, with no selector or with `?at=commit:` and a hash, so a URI that names a branch stays out. The component and the actor show if each is a plain name. A library span's attributes are cut as for any destination, and its name shows if `plain_span_name` says so.
 - `usage` adds the counts and timings, such as token counts, and the usage attributes of a library's span. A mapping among them shows only if each of its keys is a plain name.
 - `bodies` adds all the data, the refs, the component and the actor. With `record`, it adds the payload too.
 
 `replay(store, run_id, level)` gives the feed of a run that has ended, from its evidence, so a viewer that connects after the end sees the same items. It checks the run's chain first, before the first item. It refuses a run that does not verify, and a run that has not ended does not verify. Each answer comes as one `text` item, the whole answer of one model call. A stream that failed part way gives its text so far, after its `step_failed` event.
+
+A live feed builds its `text` items with the same two functions as `replay`. `payload_of(record, digest)` reads one payload of a run, as JSON if it is JSON, or else as text. `answer_of(payload)` gives the text of a model call's answer from its payload, or `None` when the payload holds no answer. `payload_of` cuts nothing by level, so only `shown_at` and `replay` decide what a viewer sees.
 
 A run that provrun cancelled ends with `run_failed`, whose error is `CancelledError`, and replays as `cancelled`. `folder=` names the run's evidence folder. The file store finds it by itself when it is left out. Step 8 of [the tour](provevi-tour.md) replays a run.
 

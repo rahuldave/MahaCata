@@ -352,6 +352,25 @@ run_completed            span_id trace_id
 
 At `names`, the feed kept only the keys that hold names, such as `model` and `status`. The purpose, the file's name, the paths, the spec and the token counts stayed out. At `bodies`, it adds them, and the model's answer as a `text` item. [The reference](provevi.md#show-a-run-to-a-live-viewer) says what each level shows.
 
+A run's experiment and its parent run show at `names` too, when they are plain. An experiment's URI shows with no selector, or pinned to a commit. One that names a branch stays out, as a branch's name may hold any text:
+
+```python
+from provevi import EvidenceEvent, shown_at
+
+pin = "experiment://acme/risk/dev/credit/revenue?at=commit:7311e8221f7268c0"
+for data in ({"agent": "q", "experiment": "experiment://acme/risk/dev/credit/revenue", "experiment_pin": pin,
+              "parent_run": "run-20261109T221005Z-0a1b2c3d"},
+             {"agent": "q", "experiment": "experiment://acme/risk/dev/credit/revenue?at=branch:jane-review"}):
+    event = EvidenceEvent("run-20261109T221010Z-4e5f6a7b", 0, "2026-11-09T22:10:10.000000Z", "run_created",
+                          "RunContext", "you", (), data)
+    print(shown_at(event, "names")["data"])
+```
+
+```
+{'agent': 'q', 'experiment': 'experiment://acme/risk/dev/credit/revenue', 'experiment_pin': 'experiment://acme/risk/dev/credit/revenue?at=commit:7311e8221f7268c0', 'parent_run': 'run-20261109T221005Z-0a1b2c3d'}
+{'agent': 'q'}
+```
+
 ## Write an experiment in the catalog
 
 An experiment is a folder in the catalog that holds `experiment.yaml`, and each commit of the folder is a version. It says what every run shares, such as the eval set and the metrics. It holds no agent spec, so one experiment can try many agents. This program writes one twice, in an S3 bucket that moto mocks, and reads both versions:

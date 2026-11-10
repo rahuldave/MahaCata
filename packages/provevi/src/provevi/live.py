@@ -37,7 +37,7 @@ from .checks import verify
 from .errors import ProveviError
 from .events import EvidenceEvent
 from .store import EvidenceStore, RunRecord
-from .telemetry import LEVELS, attributes_for, plain_attribute, plain_name, plain_span_name
+from .telemetry import LEVELS, RUN_MODEL_KEYS, attributes_for, plain_attribute, plain_experiment, plain_name, plain_span_name
 
 # A library's span, whose data holds its own attributes.
 _SPAN = "span_recorded"
@@ -49,8 +49,11 @@ _SPAN = "span_recorded"
 _NAME_KEYS = frozenset({
     "agent", "backend", "model", "answered_by", "tool", "org", "domain", "env", "mode", "decision", "status",
     "kind", "sha256", "finish_reason", "streamed", "unchanged", "library", "grant_id", "policy",
-    "trace_id", "span_id", "parent_span_id", "started_at",
+    "trace_id", "span_id", "parent_span_id", "started_at", "parent_run",
 })
+# The keys that hold an experiment's URI or pin, which show if plain_experiment
+# says so.
+_EXPERIMENT_KEYS = frozenset({"experiment", "experiment_pin"})
 # The keys whose numbers a viewer at usage may see: counts and timings.
 _USAGE_KEYS = frozenset({"input_tokens", "output_tokens", "first_token_ms", "duration", "size", "messages",
                          "pieces", "start_time", "end_time"})
@@ -79,7 +82,9 @@ def _shown_data(event: EvidenceEvent, level: str) -> dict:
         elif k in _USAGE_KEYS:
             if level == "usage" and _number(v):
                 data[k] = v
-        elif k in _NAME_KEYS and not _number(v) and plain_attribute(k, v):
+        elif k in _NAME_KEYS and not _number(v) and plain_attribute(k, v, model_keys=RUN_MODEL_KEYS):
+            data[k] = v
+        elif k in _EXPERIMENT_KEYS and plain_experiment(v):
             data[k] = v
     return data
 
@@ -96,7 +101,7 @@ def shown_at(event: EvidenceEvent, level: str | None, record: RunRecord | None =
     if level == "bodies":
         item.update(component=event.component, actor=event.actor, data=dict(event.data), refs=list(event.refs))
         if event.payload and record is not None:
-            item["payload"] = _payload(record, event.payload)
+            item["payload"] = payload_of(record, event.payload)
         return item
     # provrun names some components after a tool that the model asked for.
     if plain_name(event.component):
@@ -107,17 +112,20 @@ def shown_at(event: EvidenceEvent, level: str | None, record: RunRecord | None =
     return item
 
 
-def _payload(record: RunRecord, digest: str) -> Any:
+def payload_of(record: RunRecord, digest: str) -> Any:
+    """The payload that digest names in record: its JSON if it is JSON, else
+    its text, with any bytes that are not UTF-8 replaced, or None if record
+    does not hold it. It cuts nothing by level, as shown_at and replay do."""
     raw = record.payload_bytes(digest)
     if raw is None:
         return None
     try:
         return json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):  # JSON nested too deep to parse is kept as text
         return raw.decode("utf-8", errors="replace")
 
 
-def _answer(payload: Any) -> str | None:
+def answer_of(payload: Any) -> str | None:
     """The text of a model call's answer, from its payload: a text from
     LiteLLM, or PydanticAI's messages, whose text parts are joined. A stream
     that failed part way keeps the text so far as ``partial_response``."""
@@ -133,6 +141,10 @@ def _answer(payload: Any) -> str | None:
                  if isinstance(p, dict) and p.get("part_kind") == "text" and isinstance(p.get("content"), str)]
         return "".join(parts) if parts else None
     return None
+
+
+# The private names that provrun imported before these were public.
+_payload, _answer = payload_of, answer_of
 
 
 def replay(store: EvidenceStore, run_id: str, level: str, *, folder: Path | None = None) -> Iterator[dict]:
@@ -158,7 +170,7 @@ def _items(events: list[EvidenceEvent], record: RunRecord, level: str, run_id: s
     for e in events:
         items.append(shown_at(e, level, record))
         if level == "bodies" and e.type in ("model_called", "step_failed") and e.payload:
-            text = _answer(_payload(record, e.payload))
+            text = answer_of(payload_of(record, e.payload))
             if text:
                 items.append({"type": "text", "text": text})
     items.append({"type": "done", "status": _status(events[-1]), "run_id": run_id})
