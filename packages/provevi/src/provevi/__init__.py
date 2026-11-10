@@ -23,7 +23,7 @@ from .checks import (ENDINGS, RunCheck, bundle_pin, read_events, verify, verify_
 from .errors import CannotReadBack, EvidenceError, ProveviError, RunNotFound
 from .events import CONFIDENCE, EvidenceEvent, canonical, now, sha256_bytes
 from .experiments import KINDS, Experiment, PinnedExperiment, read_experiment, write_experiment
-from .live import replay, shown_at
+from .live import answer_of, payload_of, replay, shown_at
 from .runs import default_runs_root, find_run, list_runs
 from .sqlite import SCHEMA_VERSION, SqliteRecord, SqliteRunWriter, SqliteStore
 from .telemetry import (BLOCKED, LEVELS, MLFLOW_DATABASES, MODEL_KEYS, PROBLEM, RUN_MODEL_KEYS, Destination, Library, TelemetryPolicy,
@@ -37,7 +37,7 @@ __all__ = [
     "FileStore", "FolderRecord", "JsonlSink", "PayloadStore", "ProveviError", "RunCheck", "RunNotFound", "RunRecord",
     "RunWriter", "Sink", "SqliteRecord", "SqliteRunWriter", "SqliteStore", "bundle_pin", "canonical", "check_store_uri",
     "default_runs_root", "find_run", "list_runs", "now", "open_store", "read_events", "replay", "sha256_bytes",
-    "shown_at", "verify",
+    "shown_at", "answer_of", "payload_of", "verify",
     "verify_against", "verify_bundle", "verify_experiment", "verify_outputs", "verify_run", "verify_store_copy",
     "KINDS", "Experiment", "PinnedExperiment", "read_experiment", "write_experiment",
     "BLOCKED", "LEVELS", "MLFLOW_DATABASES", "PROBLEM", "MODEL_KEYS", "RUN_MODEL_KEYS", "Destination", "Library", "TelemetryPolicy", "attributes_for",

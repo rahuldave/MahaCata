@@ -282,3 +282,29 @@ def test_below_bodies_the_run_s_own_model_may_have_two_slashes_but_a_span_s_plai
     assert shown_at(called, "names")["data"] == {"model": model, "answered_by": model}
     span = event("span_recorded", {"name": "chat", "attributes": {"model": model, "gen_ai.request.model": model}})
     assert shown_at(span, "names")["data"]["attributes"] == {"gen_ai.request.model": model}
+
+
+def test_the_answer_and_payload_readers_are_public(tmp_path):
+    import provevi.live as live
+    from provevi import answer_of, payload_of
+
+    assert live._answer is answer_of and live._payload is payload_of  # provrun's earlier imports keep working
+    assert answer_of({"response": "4"}) == "4" and answer_of({"partial_response": "fo"}) == "fo"
+    assert answer_of("not a payload") is None
+
+    class Record:
+        def payload_bytes(self, digest):
+            return {"a": b'{"response": "4"}', "b": b"plain"}.get(digest)
+
+    assert payload_of(Record(), "a") == {"response": "4"} and payload_of(Record(), "b") == "plain"
+    assert payload_of(Record(), "c") is None
+
+
+def test_a_payload_nested_too_deep_for_json_is_read_as_text():
+    from provevi import payload_of
+
+    class Record:
+        def payload_bytes(self, digest):
+            return b"[" * 100000
+
+    assert payload_of(Record(), "a") == "[" * 100000

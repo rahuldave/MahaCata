@@ -452,6 +452,8 @@ The feed is a list of items, each a JSON object with a `type` and `n`, its numbe
 
 `replay(store, run_id, level)` gives the feed of a run that has ended, from its evidence, so a viewer that connects after the end sees the same items. It checks the run's chain first, before the first item. It refuses a run that does not verify, and a run that has not ended does not verify. Each answer comes as one `text` item, the whole answer of one model call. A stream that failed part way gives its text so far, after its `step_failed` event.
 
+A live feed builds its `text` items with the same two functions as `replay`. `payload_of(record, digest)` reads one payload of a run, as JSON if it is JSON, or else as text. `answer_of(payload)` gives the text of a model call's answer from its payload, or `None` when the payload holds no answer. `payload_of` cuts nothing by level, so only `shown_at` and `replay` decide what a viewer sees.
+
 A run that provrun cancelled ends with `run_failed`, whose error is `CancelledError`, and replays as `cancelled`. `folder=` names the run's evidence folder. The file store finds it by itself when it is left out. Step 8 of [the tour](provevi-tour.md) replays a run.
 
 ## The command `prove`
