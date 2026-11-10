@@ -68,7 +68,7 @@ _tour_start() {
               $(env | grep -Eo '^(OTEL|LOGFIRE|MLFLOW|LITELLM)_[A-Za-z0-9_]*=' | tr -d =); do
     unset "$name"
   done
-  cp tours/provrun/provcat.yaml tours/provrun/run.yaml tours/provrun/policy.yaml tours/provrun/mlflow.yaml \
+  cp tours/provrun/provcat.yaml tours/provrun/run.yaml tours/provrun/policy.yaml tours/provrun/mlflow.yaml tours/provrun/live.yaml \
     tours/provrun/agent.yaml "$TOUR_DIR/" || return 1
   export PROVCAT_CONFIG="$TOUR_DIR/provcat.yaml" PROVCAT_CACHE="$TOUR_DIR/cache" PROVRUN_RUNS="$TOUR_DIR/runs"
   # moto takes any keys.

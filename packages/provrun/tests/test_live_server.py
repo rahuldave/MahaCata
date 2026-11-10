@@ -6,6 +6,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from provevi import TelemetryPolicy
 
 from provrun import read_events
 
@@ -34,7 +35,8 @@ def load():
 def app(tmp_path, docs, catalog, runs):
     f = tmp_path / "run.yaml"
     f.write_text(RUN.replace("INPUT", f"file://{docs}/report.txt"))
-    return load().make_app(f, catalog=catalog, runs_root=runs)
+    viewer = TelemetryPolicy.from_dict({"version": 1, "destinations": {"browser": {"kind": "live", "receives": "names"}}})
+    return load().make_app(f, catalog=catalog, runs_root=runs, policy=viewer)
 
 
 def items(text):

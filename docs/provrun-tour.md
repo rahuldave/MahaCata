@@ -85,7 +85,7 @@ Add `--online` to run Steps 15 and 16 too, which call a real model. The script s
 | `tours/provrun/collector.py` | The collector of Step 12. |
 | `tours/provrun/mlflow.yaml` | The telemetry policy of Step 13, with an MLflow destination. |
 | `tours/provrun/agent.yaml` | The PydanticAI agent of Step 15, which needs a real model. |
-| `tours/provrun/follow.py` | The program of Step 14 that follows a run's live feed. |
+| `tours/provrun/follow.py`, `live.yaml` | The program of Step 14 that follows a run's live feed, and the policy that names its viewer. |
 | `tours/provrun/streamed.py` | The streamed PydanticAI agent of Step 16, which needs a real model, or `PROVRUN_TOUR_MODEL=test`. |
 | `tours/provrun/field.py`, `event.py`, `spans.py`, `event_types.py`, `mlflow_spans.py`, `modes.py`, `drop_event.py` | Small helpers that print one field of a run's output or evidence, or change the evidence. |
 
@@ -476,6 +476,11 @@ $ uv run python tours/provrun/event.py $R4 run_created telemetry
     }
   ],
   "imported_before": [],
+  "live": {
+    "destination": null,
+    "feed": false,
+    "receives": null
+  },
   "overridden": {
     "LITELLM_MODE": "DEV"
   },
@@ -757,27 +762,42 @@ Revenue in 2025 was 42 million.
 - `model_called` says `streamed`, with the tokens in and out from the stream's last chunk, and why the model stopped. It also holds `first_token_ms`, the milliseconds to the first piece, which differs on each run, so the step does not print it.
 - `response.txt` holds the whole reply, as for a run that does not stream.
 
-A program can watch a run as it goes, through the run's live feed. The script `follow.py` starts the same run with `start_run`, and prints each item of the feed as it comes:
+A program can watch a run as it goes, through the run's live feed. The telemetry policy decides what a viewer sees, as the level of its destination of kind `live`. With no such destination, a viewer sees only the end. This policy names a viewer, `browser`, that receives `names`. The script `follow.py` starts the same run under it with `start_run`, and prints each item of the feed as it comes, with the keys of the data it shows:
 
 ```
-$ uv run python tours/provrun/follow.py $TOUR_DIR/stream.yaml
-1 event run_created
-2 event access_requested
-3 event access_granted
-4 event context_resolved
-5 event snapshot_materialized
-6 event input_staged
-7 event sandbox_started
+$ cat $TOUR_DIR/live.yaml
+# The tour's policy, with a viewer of the live feed that receives names.
+version: 1
+libraries:
+  litellm:
+    versions: "==1.83.0"
+destinations:
+  browser:
+    kind: live
+    receives: names
+hosts:
+  - api.openai.com
+
+$ PROVRUN_TELEMETRY_POLICY=$TOUR_DIR/live.yaml uv run python tours/provrun/follow.py $TOUR_DIR/stream.yaml
+1 event run_created agent backend domain env mode org span_id trace_id
+2 event access_requested mode
+3 event access_granted decision grant_id mode policy
+4 event context_resolved grant_id parent_span_id span_id started_at trace_id
+5 event snapshot_materialized kind parent_span_id sha256 span_id started_at trace_id
+6 event input_staged kind parent_span_id sha256 span_id started_at trace_id
+7 event sandbox_started agent backend model
 8 event prompt_rendered
-9 event model_called
-10 event sandbox_completed
-11 event input_verified
-12 event output_artifact_created
-13 event run_completed
+9 event model_called finish_reason model parent_span_id span_id started_at streamed trace_id
+10 event sandbox_completed status
+11 event input_verified parent_span_id sha256 span_id started_at trace_id unchanged
+12 event output_artifact_created parent_span_id sha256 span_id started_at trace_id
+13 event run_completed span_id trace_id
 14 done completed
 ```
 
-Each event of the run is one item, in order, and the last item says how the run ended. The feed shows the `names` level, so it holds no text and no event data. [provrun's page](provrun.md#watch-a-run-as-it-goes) says how a server sends the feed on.
+Each event of the run is one item, in order, and the last item says how the run ended. At `names`, an event shows only the data that holds names, such as `model` and `streamed`, and only when the value is a plain name. It shows no counts, such as the tokens, and no text.
+
+A viewer that receives `usage` also gets the counts. One that receives `bodies` gets all the data, each event's payload and the pieces of the reply as they come. A program that connects after the end gets the same event items from provevi's `replay`. [provrun's page](provrun.md#watch-a-run-as-it-goes) says how a server sends the feed on.
 
 ## Step 15: Call a real model (needs ANTHROPIC_API_KEY)
 

@@ -133,26 +133,37 @@ outcome = await live.result()
 
 `start_run` takes the same arguments as `run_file`. It starts the run as a task, and returns at once. The feed gives numbered items in the order the run made them:
 
-- `{"n": 1, "type": "event", "event": "run_created", "seq": 0, "time": ..., "component": ...}` for each evidence event;
+- `{"n": 1, "type": "event", "run_id": ..., "seq": 0, "time": ..., "event": "run_created", "data": {...}}` for each evidence event, as provevi's `shown_at` cuts it;
 - `{"n": 8, "type": "text", "text": "Revenue "}` for each piece of a streamed reply, at the `bodies` level only;
-- `{"n": 14, "type": "done", "status": "completed", "run_id": ...}` last. The status says how the run's task ended, as `completed`, `failed` or `cancelled`. The run ID is `null` for a run that ended before it opened.
+- `{"n": 14, "type": "done", "status": "completed", "run_id": ...}` last. The status is `completed`, `failed` or `cancelled`, as the run's last event says. A run that ended before it opened has no events, so its status is that of its task, and its run ID is `null`.
 
-For now the feed shows only the `names` level. An event shows its type, number and time, and its component when that is a plain name. The feed holds no event data and no text pieces. The run's telemetry policy will set the level, once provevi can name a live viewer in it. [Step 14 of the tour](provrun-tour.md#step-14-ask-for-the-reply-in-pieces) follows a run.
+The run's telemetry policy sets the level, as the level of its destination of kind `live`. A run file's `telemetry` section can lower it, or leave the viewer out. A policy with no live viewer shows nothing but the `done` item. [provevi's page](provevi.md#show-a-run-to-a-live-viewer) says what each level shows:
+
+- At `names`, an event shows its data under keys that hold names, such as `model` and `status`, when each value is a plain name. Its component and actor show when they are plain names.
+- `usage` adds the counts and timings, such as the tokens in and out.
+- `bodies` adds all the data, the refs, and the payload, read from the run's evidence as it is written. Only `bodies` gets the pieces of a streamed reply. The feed keeps each payload in memory, as it keeps every item, so a run with large payloads makes a large feed.
+
+The event items are those that provevi's `replay` gives from the evidence once the run has ended. So a viewer that comes after the end can read them from the evidence instead, with the same numbers below `bodies`. At `bodies`, `replay` gives each answer as one `text` item, where the live feed gives the pieces of a streamed reply as they come. A reply that does not stream shows only in its event's payload.
+
+`run_created` records the live viewer under `telemetry.live`, with its destination and its level. Its `feed` says whether the run had a feed. [Step 14 of the tour](provrun-tour.md#step-14-ask-for-the-reply-in-pieces) follows a run.
 
 Each viewer gets the items from the first, unless it is dropped. `follow(after=n)` starts after item `n`, so a viewer that comes back gets what it missed. A viewer that stops following only stops. The run goes on, and its evidence is sealed as always.
 
 A viewer that falls behind by more than 1000 items is dropped. It gets each item it was given, then `{"type": "dropped"}`, so `follow(after=n)`, with `n` the last item it got, goes on with no gap. The run never waits for a viewer, and an error in the feed never fails a run.
 
-`live.cancel()` cancels the run. A run that has opened ends with `run_failed`, unless it was being sealed. A run being sealed ends as it was, and its feed shows the end event and then `cancelled`. `live.result()` then raises `CancelledError`. A run cancelled before it opened leaves no run folder and no evidence.
+`live.cancel()` cancels the run. A run that has opened ends with `run_failed`, unless it was being sealed. A run being sealed ends as it was sealed, and its `done` item says so, as `replay` does. `live.result()` then raises `CancelledError`. A run cancelled before it opened leaves no run folder and no evidence.
 
 The feed lives only as long as the program. The evidence is the lasting record.
 
 `packages/provrun/examples/live_server.py` is a small FastAPI server that sends a run's feed to a browser, as server-sent events. The server runs only the run file it was started with, so a browser cannot name a file on the server:
 
 ```
+PROVRUN_TELEMETRY_POLICY=packages/provrun/examples/live-policy.yaml \
 PROVRUN_LIVE_RUN_FILE=packages/provrun/examples/file-run.yaml \
     uv run uvicorn --app-dir packages/provrun/examples live_server:app --port 8001
 ```
+
+`live-policy.yaml` names one viewer, `browser`, that receives `names`, and sends nothing anywhere else. Without a policy that names a viewer, the browser sees only the end.
 
 Open `http://127.0.0.1:8001/` and press Start, or use its three routes:
 
@@ -166,13 +177,13 @@ Open `http://127.0.0.1:8001/` and press Start, or use its three routes:
 
 ```
 $ curl -s -X POST http://127.0.0.1:8001/runs
-{"key":"949930b3c34d4ad7bbd5c0dc3396d0e5"}
-$ curl -s -N http://127.0.0.1:8001/runs/949930b3c34d4ad7bbd5c0dc3396d0e5/events
+{"key":"1e48a476bcac4f49a1cffa073203b22c"}
+$ curl -s -N http://127.0.0.1:8001/runs/1e48a476bcac4f49a1cffa073203b22c/events
 id: 1
-data: {"n": 1, "type": "event", "event": "run_created", "seq": 0, "time": "2026-11-03T21:36:47.739192Z", "component": "RunContext"}
+data: {"n": 1, "type": "event", "run_id": "run-20261110T013118Z-e2530b45", "seq": 0, "time": "2026-11-10T01:31:18.331972Z", "event": "run_created", "component": "RunContext", "actor": "you@example.com", "data": {"agent": "revenue-question", "backend": "litellm", "domain": "demo", "env": "dev", "mode": "lenient", "org": "acme", "span_id": "e9baa139f1665c25", "trace_id": "9ea1570d895302e475420b61fa664e2c"}}
 
 id: 2
-data: {"n": 2, "type": "event", "event": "access_requested", "seq": 1, "time": "2026-11-03T21:36:47.740073Z", "component": "StubBroker"}
+data: {"n": 2, "type": "event", "run_id": "run-20261110T013118Z-e2530b45", "seq": 1, "time": "2026-11-10T01:31:18.332674Z", "event": "access_requested", "component": "StubBroker", "actor": "you@example.com", "data": {"mode": "mounted_snapshot"}}
 ```
 
 The page closes its event source on the `done` item. A client that does not close it reconnects after the end, and gets an empty stream each time.
@@ -376,6 +387,7 @@ When the last run that is going on ends, LiteLLM's lists get back what they held
 | `imported_before` | The libraries the program imported before the run. |
 | `destinations` | Each place that the variables name, and whether the run sends to it, as below. |
 | `redirects` | The proxy and Postgres variables that were set, by name only, as below. |
+| `live` | The policy's live viewer, `destination` and `receives`, both `null` with none, and `feed`, whether the run had a live feed. [Watch a run as it goes](#watch-a-run-as-it-goes) says more. |
 
 **Problems.** A problem is something that sends past the policy, or may, and that provrun cannot turn off. As a run starts, a problem fails a strict run before the run folder is made. In lenient mode, the run warns, and `run_created` lists it under `problems`.
 

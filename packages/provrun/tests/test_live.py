@@ -1,7 +1,9 @@
 """The live feed of a run: start_run, follow and result, with no network and no keys."""
 import asyncio
+import json
 
 import pytest
+from provevi import TelemetryPolicy, replay
 
 from provrun import RunFile
 from provrun import live as live_module
@@ -30,8 +32,13 @@ def rf(tmp_path, docs):
     return RunFile.load(f)
 
 
-def kw(catalog, runs):
-    return {"catalog": catalog, "runs_root": runs}
+def watched(level):
+    """A policy whose live viewer receives level."""
+    return TelemetryPolicy.from_dict({"version": 1, "destinations": {"browser": {"kind": "live", "receives": level}}})
+
+
+def kw(catalog, runs, level="names"):
+    return {"catalog": catalog, "runs_root": runs, "policy": watched(level)}
 
 
 async def collect(it):
@@ -51,9 +58,11 @@ def test_a_viewer_sees_each_event_in_order_and_then_the_end(rf, catalog, runs):
     assert [i["event"] for i in events] == [e.type for e in read_events(out.folder / "evidence")]
     assert [i["seq"] for i in events] == list(range(len(events)))  # steps in threads keep their order
     assert items[-1] == {"n": len(items), "type": "done", "status": "completed", "run_id": out.run_id}
-    # The names level: no text, and no data.
+    # The names level: no text, and only names in the data.
     assert not [i for i in items if i["type"] == "text"]
-    assert all(set(i) <= {"n", "type", "event", "seq", "time", "component"} for i in events)
+    assert all(set(i) <= {"n", "type", "run_id", "event", "seq", "time", "component", "actor", "data"} for i in events)
+    called = next(i for i in events if i["event"] == "model_called")
+    assert called["data"]["model"] == "openai/gpt-4o-mini" and "input_tokens" not in called["data"]
 
 
 def test_a_late_viewer_gets_the_same_items_and_can_start_after_one(rf, catalog, runs):
@@ -187,9 +196,9 @@ def test_at_the_bodies_level_the_feed_carries_the_pieces_in_order(catalog, runs,
                       inputs=[InputSpec(f"file://{docs}/report.txt")])
 
     async def go():
-        feed = LiveFeed(asyncio.get_running_loop(), level="bodies")
+        feed = LiveFeed(asyncio.get_running_loop())
         out = await run_agent(agent, catalog=catalog, runs_root=runs, org="acme", domain="b", env="dev",
-                              actor="t", feed=feed)
+                              actor="t", feed=feed, policy=watched("bodies"))
         await asyncio.sleep(0)  # let the last items reach the loop
         return feed.items, out
 
@@ -228,3 +237,114 @@ def test_a_viewer_that_starts_after_the_end_of_a_running_run_is_not_left_waiting
 
     items, out = asyncio.run(go())
     assert items == [] and out.status == "completed"
+
+
+@pytest.mark.parametrize("level", ["names", "usage"])
+def test_below_bodies_the_feed_gives_the_items_that_replay_gives_after_the_end(rf, catalog, runs, level):
+    async def go():
+        live = start_run(rf, **kw(catalog, runs, level))
+        items = await collect(live.follow())
+        return items, await live.result()
+
+    items, out = asyncio.run(go())
+    assert out.status == "completed", out.error
+    from provevi import FileStore
+
+    assert items == list(replay(FileStore(), out.run_id, level, folder=out.folder / "evidence"))
+    called = next(i for i in items if i.get("event") == "model_called")
+    assert ("input_tokens" in called["data"]) == (level == "usage")
+
+
+def test_at_bodies_the_events_are_those_of_replay_with_their_payloads(catalog, runs, rf):
+    async def go():
+        live = start_run(rf, **kw(catalog, runs, "bodies"))
+        items = await collect(live.follow())
+        return items, await live.result()
+
+    items, out = asyncio.run(go())
+    from provevi import FileStore
+
+    later = list(replay(FileStore(), out.run_id, "bodies", folder=out.folder / "evidence"))
+    strip = lambda xs: [{k: v for k, v in i.items() if k != "n"} for i in xs if i["type"] == "event"]  # noqa: E731
+    assert strip(items) == strip(later)
+    called = next(i for i in items if i.get("event") == "model_called")
+    assert "Revenue was 42 million." in json.dumps(called["payload"])
+
+
+def test_a_policy_with_no_live_viewer_shows_only_the_end(rf, catalog, runs):
+    async def go():
+        live = start_run(rf, catalog=catalog, runs_root=runs)
+        items = await collect(live.follow())
+        return items, await live.result()
+
+    items, out = asyncio.run(go())
+    assert items == [{"n": 1, "type": "done", "status": "completed", "run_id": out.run_id}]
+
+
+@pytest.mark.parametrize("section, live", [
+    ("{}", {"destination": None, "receives": None, "feed": True}),
+    ("{browser: {receives: names}}", {"destination": "browser", "receives": "names", "feed": True}),
+])
+def test_a_run_file_can_lower_the_level_and_run_created_records_the_viewer(tmp_path, docs, catalog, runs, section,
+                                                                            live):
+    f = tmp_path / "run.yaml"
+    f.write_text(RUN.replace("INPUT", f"file://{docs}/report.txt") + f"telemetry:\n  destinations: {section}\n")
+
+    async def go():
+        run = start_run(RunFile.load(f), **kw(catalog, runs, "bodies"))
+        items = await collect(run.follow())
+        return items, await run.result()
+
+    items, out = asyncio.run(go())
+    assert out.status == "completed", out.error
+    assert read_events(out.folder / "evidence")[0].data["telemetry"]["live"] == live
+    if live["receives"] is None:
+        assert [i["type"] for i in items] == ["done"]
+    else:  # names, though the policy's viewer receives bodies
+        assert not [i for i in items if i["type"] == "text"]
+        assert all("payload" not in i for i in items)
+
+
+def test_a_run_with_no_feed_records_that_it_had_none(rf, catalog, runs):
+    from provrun.runner import run_file_sync
+
+    out = run_file_sync(rf, **kw(catalog, runs, "usage"))
+    created = read_events(out.folder / "evidence")[0]
+    assert created.data["telemetry"]["live"] == {"destination": "browser", "receives": "usage", "feed": False}
+
+
+def test_a_run_cancelled_while_it_is_sealed_ends_its_feed_as_replay_does(rf, catalog, runs, monkeypatch):
+    # Review: the feed said cancelled, but the run was sealed as completed, and
+    # replay said completed.
+    import threading
+
+    from provevi import FileStore
+
+    from provrun.context import RunContext
+
+    sealing = threading.Event()
+    original = RunContext.finish
+
+    def slow(self, error=None):
+        sealing.set()
+        import time
+        time.sleep(0.5)
+        return original(self, error)
+
+    monkeypatch.setattr(RunContext, "finish", slow)
+
+    async def go():
+        live = start_run(rf, **kw(catalog, runs))
+        while not sealing.is_set():
+            await asyncio.sleep(0.01)
+        live.cancel()
+        items = await collect(live.follow())
+        with pytest.raises(asyncio.CancelledError):
+            await live.result()
+        return items
+
+    items = asyncio.run(go())
+    [folder] = list(runs.iterdir())
+    later = list(replay(FileStore(), folder.name, "names", folder=folder / "evidence"))
+    assert items[-1] == later[-1] and items[-1]["status"] == "completed"
+    assert items == later

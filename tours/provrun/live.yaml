@@ -1,0 +1,11 @@
+# The tour's policy, with a viewer of the live feed that receives names.
+version: 1
+libraries:
+  litellm:
+    versions: "==1.83.0"
+destinations:
+  browser:
+    kind: live
+    receives: names
+hosts:
+  - api.openai.com

@@ -128,7 +128,8 @@ show 'uv run provr run $TOUR_DIR/stream.yaml > $TOUR_DIR/r11.json'
 show 'R11=$(uv run python tours/provrun/field.py $TOUR_DIR/r11.json run_id)'
 show 'uv run python tours/provrun/event.py $R11 model_called streamed input_tokens output_tokens finish_reason'
 show 'cat $PROVRUN_RUNS/$R11/output/response.txt; echo'
-show 'uv run python tours/provrun/follow.py $TOUR_DIR/stream.yaml'
+show 'cat $TOUR_DIR/live.yaml'
+show 'PROVRUN_TELEMETRY_POLICY=$TOUR_DIR/live.yaml uv run python tours/provrun/follow.py $TOUR_DIR/stream.yaml'
 
 if [ "${1:-}" = "--online" ]; then
   step "Step 15: Call a real model (needs ANTHROPIC_API_KEY)"

@@ -131,15 +131,18 @@ async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org:
     with otel.run(run_id, agent.name) as root:
         ids = otel.ids(root)
         trace = {k: ids[k] for k in ("trace_id", "span_id") if k in ids}
+        if feed is not None:
+            feed.level = tel.policy.live_level()
         ctx = RunContext.open(org=org, domain=domain, env=env, actor=actor, broker=broker,
                               resolver=resolver or ProvcatResolver(catalog), catalog=catalog,
                               runs_root=runs_root, mode=mode, bundle_scheme=bundle_scheme, store=store,
                               run_id=run_id, trace=trace,
                               data={"agent": agent.name, "backend": agent.backend, "spec": agent.to_dict(),
-                                    "telemetry": tel.record()},
+                                    "telemetry": {**tel.record(), "live": _live(tel, feed)}},
                               sinks=[feed] if feed is not None else None)
         ctx.telemetry = tel
         if feed is not None:
+            feed.writer = ctx.recorder.writer
             ctx.on_text = feed.text
         tel.attach(ctx.recorder, trace.get("trace_id"))
         outcome, error = await _steps(ctx, agent, stager, backend)
@@ -148,6 +151,14 @@ async def _run_agent(agent: AgentSpec, tel: Telemetry, *, catalog: Catalog, org:
     if error is not None and not isinstance(error, Exception):
         raise error  # a cancel or an interrupt goes on after the run is recorded
     return outcome
+
+
+def _live(tel: Telemetry, feed: Any) -> dict:
+    """What run_created records of the live viewer: the policy's destination
+    of kind live and its level, and whether the run has a feed."""
+    viewer = next((d for d in tel.policy.destinations.values() if d.kind == "live"), None)
+    return {"destination": viewer.name if viewer is not None else None,
+            "receives": viewer.receives if viewer is not None else None, "feed": feed is not None}
 
 
 async def _in_thread(fn, *args) -> tuple[asyncio.Future, bool]:
