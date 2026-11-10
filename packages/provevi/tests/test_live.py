@@ -288,7 +288,7 @@ def test_the_answer_and_payload_readers_are_public(tmp_path):
     import provevi.live as live
     from provevi import answer_of, payload_of
 
-    assert live._answer is answer_of and live._payload is payload_of  # provrun's earlier imports keep working
+    assert not hasattr(live, "_answer") and not hasattr(live, "_payload")  # only the public names
     assert answer_of({"response": "4"}) == "4" and answer_of({"partial_response": "fo"}) == "fo"
     assert answer_of("not a payload") is None
 
