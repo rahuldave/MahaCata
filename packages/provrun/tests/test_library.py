@@ -9,7 +9,7 @@ from provrun import ProvrunError, RunFile, RunFileError, RunNotFound, RunSetting
 from provrun.access import AccessDenied
 from provrun.backends.litellm import LiteLLMBackend
 from provrun.cli import main as provr
-from provrun.evidence import EvidenceError
+from provrun.evidence import EvidenceError, read_events
 from provrun.stagers import InputCheckError
 
 GOOD = """
@@ -348,3 +348,16 @@ def test_provr_show_reads_from_the_store(tmp_path, runs, docs, capsys):
     sqlite3.connect(path, isolation_level=None).execute("DELETE FROM provevi_events WHERE seq > 0")
     assert provr(store + ["show", run_id]) == 0
     assert len(capsys.readouterr().out.splitlines()) == 1  # the store's one row, not the folder's lines
+
+
+def test_provr_run_takes_a_parent_run_that_is_in_the_store(tmp_path, runs, docs, capsys):
+    runfile = str(write(tmp_path, GOOD, docs))
+    assert provr(["--runs", str(runs), "run", runfile]) == 0
+    parent = json.loads(capsys.readouterr().out)["run_id"]
+    assert provr(["--runs", str(runs), "run", runfile, "--parent-run", parent]) == 0
+    child = json.loads(capsys.readouterr().out)["run_id"]
+    assert read_events(runs / child / "evidence")[0].data["parent_run"] == parent
+    before = sorted(p.name for p in runs.iterdir())
+    assert provr(["--runs", str(runs), "run", runfile, "--parent-run", "run-20260101T000000Z-0a1b2c3d"]) == 1
+    assert "not in the evidence store" in capsys.readouterr().err
+    assert sorted(p.name for p in runs.iterdir()) == before  # no run folder for the refused run

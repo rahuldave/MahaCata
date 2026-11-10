@@ -155,7 +155,7 @@ Model calls and tool calls inside PydanticAI must reach the recorder without hel
 
 ### Phase 2: resolver, broker and snapshots
 
-1. Write `Grant` and `StubBroker`. The stub grants a URI only if the URI is in the allow list of the run. The environment segment of the URI must also match the environment of the run. The stub grants only the mode `mounted_snapshot`. A physical URI, such as `file://`, has no environment segment, so the stub grants one only in `dev`.
+1. Write `Grant` and `StubBroker`. The stub grants a URI only if the URI is in the allow list of the run. The environment segment of the URI must also match the environment of the run. The stub grants only the mode `mounted_snapshot`. (Later, the stub also grants `pinned_read`, for the run's experiment, which provrun reads itself. [provrun's page](provrun.md#the-stub-broker) has the rules now.) A physical URI, such as `file://`, has no environment segment, so the stub grants one only in `dev`.
 2. Write `ProvcatResolver`. It calls `pin` and then makes a snapshot of the pinned version.
 3. Add snapshots to provcat as `Catalog.snapshot(uri)`, which returns a `Snapshot` with the pinned URI, the path and the SHA-256. A snapshot lives at `.provcat/snapshots/<kind>/<sha256>/<name>` in the cache, where the kind is file or folder. The SHA-256 is of the content. For a folder, it is the SHA-256 of a list of its files and their hashes. So two versions with the same kind, the same name and the same content share one snapshot. A snapshot is read-only. provcat reuses it only if its hash still matches, and replaces it otherwise. It is made with a copy-on-write clone where the disk has one, and with a copy elsewhere.
 

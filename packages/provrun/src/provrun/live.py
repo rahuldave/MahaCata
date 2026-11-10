@@ -23,9 +23,12 @@ kind ``live``, which a run file's ``telemetry`` section can lower. A policy
 with no such destination shows a viewer no event and no text, only the end.
 The event items are those that provevi's ``replay`` gives once the run has
 ended, so a viewer that comes late can read the evidence instead. A text item
-comes only from a streamed reply; at ``bodies``, each event's payload holds
-the whole reply. At ``bodies`` the feed reads each payload as its event is
-written, and keeps it, as it keeps every item, as long as the program runs.
+comes from each piece of a streamed reply; a reply that does not stream
+comes as one text item after its ``model_called`` event, as replay gives it.
+At ``bodies`` the feed keeps only the name of each payload, and reads the
+payload from the run's evidence as it hands the item to a viewer, so a large
+payload is not held in memory. The feed keeps every other item, with the
+pieces of each streamed reply, as long as the program runs.
 
 A viewer that falls behind by more than ``QUEUE`` items is dropped: it gets
 each item it was given, then ``{"type": "dropped"}``, and the run never waits
@@ -41,6 +44,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from provevi import LEVELS, EvidenceEvent, Sink, shown_at
+from provevi.live import _answer, _payload
 
 from .runner import RunOutcome, run_file
 from .spec import RunFile
@@ -64,6 +68,7 @@ class LiveFeed(Sink):
         self.ended = False
         self.run_id: str | None = None  # from the first event; a run that failed before it opened has none
         self.ending: str | None = None  # the status that the run's last event gives, once it is written
+        self._streamed = False  # whether a piece of a reply came since the last model call
         self._viewers: list[asyncio.Queue] = []
 
     def append(self, line: str) -> None:
@@ -79,13 +84,25 @@ class LiveFeed(Sink):
         self.run_id = self.run_id or event.run_id
         if event.type in ("run_completed", "run_failed"):
             self.ending = _status(event)
-        item = shown_at(event, self.level, _Payloads(self.writer))
-        if item is not None:
-            self.loop.call_soon_threadsafe(self._push, item)
+        item = shown_at(event, self.level)
+        if item is None:
+            return
+        # At bodies, the item holds the payload's name, and follow reads the
+        # payload as it hands the item on (see _full).
+        if self.level == "bodies" and event.payload:
+            item[_PAYLOAD] = event.payload
+        self.loop.call_soon_threadsafe(self._push, item)
+        if self.level == "bodies" and event.type in ("model_called", "step_failed"):
+            # A reply that did not stream comes whole, as replay gives it. Its
+            # text is read here only to see if it has any.
+            if event.payload and not self._streamed and _answer(_payload(_Payloads(self.writer), event.payload)):
+                self.loop.call_soon_threadsafe(self._push, {"type": "text", _ANSWER: event.payload})
+            self._streamed = False
 
     def text(self, piece: str) -> None:
         """A piece of a streamed reply, which only the bodies level shows."""
-        if self.level == "bodies":
+        if self.level == "bodies" and piece:
+            self._streamed = True
             self._send({"type": "text", "text": piece})
 
     def end(self, item: dict) -> None:
@@ -125,7 +142,7 @@ class LiveFeed(Sink):
         last = after
         try:
             for item in self.items[after:]:
-                yield item
+                yield await self._full(item)
                 last = item["n"]
             if self.items and self.items[-1]["type"] == "done" and last >= self.items[-1]["n"]:
                 return
@@ -138,13 +155,33 @@ class LiveFeed(Sink):
                     if item["type"] == "done":
                         return  # the viewer asked to start after the run's end
                     continue  # given from the list already
-                yield item
+                yield await self._full(item)
                 last = item["n"]
                 if item["type"] == "done":
                     return
         finally:
             if queue in self._viewers:
                 self._viewers.remove(queue)
+
+
+    async def _full(self, item: dict) -> dict:
+        """The item as a viewer gets it: at bodies, with its payload, or with
+        the text of its reply, read from the run's evidence off the loop."""
+        if _PAYLOAD not in item and _ANSWER not in item:
+            return item
+        return await asyncio.to_thread(_read, item, _Payloads(self.writer))
+
+
+_PAYLOAD, _ANSWER = "_payload", "_answer"  # the payload names that _full reads
+
+
+def _read(item: dict, record: _Payloads) -> dict:
+    out = {k: v for k, v in item.items() if k not in (_PAYLOAD, _ANSWER)}
+    if _PAYLOAD in item:
+        out["payload"] = _payload(record, item[_PAYLOAD])
+    if _ANSWER in item:
+        out["text"] = _answer(_payload(record, item[_ANSWER])) or ""
+    return out
 
 
 def _status(ending: EvidenceEvent) -> str:

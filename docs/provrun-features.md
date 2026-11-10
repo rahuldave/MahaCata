@@ -317,20 +317,33 @@ no copy
 
 ## Name the experiment a run belongs to
 
-An experiment is a versioned folder in the catalog, such as `experiment://acme/demo/dev/revenue/retrieval`. A run file names it with `experiment:`, beside `agent:`. As the run starts, provrun pins the experiment through the catalog, and `run_created` records the URI, the pin and the SHA-256 of its file:
+An experiment is a versioned folder in the catalog, such as `experiment://acme/demo/dev/revenue/retrieval`. A run file names it with `experiment:`, beside `agent:`. As the run starts, the broker decides the experiment, and provrun pins it through the catalog. `run_created` records the URI, the pin and the SHA-256 of its file:
 
 ```
 $ uv run python tours/provrun/event.py $R12 run_created experiment experiment_pin experiment_sha256
 experiment://acme/demo/dev/revenue/retrieval
-experiment://acme/demo/dev/revenue/retrieval?at=commit:da23bf672a844fa165113a8a24ae5ba22cc10a7565b79611efca7047e15fcd76
+experiment://acme/demo/dev/revenue/retrieval?at=commit:a0b99d93dd3e6e032c08fa7987f6fd841c70b61b3d698cc73ad8a0a2ce1f816a
 8386baf7befc41bccec929be03e8a1dec4c9f37b2422a5d5eb11f4333fa3faef
 ```
 
-After a second version is written, the same run file names the new pin:
+The broker granted the experiment in the mode `pinned_read`, before the input:
 
 ```
-$ uv run python tours/provrun/event.py $R13 run_created experiment_pin
-experiment://acme/demo/dev/revenue/retrieval?at=commit:7311e8221f7268c01fb243ef177028736e0595bf8425a5276a126dbc7ea71a7f
+$ uv run prove --store $E access $R12
+   2 granted  pinned_read        experiment://acme/demo/dev/revenue/retrieval  in the allow list; org and environment match
+   4 granted  mounted_snapshot   data://acme/demo/dev/reports/report.txt  in the allow list; org and environment match
+```
+
+After a second version is written, the same run file names the new pin. This run also names the first as its parent:
+
+```
+$ uv run provr --store $E run $TOUR_DIR/exp.yaml --parent-run $R12 > $TOUR_DIR/r13.json
+
+$ R13=$(uv run python tours/provrun/field.py $TOUR_DIR/r13.json run_id)
+
+$ uv run python tours/provrun/event.py $R13 run_created experiment_pin parent_run
+experiment://acme/demo/dev/revenue/retrieval?at=commit:ca9ff89d485801a3e6dffc19df9c6967b89b5c7f6b3a48fadd5d41067b11a4da
+run-20261110T045534Z-11b04ed6
 ```
 
 `prove` lists the experiment, and checks a run's experiment at that run's own pin:
@@ -340,10 +353,10 @@ $ uv run prove --store $E experiments
 experiment://acme/demo/dev/revenue/retrieval  2 versions, 2 runs
 
 $ uv run prove --store $E verify --config $PROVCAT_CONFIG $R12
-run-20261110T021826Z-5d709442: the evidence and the outputs verify, and match the committed bundle; its experiment matches experiment://acme/demo/dev/revenue/retrieval?at=commit:da23bf672a844fa165113a8a24ae5ba22cc10a7565b79611efca7047e15fcd76
+run-20261110T045534Z-11b04ed6: the evidence and the outputs verify, and match the committed bundle; its experiment matches experiment://acme/demo/dev/revenue/retrieval?at=commit:a0b99d93dd3e6e032c08fa7987f6fd841c70b61b3d698cc73ad8a0a2ce1f816a
 ```
 
-An experiment that cannot be pinned stops the run before the run folder is made. A run that another run starts records `parent_run`. [provrun's page](provrun.md#name-the-experiment) says more.
+The broker decides the experiment before it is read, as it decides each input. An experiment that the broker refuses, or that cannot be pinned, stops the run before the run folder is made. A run that another run starts records `parent_run`, from `provr run --parent-run RUN_ID` or the `parent_run` argument. The parent must be in the run's evidence store. [provrun's page](provrun.md#name-the-experiment) says more.
 
 ## Use it from a program
 
