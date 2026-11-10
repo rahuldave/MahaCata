@@ -173,7 +173,10 @@ def test_an_unknown_tool_fails_the_run(catalog, runs):
 
 
 def test_cancel_records_the_run(catalog, runs):
+    called = []
+
     async def slow(**kw):
+        called.append(True)
         await asyncio.sleep(5)
 
     agent = AgentSpec(name="q", backend="litellm", model="m", prompt="p")
@@ -181,7 +184,8 @@ def test_cancel_records_the_run(catalog, runs):
     async def go():
         task = asyncio.create_task(run_agent(agent, catalog=catalog, runs_root=runs, org="acme",
                                              domain="b", env="dev", actor="t", backend=LiteLLMBackend(slow)))
-        await asyncio.sleep(0.1)
+        while not called:  # the model is called, so the run is open
+            await asyncio.sleep(0.01)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task

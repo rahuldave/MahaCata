@@ -93,7 +93,7 @@ On macOS `/tmp` is a link to `/private/tmp`, and `find_run` gives the real path.
 | `read_events(folder)` | The events in the evidence folder of a run, as `provr show` prints them. |
 | `run_agent(agent, catalog=..., org=..., ...)` | Runs an agent spec with the run settings given one by one. |
 
-`run_file` can run inside a server's event loop, such as FastAPI's, and several runs can go at once. A run does its slow plain-Python steps in threads. These steps fetch and stage the inputs, check them, collect the outputs, seal the run, send the last spans and copy the run into MLflow. So the server goes on answering other requests meanwhile. Two quick steps stay on the loop. One opens the run, making its folder and writing its first event, and the other is the end scan for patches.
+`run_file` can run inside a server's event loop, such as FastAPI's, and several runs can go at once. A run does its slow plain-Python steps in threads. These steps scan the libraries for patches at the start and at the end, open the run, fetch and stage the inputs, check them, collect the outputs, seal the run, send the last spans and copy the run into MLflow. Each scan takes about a fifth of a second. So the server goes on answering other requests meanwhile.
 
 A cancel waits for the step in hand to end. Then the run ends with `run_failed`, whose error is `CancelledError`, and the cancel goes on to the caller. A cancel that comes while the run is being sealed waits for the seal. That run keeps the `run_completed` or `run_failed` it was given, and then the cancel goes on to the caller.
 
@@ -233,7 +233,9 @@ A refusal is evidence, as an input's is. The run opens, and its first steps afte
 
 The two access events name the experiment. `prove show RUN` shows them in any store, and `prove access RUN` shows the refusal in a SQLite store. `prove experiment show`, which needs a SQLite store too, does not count the run among the experiment's runs. A parent run that the store does not hold still stops the run before its folder is made, and then the refusal is not recorded.
 
-A selector other than a commit, such as `?at=branch:prod`, can name another branch, and so another environment. So the stub allows an experiment with such a selector only if the run's `allow` list names it, selector and all. Some stores take a branch name where a commit goes, so a `commit:` selector needs an entry too, unless its value looks like a commit ID. A commit ID here is 7 to 64 hex digits, in lower case. An experiment with no selector, or pinned to such an ID, needs no entry. A branch named like a commit ID, such as `deadbeef`, would still get past this check.
+A selector other than a commit, such as `?at=branch:prod`, can name another branch, and so another environment. So the stub allows an experiment with such a selector only if the run's `allow` list names it, selector and all.
+
+Some stores take a branch name where a commit goes, so a `commit:` selector needs an entry too, unless its value looks like a commit ID. A commit ID here is 7 to 64 hex digits, in lower case. An experiment with no selector, or pinned to such an ID, needs no entry. A branch named like a commit ID, such as `deadbeef`, still gets past this check. "Known limits" below says more.
 
 The broker decides before the run folder exists, so the run records its decision once it opens. For a grant, `access_requested` and `access_granted` for the experiment are the run's first steps after `run_created`, with the purpose `experiment`. A grant that has expired by then is written as `access_denied`, and the run fails.
 
@@ -564,6 +566,7 @@ If the store for bundles is `file`, which has no commits, provrun writes the bun
 | Limit | What to do |
 |---|---|
 | The broker is a stub. It reads no profile and checks no identity. | Use it only for development. |
+| The stub tells a commit from a branch by its look: 7 to 64 hex digits in lower case. GitHub takes a branch name where a commit goes. So a branch named like a commit ID, such as `deadbeef`, passes as a commit. An experiment in GitHub at `?at=commit:deadbeef` then reads that branch with no `allow` entry. lakeFS refuses a `commit:` selector, and Hugging Face checks that the commit it finds starts with the value. The run still records the commit that it read. | Do not name a branch with hex digits only. A real broker should ask the store whether the name is a commit. |
 | Snapshots and staged inputs are read-only, so `rm -rf` cannot delete them. | Run `chmod -R u+w` on the folder first. |
 | Snapshots are never deleted. | Delete old folders under `<cache>/.provcat/snapshots` when no run uses them. |
 | LiteLLM can print a warning that a logging coroutine was never awaited. | Ignore it. It comes from LiteLLM's logging, after the run ends. |
@@ -575,5 +578,6 @@ If the store for bundles is `file`, which has no commits, provrun writes the bun
 | A library's span made in a thread that lost the run's context starts a new trace. It goes to no run, so it is neither kept nor sent. | None yet. |
 | The scan for patches looks only in the libraries named above, and finds a function replaced by a wrapper. A library that changes a function in place, or patches another library, is not found. A Logfire configured with `local=True` is not found either. | The checks catch the known paths. A container is the boundary for the rest. |
 | The scan finds a patch only on a library that was loaded when the run started. `provr run` starts with no backend loaded. So a library that is loaded during the run, and patched by an import hook as it loads, is not found. Only MLflow's patches are found then, by their marks. | Load the backend's libraries before the run, in a program that calls provrun, or use a container. |
+| A warning from a step that runs in a thread names Python's thread code as its place, not provrun. A filter on the warning's module does not match it. | Filter provrun's warnings by their text. Each one starts with `provrun:`. |
 | After a run, MLflow's autolog and tracing stay off for the rest of the process. | Turn them on again after the run, if the program needs them. |
 | Only the in-process backends exist. | Docker and Foundry backends are planned. See [provrun-plan.md](provrun-plan.md). |
