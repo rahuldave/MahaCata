@@ -70,7 +70,7 @@ show uv run provc put "'data://sales/orders/day1.csv?at=branch:dev'" \$TOUR_DIR/
 show uv run provc cat "'data://sales/orders/day1.csv?at=branch:dev'"
 show uv run provc cat data://sales/orders/day1.csv
 
-step "Step 7: Read from the cache, without asking the store"
+step "Step 7: Fetch a file to the cache, and read it offline"
 show uv run provc fetch data://sales/orders/day1.csv
 show 'uv run provc --offline cat "$PINNED"'
 
