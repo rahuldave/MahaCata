@@ -233,7 +233,7 @@ A program that records the pinned URI of each file that it read can read the sam
 
 ## Step 6: Make a branch, and change it
 
-A branch is a copy of the files in which you can make changes, and leave `main` as it is. In a bucket, the branch is the first folder of the path. `provc branch` copies the branch `main` to a new branch `dev`:
+A branch is a copy of the files. You can change the copy, and leave `main` as it is. In a bucket, the branch is the first folder of the path. `provc branch` copies the branch `main` to a new branch `dev`:
 
 ```
 $ uv run provc branch 'data://sales?at=branch:dev' --from main
@@ -271,7 +271,7 @@ The name without a selector still reads `main`, so code that reads `main` sees n
 
 ## Step 7: Fetch a file to the cache, and read it offline
 
-provcat keeps the files that it reads in its cache. `provc fetch` puts a file there, and prints the local path, so that a program that wants a path can read the file.
+provcat keeps the files that it reads in its cache. `provc fetch` puts a file there and prints the local path. A program that wants a path can then read the file.
 
 ```
 $ uv run provc fetch data://sales/orders/day1.csv
@@ -317,12 +317,12 @@ The pin is a new version ID, because Step 5 put the file again after the first p
 
 ## What you built
 
-You gave two stores two names, and read and wrote files only by those names:
+You gave each of two stores a scheme, `notes` and `data`, and read and wrote files only by their names:
 
 - **A local file** by the name `notes://sales/targets.csv`, with no server.
 - **A versioned file** in a bucket by the name `data://sales/orders/day1.csv`. You committed its folder, pinned it, and read the old version after a change.
 - **A branch** `dev`, which changed while `main` stayed as it was.
-- **The cache**, which read a pinned version without asking the store.
+- **The cache**, from which provcat read a pinned version without asking the store.
 
 The tutorial leaves out several features. provcat also reads and writes lakeFS, GCS and Azure, and reads GitHub and Hugging Face. One name can go to another store than the rest of its scheme. Hooks can record or refuse each request of an app, and a snapshot gives a program a read-only copy of a commit.
 

@@ -4,7 +4,7 @@ Research date: 2026-10-31. The findings come from the official docs and from the
 packages. The wheels were downloaded and unpacked under a scratch folder, and none was
 installed or run.
 
-> **A dated snapshot.** This note describes provrun and its pins on 2026-10-31, before later changes. PR #11 replaced the model and toolset wrappers with a capability, `evidence_capability`, which records streamed requests and every tool. It also keeps LiteLLM's spans off provrun's span, and makes `otel.py` claim no schema URL. Commit 227fed4 moved provrun to `litellm==1.83.0` and PydanticAI 2.64.0. The design page, [the design](../provevi-design.md), is kept current.
+> **A dated snapshot.** This note describes provrun and its pins on 2026-10-31, before later changes. PR #11 replaced the model and toolset wrappers with a capability, `evidence_capability`, which records streamed requests and every tool. It also keeps LiteLLM's spans off provrun's span, and makes `otel.py` claim no schema URL. Commit 227fed4 moved provrun to `litellm==1.83.0` and PydanticAI 2.64.0. [The design page](../provevi-design.md) is kept current.
 
 ## Terms
 
@@ -33,7 +33,7 @@ installed or run.
   `opentelemetry-semantic-conventions` 0.66b2 is marked deprecated with a pointer to the new repository.
 - **The pinned LiteLLM 1.82.6 is clean of the March 2026 attack, but it is old.** It lacks the
   semantic-convention mode of the `otel` callback and the per-attempt failure hook. Its proxy has known
-  CVEs. A second compromised release, 1.107.0, came on 2026-10-21, as "The supply chain incidents" below says, with its sources.
+  CVEs. A second compromised release, 1.107.0, came on 2026-10-21. The section "The supply chain incidents" below gives the details and the sources.
 - **Recommendation:** make provrun's own wrappers the canonical evidence source for every substrate. Use
   each library's OTel spans as a second, parsed source, joined by trace ID and by the provrun run ID.
 
@@ -152,19 +152,19 @@ and `https://pydantic.dev/docs/ai/core-concepts/hooks/`.
 | Wrappers | `get_wrapper_model`, `get_wrapper_toolset` | yes |
 | Events | `on_event`, `wrap_run_event_stream` | `on_event` observes. A listener with `dispatch='immediate'` can cancel a capability event. |
 
-Facts that matter for provevi:
+The facts below affect provevi:
 
 - **`wrap_model_request` covers streamed requests.** The docstring of `after_model_request` names streamed
   responses. A `WrapperModel` that overrides only `request` misses `request_stream`.
-- **`before_tool_validate` sees a call before PydanticAI checks its arguments.** The hook therefore sees
+- **`before_tool_validate` sees a call before PydanticAI checks its arguments.** So the hook sees
   a tool call with bad arguments. `call_tool` on a toolset never sees such a call.
 - **`before_tool_execute` is the place for a policy gate.** Raise `ApprovalRequired` there to defer the
   call before the tool runs. Raise `SkipToolExecution(result)` to give the model a result without
   running the tool.
 - **`get_wrapper_toolset`** receives the combined, non-output toolset of the run. It includes tools that
   other capabilities add. Output tools are added separately and are not included.
-- **`prepare_model_request`** runs once for each attempt, with the model that serves the attempt. A
-  `FallbackModel` or a retry therefore gives one call for each attempt.
+- **`prepare_model_request`** runs once for each attempt, with the model that serves the attempt. So a
+  `FallbackModel` or a retry gives one call for each attempt.
 
 ### WrapperModel and WrapperToolset
 
@@ -480,7 +480,7 @@ Baggage also crosses HTTP when the W3C baggage propagator is on. The GenAI conve
 
 ## Recommendation for provevi ingest
 
-1. **Keep two sources for each run, with clear trust.** provrun's own wrappers write the canonical
+1. **Keep two sources for each run, each with its own level of trust.** provrun's own wrappers write the canonical
    evidence events, with confidence `observed`. Library spans are a second source, kept as an OTel file and
    imported as events with confidence `parsed`.
 2. **PydanticAI.** Replace `EvidenceModel` and `EvidenceToolset` with one provrun capability:

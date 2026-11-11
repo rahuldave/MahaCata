@@ -4,11 +4,13 @@ title: provevi reference
 
 This page lists provevi's commands, stores, tables, policy keys, exit codes and errors. [What provevi does](provevi-features.md) shows the features with examples, [the tour](provevi-tour.md) runs them, and [the design](provevi-design.md) explains how the parts fit together.
 
-provevi stores, reads and checks the evidence of provrun's runs. Its command is `prove`. Phases 1, 2 and 4 of [the plan](provevi-plan.md) are built. Phase 1 gave the package, the `file` store and the checks. Phase 2 gave the `sqlite` store, which answers questions across runs. Phase 4 gave the copy in MLflow, for MLflow's viewer.
+provevi stores, reads and checks the evidence of provrun's runs. Its command is `prove`. Phases 1 to 5 of [the plan](provevi-plan.md) are built.
 
-provevi's part of Phase 3 is built. It reads and checks the telemetry policy. provrun applies steps 2 to 10. They record the telemetry variables, own the providers, turn off each library's own telemetry, and find what cannot be turned off. Step 9 sends provrun's spans to approved destinations, using provevi's rule that matches a variable to a destination. For MLflow, provrun calls Phase 4's copy when a run is sealed.
+Phase 1 gave the package, the `file` store and the checks. Phase 2 gave the `sqlite` store, which answers questions across runs. Phase 4 gave the copy in MLflow, for MLflow's viewer. Phase 5 gave experiments as catalog objects, and agent classes.
 
-Experiments as catalog objects and the span receiver come in later phases.
+provevi's part of Phase 3 is built, and it reads and checks the telemetry policy. provrun applies steps 2 to 10 of the phase. They record the telemetry variables, own the providers, turn off each library's own telemetry, and find what cannot be turned off. Step 9 sends provrun's spans to approved destinations, by provevi's rule that matches a variable to a destination. For MLflow, provrun calls Phase 4's copy when a run is sealed.
+
+The span receiver comes in Phase 6, and the `postgres` store in Phase 7. Neither is built.
 
 ## Terms
 
@@ -30,7 +32,7 @@ Experiments as catalog objects and the span receiver come in later phases.
 
 provrun depends on provevi, and provevi depends on provcat. provevi never imports provrun.
 
-provrun still decides what each event means, and builds the hash chain. provevi holds the event format, the stores and every check.
+provrun decides what each event means, and it builds the hash chain. provevi holds the event format, the stores and every check.
 
 ## Check a run from a program
 
@@ -71,7 +73,7 @@ A store is a subclass of `EvidenceStore`. Its `open_run(run_id, folder)` returns
 
 `open_store(uri)` gives the store of a store URI. A store can also read a run back, with `read_run(run_id)`, which returns a `RunRecord`. The checks read a run through a `RunRecord`.
 
-Every store must also keep `events.jsonl`, `payloads/` and `manifest.json` in `folder`. provrun commits that folder as the bundle. A store that keeps no `events.jsonl` and `manifest.json` fails the run when it closes, in both modes, because nothing could verify the run. A seal that fails also fails the run in both modes.
+Every store must also keep `events.jsonl`, `payloads/` and `manifest.json` in `folder`. provrun commits that folder as the bundle. A store that keeps no `events.jsonl` and `manifest.json` fails the run when it closes, in both modes, because no check could verify the run without them. A seal that fails also fails the run in both modes.
 
 Before the seal, provrun treats any error from a writer as a lost event. The strict mode stops the run, and the lenient mode records the loss in the manifest.
 
@@ -125,7 +127,7 @@ A changed or deleted row fails the check:
 - where its bundle was committed must match the run's `bundle.json`, if the store recorded it;
 - the schema must be provevi's own, with no trigger on its tables.
 
-The check of a run covers the rows that the run implies. So a row that no run reported is not checked, such as an agent class with no runs. The check does not cover the run's folder or the time of its seal. Nor does it cover which run came first for an agent class or an experiment version, or when. The first run fixes those, and no event of a later run does.
+The check of a run covers the rows that the run implies. So the check skips a row that no run reported, such as an agent class with no runs. The check does not cover the run's folder or the time of its seal. Nor does it cover which run came first for an agent class or an experiment version, or when. The first run fixes those, and no event of a later run does.
 
 The store answers questions across runs:
 
@@ -167,11 +169,13 @@ A file with another key is refused, and so is a single text where a list belongs
 
 A run names its experiment beside its agent. provrun records the fields `experiment`, `experiment_pin` and `experiment_sha256` in `run_created`. [provrun's page](provrun.md#name-the-experiment) shows the run file. The store keeps each version that runs report.
 
-`verify_run` reads the file at the run's pin through the catalog, and checks its hash. The pin must name a commit, as a branch moves. A run may name a branch, such as `?at=branch:main`, and its pin is then the branch's commit at the start of the run. With no catalog, a run that names an experiment does not verify.
+`verify_run` reads the file at the run's pin through the catalog, and checks its hash. The pin must name a commit, because a branch moves. A run may name a branch, such as `?at=branch:main`, and its pin is then the branch's commit at the start of the run. With no catalog, a run that names an experiment does not verify.
 
-An agent class needs no declaring. The store finds it in the runs, as the agent's name in the run's org, domain and environment. A version of the class is the SHA-256 of the agent's spec without its `prompt` and `inputs`. So runs that ask other questions of one agent are one version, and changed instructions or a new model make a new one. The hash covers the agent's `settings`, so a changed key in them makes a new version too, though the settings are never stored. A run also records its `parent_run`, when provrun sets it, for a run that another run started.
+You do not declare an agent class. The store finds it in the runs, as the agent's name in the run's org, domain and environment. A version of the class is the SHA-256 of the agent's spec without its `prompt` and `inputs`. So runs that ask other questions of one agent are one version, and changed instructions or a new model make a new one.
 
-The copy in MLflow goes in the experiment that the run names, else in one named for its agent class.
+The hash covers the agent's `settings`, so a changed key in them makes a new version too, though the store's tables of parameters and agent versions never hold the settings. The `run_created` event still holds them, as part of the whole spec. A run also records its `parent_run`, when provrun sets it, for a run that another run started.
+
+The copy in MLflow goes in the experiment that the run names, or else in one named for its agent class.
 
 ## Check a telemetry policy
 
@@ -223,7 +227,7 @@ A path need not start with `/`, so `plain_name` also refuses one that looks like
 - a path two folders deep from another folder of the root, such as `run/secrets/x`, `opt/app/x` or `proc/self/environ`;
 - a path that ends in a file of keys or settings, such as `x/key.pem`, `x/key.pem.bak`, `x/config.yaml`, `x/kubeconfig` or `x/id_rsa.pub`.
 
-It refuses a path with a part that is a URL's scheme, a host or an email, anywhere before a `/`. Examples are `https:/host/x`, `s3:/bucket/key`, `x/host.com/a`, `127.1/x`, `db:5432/x` and `x/user@host.com/a`. The hosts `hf.co`, `huggingface.co`, `modelscope.cn` and `registry.ollama.ai` start real model names in Ollama, so they stay plain. PydanticAI's `groq:meta-llama/x` stays plain too, as `groq` is not a scheme of storage or the web, such as `s3` or `https`.
+It refuses a path with a part that is a URL's scheme, a host or an email, anywhere before a `/`. Examples are `https:/host/x`, `s3:/bucket/key`, `x/host.com/a`, `127.1/x`, `db:5432/x` and `x/user@host.com/a`. The hosts `hf.co`, `huggingface.co`, `modelscope.cn` and `registry.ollama.ai` start real model names in Ollama, so they stay plain. PydanticAI's `groq:meta-llama/x` stays plain too, because `groq` is not a scheme of storage or the web, such as `s3` or `https`.
 
 The list of schemes cannot hold every one, so a scheme that is not on it passes, written as `name:bucket/x`. A host or an email with no path passes, such as `host.com` or `user@host.com`. So does an IP address written as one number, such as `2130706433/x`.
 
@@ -231,9 +235,9 @@ A shape test cannot catch every path. A path with one `/` to a file of another n
 
 Some model names have more than one `/`, such as `openrouter/meta-llama/llama-3-70b` or a Vertex model's path. So `plain_name(value, declared=[...])` lets a text in `declared` have more, though it must pass every other test. `plain_attribute(key, value)` declares the value when its key names a model, such as `gen_ai.request.model`, and declares each name in a list under such a key. The keys are in `MODEL_KEYS`.
 
-A library's plain `model` key is not one of them, as it may hold anything, such as a folder of weights. provrun's own `model` key names the run file's model, so the copy's settings and the live feed's events use `RUN_MODEL_KEYS`. It adds `model`, and `answered_by`, the model that the provider says answered. The copy in MLflow checks each setting and attribute with `plain_attribute`. A mapping, such as MLflow's token usage, goes in only if each of its keys is a plain name.
+A library's plain `model` key is not one of them, because it may hold anything, such as a folder of weights. provrun's own `model` key names the run file's model, so the copy's settings and the live feed's events use `RUN_MODEL_KEYS`. It adds `model`, and `answered_by`, the model that the provider says answered. The copy in MLflow checks each setting and attribute with `plain_attribute`. A mapping, such as MLflow's token usage, goes in only if each of its keys is a plain name.
 
-`plain_name` also refuses a common API key or token, by its start and the run of characters after it. Examples are `sk-…` keys, Stripe's `sk_live_…`, GitHub's `ghp_…`, Slack's `xoxb-…`, AWS's `AKIA…`, Hugging Face's `hf_…` and JSON web tokens, `eyJ…`. A name such as `hf_transfer` or `sk-learn` is too short to be a key, so it stays plain. A shape test cannot catch every secret, so a secret written as a plain word still passes. It also refuses a name such as `ns:model@tag`, which looks like `user:password@host`. A number and a yes or no are plain.
+`plain_name` also refuses a common API key or token, by its start and the run of characters after it. Examples are `sk-…` keys, Stripe's `sk_live_…`, GitHub's `ghp_…`, Slack's `xoxb-…`, AWS's `AKIA…`, Hugging Face's `hf_…` and JSON web tokens, `eyJ…`. A name such as `hf_transfer` or `sk-learn` is too short to be a key, so it stays plain. A shape test cannot catch every secret, so a secret written as a plain word still passes. `plain_name` also refuses a name such as `ns:model@tag`, which looks like `user:password@host`. A number and a yes or no are plain.
 
 `plain_span_name(name)` takes one or two plain words, such as `chat gpt-4o`. The copy in MLflow uses both below `bodies`, and so do provrun's senders. provrun's senders check attributes with `plain_attribute` too, so they keep a model's name that has more than one `/`.
 
@@ -258,7 +262,7 @@ Before the match, `normal_endpoint` puts both URLs in one form. It lowercases th
 - a driver such as `+x` on an `http` or `https` scheme;
 - a sqlite URL with a relative path.
 
-Some variables send a matched URL somewhere else. `HTTPS_PROXY` sends it through a proxy, and `PGHOSTADDR` makes Postgres connect to another address. provrun's senders ignore the proxy variables, and a run records which were set. [provrun's page](provrun.md#control-of-library-telemetry) says how. The copy in MLflow refuses to run while one of them is set, as the next section says.
+Some variables send a matched URL somewhere else. `HTTPS_PROXY` sends it through a proxy, and `PGHOSTADDR` makes Postgres connect to another address. provrun's senders ignore the proxy variables, and a run records which of them were set. [provrun's page](provrun.md#control-of-library-telemetry) says how. The copy in MLflow refuses to run while one of them is set, as the next section says.
 
 A policy endpoint holds no user and no password, because the policy holds no secrets. Its host must be in `hosts`.
 
@@ -345,7 +349,7 @@ The store's assessments of the run and of its spans go onto the trace. Below `bo
 
 **A library's spans.** provrun writes the span of an approved library, such as PydanticAI, as a `span_recorded` event. The copy makes it a span of the trace, with its own name, times and status. It does so only if the policy lets that library feed the MLflow destination. Its names and usage come from the event. With `bodies`, its other attributes and its events come from the payload.
 
-**Which library made a span.** A span names its library only by its scope, a label that its code picks, such as `pydantic-ai`. `span_libraries(scope)` gives the names that the policy may know that library by. It never guesses, so a span it cannot place goes nowhere:
+**Which library made a span.** A span names its library only by its scope, a label that its code picks, such as `pydantic-ai`. `span_libraries(scope)` gives the names that the policy may know that library by. It never guesses, so a span that it cannot place goes nowhere:
 
 - the scope's own name counts only if a library of that name is installed, because any code can call its scope `litellm`. A name with a dot, such as `pydantic.ai`, is a module path, so it does not count this way;
 - the library whose files hold the scope's module counts, such as `pydantic-ai-slim` for `pydantic_ai`. A made-up module, such as `pydantic_ai.evil`, is held by no library;
@@ -355,7 +359,7 @@ A scope is still a label that code picks. Any code in the run can call its trace
 
 `span_libraries` reads the installed packages once in a process, because reading them takes most of a second. It does not see a library that is installed or removed after that. `distribution_of` reads them on each call.
 
-`distribution_of(module)` gives one name for a report, such as the library that a blocked attempt came from. It guesses when it cannot tell, so it decides nothing that the policy approves.
+`distribution_of(module)` gives one name for a report, such as the library that a blocked attempt came from. It guesses when it cannot tell, so no approval of the policy depends on it.
 
 **What the copy guards.** Before it writes, the copy checks the run's chain, as `prove verify` does, and refuses a run that does not verify. A run ID must be letters, digits, `_`, `.` and `-`, because the copy searches MLflow for it.
 
@@ -413,7 +417,7 @@ prove: the telemetry policy approves no mlflow destination for MLFLOW_TRACKING_U
 
 On macOS, `/tmp` is a link to `/private/tmp`, so the store's path shows as `/private/tmp`.
 
-`prove ui` opens MLflow's viewer on the store's own file. It listens on 127.0.0.1 only, at port 5000 unless `--port` gives another. It passes MLflow no `MLFLOW_` or `OTEL_` variable of the shell:
+`prove ui` opens MLflow's viewer on the store's own file. It listens on 127.0.0.1 only, at port 5000, or at the port that `--port` gives. It passes MLflow no `MLFLOW_` or `OTEL_` variable of the shell:
 
 ```
 $ uv run prove --store $S ui --port 5088
@@ -446,7 +450,7 @@ The feed is a list of items, each a JSON object with a `type` and `n`, its numbe
 `shown_at(event, level, record=None)` gives the `event` item of one event, or `None` when the level is `None`:
 
 - Below `bodies`, the item keeps only the data under keys that hold names or counts, such as `model`, `status`, `sha256` and `input_tokens`. Any other key stays out. It may hold what a person or a model wrote, such as a note's text, a purpose or a file's name.
-- At `names`, a listed key's value shows if it passes `plain_attribute` with `RUN_MODEL_KEYS`. A run's `parent_run` is one of the listed keys. Its `experiment` and `experiment_pin` show if `plain_experiment` says so. It allows only an `experiment://` URI of plain parts, with no selector or with `?at=commit:` and a hash, so a URI that names a branch stays out. The component and the actor show if each is a plain name. A library span's attributes are cut as for any destination, and its name shows if `plain_span_name` says so.
+- At `names`, a listed key's value shows if it passes `plain_attribute` with `RUN_MODEL_KEYS`. A run's `parent_run` is one of the listed keys. Its `experiment` and `experiment_pin` show if `plain_experiment` says so. It lets through only an `experiment://` URI of plain parts, with no selector or with `?at=commit:` and a hash. So a URI that names a branch stays out. The component and the actor show if each is a plain name. A library span's attributes are cut as for any destination, and its name shows if `plain_span_name` says so.
 - `usage` adds the counts and timings, such as token counts, and the usage attributes of a library's span. A mapping among them shows only if each of its keys is a plain name.
 - `bodies` adds all the data, the refs, the component and the actor. With `record`, it adds the payload too.
 
@@ -454,7 +458,7 @@ The feed is a list of items, each a JSON object with a `type` and `n`, its numbe
 
 A live feed builds its `text` items with the same two functions as `replay`. `payload_of(record, digest)` reads one payload of a run, as JSON if it is JSON, or else as text. `answer_of(payload)` gives the text of a model call's answer from its payload, or `None` when the payload holds no answer. `payload_of` cuts nothing by level, so only `shown_at` and `replay` decide what a viewer sees.
 
-A run that provrun cancelled ends with `run_failed`, whose error is `CancelledError`, and replays as `cancelled`. `folder=` names the run's evidence folder. The file store finds it by itself when it is left out. Step 8 of [the tour](provevi-tour.md) replays a run.
+A run that provrun cancelled ends with `run_failed`, whose error is `CancelledError`, and replays as `cancelled`. `folder=` names the run's evidence folder. When `folder=` is left out, the file store finds the folder itself. Step 8 of [the tour](provevi-tour.md) replays a run.
 
 ## The command `prove`
 

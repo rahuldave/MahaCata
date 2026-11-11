@@ -1,6 +1,6 @@
 # Notes on how code reads and writes data through provcat and provrun
 
-These notes describe how code uses provcat and provrun to read and write data. The lookup with its entries, the hooks and the file system are built, as the plan of pull requests at the end says. They cover the lookup, the lifecycle spots and their hooks, a file API in the style of fsspec and the evidence of a read. They end with a plan of pull requests and the open questions.
+These notes describe how code uses provcat and provrun to read and write data. They cover the lookup, the lifecycle spots and their hooks, a file API in the style of fsspec and the evidence of a read. They end with a plan of pull requests and the open questions. The lookup with its entries, the hooks and the file system are built, as that plan says.
 
 ## Terms
 
@@ -28,7 +28,7 @@ These notes describe how code uses provcat and provrun to read and write data. T
 | Git LFS | The Git extension that keeps large files outside the repository. Git holds a small pointer file in place of each large file. |
 | Xet | The storage under Hugging Face. It splits files into chunks. Its repositories keep the Git LFS pointer format. |
 
-## The intended usage pattern
+## How code names and opens data
 
 Code names data only by logical URI. It opens a URI, reads it and closes it, as it does a local file. The lookup decides where the bytes are, and any other facts go in the catalog, not in the URI.
 
@@ -54,7 +54,7 @@ So a gate is a security control only when the gated code cannot reach the keys o
 - **Step 6 of the plan of pull requests below.** The agent moves to its own process or container, which holds no keys and no cache folder. Code there asks the provrun process to open a URI, and the provrun process runs the catalog with the gate. Undeclared opens are a security control only after this move.
 - **Later.** The access layer gives short-lived keys for each grant, so the keys themselves carry the limits.
 
-Outside a sandbox, for example in a notebook, the hooks are a policy for code that cooperates. They are not a wall.
+Outside a sandbox, for example in a notebook, the hooks are a policy for code that cooperates, and not a security control.
 
 ## The lifecycle spots
 
@@ -73,7 +73,7 @@ Each operation of the catalog passes through fixed spots:
 | `put` and `delete` | a write or a delete in a store | the physical URI, and then the entry |
 | `commit`, `branch` and `merge` | a change to the history of a store | the URI, the message and the new pin |
 
-Each spot gets the logical URI that started the operation too, also at `fetch` and `snapshot`. So a hook can decide by the logical name at every spot.
+Each spot also gets the logical URI that started the operation, even at `fetch` and `snapshot`. So a hook can decide by the logical name at every spot.
 
 The catalog calls the `pin` spot before every `snapshot`. It calls it before a `fetch` from GitHub or Hugging Face, whose drivers pin inside `fetch`. lakeFS and the object stores still fetch a branch without a pin, because a pin first would change the path in the cache. "Hooks" in [the design](design.md#hooks) lists this and the other ways that step 4 differs from these notes.
 
@@ -97,7 +97,7 @@ def broker_gate(ctx, req, next):
     return next(req)
 ```
 
-The order of a chain is recorder, then gate, then the base cache, then the cache layers, then the store. So the recorder sees every request, also one that the gate refuses. provrun records `access_denied` today, and it keeps doing so. A gate sees every request that reaches the data, and a read from the base cache or a cache layer passes the gate too. A principal that may not read a URI cannot read, through the catalog, a copy that another principal fetched.
+The order of a chain is recorder, then gate, then the base cache, then the cache layers, then the store. So the recorder sees every request, even one that the gate refuses. provrun records `access_denied` today, and it keeps doing so. A gate sees every request that reaches the data, and a read from the base cache or a cache layer passes the gate too. A principal that may not read a URI cannot read, through the catalog, a copy that another principal fetched.
 
 ## The base cache
 

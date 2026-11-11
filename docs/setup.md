@@ -1,4 +1,4 @@
-# Setting up provcat and its services
+# Set up provcat and its services
 
 This page lists the tools that provcat and its tests need, and how to set up each service. Read [the reference](reference.md) first for the commands.
 
@@ -13,7 +13,7 @@ This page lists the tools that provcat and its tests need, and how to set up eac
 | Shared configuration | An etcd server. |
 | System tests | A login to each cloud you test, and the services above. |
 
-## Where command-line tools are used
+## Which command-line tools provcat uses
 
 provcat reaches the cloud stores through Python SDKs. It uses boto3 for S3 and for the data in lakeFS, `google-cloud-storage` for GCS, and `azure-storage-blob` for Azure. It calls GitHub and the lakeFS REST API over HTTP, with the Python standard library. The system tests also make and delete their buckets, projects and accounts with Python SDKs. They make lakeFS repositories through the lakeFS REST API. Command-line tools have these jobs only:
 
@@ -107,7 +107,7 @@ The build makes three programs in `~/Projects/lakeFS`:
 - `lakectl`, its command-line client.
 - `acl-server`, the reference access-list server.
 
-Skip `make build` and `make gen`. They also build the clients for other languages, which needs Docker images that provcat does not use.
+Skip `make build` and `make gen`. They also build the clients for other languages, which need Docker images that provcat does not use.
 
 `make gen-ui` changes `webui/package-lock.json`. The `git checkout` puts it back before `make build-binaries`, which stamps the version. With any change in the working tree, the version ends in `.with.local.changes`. The `.gitignore` of lakeFS covers `lakefs` and `lakectl` but not `acl-server`, so the last line keeps it out of `git status`.
 
@@ -186,13 +186,13 @@ After the first start, `packages/provcat/scripts/lakefs_local.py` starts lakeFS 
 uv run python packages/provcat/scripts/lakefs_local.py --lakefs <program> --lakefs-dir <folder> --container lakefs-postgres --port 5432
 ```
 
-The script waits until Postgres answers, and then runs lakeFS in the foreground. Ctrl+C, `kill` or closing the terminal asks lakeFS to stop, and waits up to 30 seconds for it. Then the script stops the container, but only if the script started it. The exit code is the exit code of lakeFS.
+The script waits until Postgres answers, and then runs lakeFS in the foreground. If you press Ctrl+C, run `kill` or close the terminal, the script asks lakeFS to stop, and waits up to 30 seconds for it. Then the script stops the container, but only if the script started it. The exit code is the exit code of lakeFS.
 
 The script reads the connection string from `config.yaml`. It changes only the host and port, to `127.0.0.1` and the port of the container. It passes the result in the environment variable `LAKEFS_DATABASE_POSTGRES_CONNECTION_STRING`, so it never changes `config.yaml`. Its messages never show the connection string or a line of the file. If the password has a `/`, `?` or `#` that is not percent-encoded, the script stops and asks you to encode it.
 
 ### Run one lakeFS for many orgs
 
-`packages/provcat/scripts/lakefs_acl_local.py` runs lakeFS 1.86.0 with access control for each org. It runs two programs from the source build. The access-list server keeps users, groups and policies. lakeFS asks it who may do what. lakeFS keeps its metadata in a local database, so this needs no Postgres.
+`packages/provcat/scripts/lakefs_acl_local.py` runs lakeFS 1.86.0 with access control for each org. It runs two programs from the source build. The access-list server keeps users, groups and policies. lakeFS asks it who may do what. lakeFS keeps its metadata in a local database, so the setup needs no Postgres.
 
 ```
 uv run python packages/provcat/scripts/lakefs_acl_local.py
@@ -223,11 +223,11 @@ export AWS_SHARED_CREDENTIALS_FILE=~/.local/share/provcat/lakefs-acl/credentials
 export LAKEFS_S3_ENDPOINT=http://127.0.0.1:8002
 ```
 
-If the admin locks itself out, for example by leaving the Admins group, run the script again with `--repair-admin`. With the setup running, it repairs it in place and exits. Either way it writes new admin keys to `credentials`, and detaches every policy from Admins except its own.
+If the admin locks itself out, for example by leaving the Admins group, run the script again with `--repair-admin`. With the setup running, the script repairs the admin in place and exits. Otherwise it starts the setup and repairs the admin first. Either way it writes new admin keys to `credentials`, and detaches every policy from Admins except its own.
 
 Setting `AWS_SHARED_CREDENTIALS_FILE` hides `~/.aws/credentials` from provcat in that shell, so the S3 stores lose their keys there. Use another shell for them, or copy the profiles into `~/.aws/credentials`.
 
-Ctrl+C, `kill` or closing the terminal stops lakeFS, and then the access-list server.
+If you press Ctrl+C, run `kill` or close the terminal, lakeFS stops, and then the access-list server stops.
 
 The access-list server takes only calls that carry the token in `api-token`, in the same folder. lakeFS sends it, and so does the script. The server listens on `127.0.0.1` only. The design document lists the other limits of this route.
 
@@ -280,7 +280,7 @@ docker pull fsouza/fake-gcs-server:1.52.2
 docker pull mcr.microsoft.com/azure-storage/azurite:3.35.0
 ```
 
-The tests start and stop the containers. fake-gcs-server has two faults, and the tests skip the checks that meet them:
+The tests start and stop the containers. fake-gcs-server has two faults, and the tests skip the checks that the faults would break:
 
 - **Folder markers.** It drops an object whose name ends in `/`.
 - **Pages.** It returns only the first page when a listing asks for a page size.
@@ -332,7 +332,7 @@ The project holds no data between runs. GCS can keep deleted objects for a few d
    az login --tenant <tenant id>
    ```
 
-3. Run the tests with your subscription id. The tests make one resource group with two storage accounts, and delete the group at the end. One account is ADLS Gen2. The other is plain Blob storage with blob versioning on, because ADLS Gen2 keeps no versions, and the tests of pins and commits need them.
+3. Run the tests with your subscription id. The tests make one resource group with two storage accounts, and delete the group at the end. One account is ADLS Gen2. The other is plain Blob storage with blob versioning on, because ADLS Gen2 keeps no versions and the tests of pins and commits need them.
 
    ```
    PROVCAT_SYSTEM_AZURE=<subscription id> uv run pytest -m system

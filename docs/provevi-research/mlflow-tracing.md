@@ -17,11 +17,11 @@ Terms used on this page:
 
 ## Summary
 
-- **Direct SQLite is not going away.** In 3.17.2, `sqlite:///mlflow.db` is the default tracking URI, and Python writes to it in process with no server. The **file store** (`./mlruns`, `file://`) is what MLflow retired.
+- **Direct SQLite is not deprecated.** In 3.17.2, `sqlite:///mlflow.db` is the default tracking URI, and Python writes to it in process with no server. MLflow retired the **file store** (`./mlruns`, `file://`).
 - **The file store raises an error since 3.13.0.** It needs `MLFLOW_ALLOW_FILE_STORE=true`, and it is in maintenance mode.
 - **Each span is one JSON row.** The SQL store keeps each span as a JSON document in `spans.content`, with some columns pulled out for search.
 - **MLflow accepts OTLP spans.** The server has `POST /v1/traces` since 3.6.0, and it translates GenAI semantic convention attributes to MLflow attributes.
-- **There is one trap.** The lightweight `mlflow-tracing` package and the TypeScript plugins for Claude Code and Codex cannot write to SQLite. They need an HTTP server. The Python package drops spans in silence when you give it a `sqlite:` URI.
+- **Some clients cannot write to SQLite.** The lightweight `mlflow-tracing` package and the TypeScript plugins for Claude Code and Codex cannot write to SQLite. They need an HTTP server. The Python package drops spans in silence when you give it a `sqlite:` URI.
 
 ## 1. The trace data model
 
@@ -84,7 +84,7 @@ Each assessment has a source with a type (`HUMAN`, `LLM_JUDGE` or `CODE`) and an
 
 The mapping to OTel is direct. An MLflow span is an OTel span with MLflow attributes, and MLflow uses an OTel `TracerProvider` inside. `Span.from_otel_proto()` and `Span.to_otel_proto()` convert between the two forms. The [attribute mapping page](https://mlflow.org/docs/latest/genai/tracing/opentelemetry/attribute-mapping/) lists the mappings for each attribute schema.
 
-## 2. Storage backends, and what changed
+## 2. Storage backends
 
 ### Current backends (3.17.2)
 
@@ -97,16 +97,16 @@ The mapping to OTel is direct. An MLflow span is an OTel span with MLflow attrib
 
 A SQL store can also move old span data out to object storage, for example S3. The [trace archival](https://mlflow.org/docs/latest/genai/tracing/observe-with-traces/archive-traces) feature came in 3.13.0. The tag `mlflow.trace.spansLocation` says where the spans of a trace live (`TRACKING_STORE` or an archive).
 
-### What is deprecated, and when
+### How MLflow retired the file store
 
-Direct SQLite with no server is **not** deprecated. A search of the 3.17.2 source and the changelog found no deprecation of it. Since 3.7.0 it is the **default**. Only the file store was retired, in these steps:
+Direct SQLite with no server is not deprecated. A search of the 3.17.2 source and the changelog found no deprecation of it. Since 3.7.0 it is the default. Only the file store was retired, in these steps:
 
 1. **3.6.0 (2025-11-07).** "[Model Registry] Add deprecation warnings for filesystem backends (#18524, @harupy)".
 2. **3.7.0 (2025-12-05).** Breaking change: "**SQLite as Default Backend**: MLflow now uses SQLite as the default backend instead of file-based storage, unless existing mlruns data is detected." (#18497). The code is `_get_default_tracking_uri()` in `mlflow/tracking/_tracking_service/utils.py`. It returns `./mlruns` only if `./mlruns/<digits>/meta.yaml` exists, and returns `sqlite:///mlflow.db` in all other cases.
 3. **3.10.0 (2026-02-20).** "Add mlflow `migrate-filestore` command (#20615)". The [migration guide](https://mlflow.org/docs/latest/self-hosting/migrate-from-file-store) says "The filesystem backend is in maintenance mode and will not receive further updates." The tool writes only to SQLite, with `mlflow migrate-filestore --source /path/to/mlruns --target sqlite:///path/to/mlflow.db`.
 4. **3.13.0 (2026-05-29).** Breaking change: "Pointing the tracking or model registry store at a local file-system path now raises an error by default; set `MLFLOW_ALLOW_FILE_STORE=true` to keep using a file-based store. (#22773, @harupy)".
 
-The exact error in 3.17.2, from `FileStore.__init__` in `mlflow/store/tracking/file_store.py`, as a run with a `file:///...` tracking URI showed it, is in the block below.
+A run with a `file:///...` tracking URI showed the exact error in 3.17.2, below. It comes from `FileStore.__init__` in `mlflow/store/tracking/file_store.py`.
 
 ```text
 The filesystem tracking backend (e.g., './mlruns') is in maintenance mode and will not receive further updates. Please migrate to a database backend (e.g., 'sqlite:///mlflow.db') to access the latest MLflow features. The `mlflow migrate-filestore` tool migrates your existing data losslessly. See https://mlflow.org/docs/latest/self-hosting/migrate-from-file-store for migration guidance. If the filesystem backend is required for your workflow, set `MLFLOW_ALLOW_FILE_STORE=true` to opt out of this exception.
@@ -118,7 +118,7 @@ No removal date is published. The [backend store page](https://mlflow.org/docs/l
 
 ## 3. The SQLite schema for traces (3.17.2)
 
-The schema comes from `sqlite3 <file> .schema` on a new database that MLflow 3.17.2 made. The Alembic head is `dc11669786a5`, and there are 69 migration files. The trace tables are below.
+The schema comes from `sqlite3 <file> .schema` on a new database that MLflow 3.17.2 made. The Alembic head is `dc11669786a5`, and there are 67 migration files. The trace tables are below.
 
 ```sql
 CREATE TABLE trace_info (
@@ -180,7 +180,7 @@ The trace migrations are in `mlflow/store/db_migrations/versions/`. Each one run
 | `c8d9e0f1a2b3_add_span_metrics_and_dimension_attributes`, `b7c8d9e0f1a2_add_trace_metrics_table` | | Add the metric tables |
 | `75868b020152_add_sql_trace_analytics_schema`, `c1d2e3f4a5b6`, `1971f2d9a75b`, `da6fb0208061` | 2026 | Add analytics, indexes and archival |
 
-The schema changes often. Ten trace migrations came in about 18 months. Also, the changelog for 3.13.0 lists a full rework of the permission tables.
+The schema changes often. Twelve trace migrations came in about 28 months, from April 2024 to August 2026. Also, the changelog for 3.13.0 lists a full rework of the permission tables.
 
 ## 4. OpenTelemetry
 
@@ -210,15 +210,13 @@ A test checked the GenAI translation with no server. It builds an OTel protobuf 
 
 ### Export to an OTel collector
 
-The settings below are in `mlflow/environment_variables.py`.
+The settings below are in `mlflow/environment_variables.py`, and the [export docs](https://mlflow.org/docs/latest/genai/tracing/opentelemetry/export/) describe them.
 
-- **`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`** (with `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` and headers). If it is set, MLflow exports to the OTLP endpoint **in place of** the tracking store.
-- **`MLFLOW_ENABLE_OTLP_EXPORTER`** (default `True`). It turns off the OTLP export above even when the OTel variable is set. It came in 3.5.0 (#17505).
+- **`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`** (with `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` and headers). If it is set, MLflow exports to the OTLP endpoint in place of the tracking store.
+- **`MLFLOW_ENABLE_OTLP_EXPORTER`** (default `True`). Set to `False`, it turns off the OTLP export above, even when the OTel variable is set. It came in 3.5.0 (#17505).
 - **`MLFLOW_TRACE_ENABLE_OTLP_DUAL_EXPORT`** (default `False`). It writes to both the tracking store and the collector.
 - **`MLFLOW_ENABLE_OTEL_GENAI_SEMCONV`** (default `False`). It rewrites `mlflow.*` attributes to GenAI semantic conventions before OTLP export, since 3.11.0 (#21494). See the [GenAI semconv docs](https://mlflow.org/docs/latest/genai/tracing/opentelemetry/genai-semconv/).
 - **`MLFLOW_USE_DEFAULT_TRACER_PROVIDER`** (default `True`, which gives an isolated provider). Set it to `False` to mix MLflow and plain OTel SDK spans in one trace. `MLFLOW_TRACE_PROPAGATE_TO_OTEL_CONTEXT` lets plain OTel libraries nest under MLflow spans.
-
-The [export docs](https://mlflow.org/docs/latest/genai/tracing/opentelemetry/export/) describe these settings.
 
 ## 5. Integrations
 
@@ -244,7 +242,7 @@ claude plugin install mlflow-tracing@mlflow-plugins
 - **Hook.** The plugin registers one **Stop hook**, in `hooks/hooks.json`. The hook runs `node ${CLAUDE_PLUGIN_ROOT}/bundle/stop.cjs` with a 120-second timeout.
 - **Transcript.** The hook reads the session transcript JSONL (`transcript.ts`, `processTranscript`). It makes an `AGENT` root span for each turn, with `LLM` and `TOOL` children and nested `AGENT` spans for subagents. Token and cache usage go on each LLM span.
 - **Write-ahead log.** A write-ahead log, a local file of pending writes, keeps tracing from slowing the agent or losing traces (changelog 3.14.0).
-- **Tracking URI.** `isValidTrackingUri()` in `src/config.ts` accepts only `http:`, `https:` and `databricks` URIs. **The plugin cannot write to SQLite.** It needs `mlflow server`.
+- **Tracking URI.** `isValidTrackingUri()` in `src/config.ts` accepts only `http:`, `https:` and `databricks` URIs. The plugin cannot write to SQLite, so it needs `mlflow server`.
 - **History.** Claude Code tracing came in 3.4 and 3.5 (#17521, #18022), as a Python hook that `mlflow autolog claude` wrote into `.claude/settings.json`. In 3.12.0, the tracing moved to TypeScript (#22338). The 3.13.0 notes say "`mlflow autolog claude` no longer installs the old Python autolog hook; Claude Code tracing is now provided by the official Claude plugin, which must be installed separately. (#23339)". The Python `mlflow/claude_code/tracing.py` still has the transcript parser.
 - **OTel path.** Claude Code also emits OTLP traces by itself, which is beta in Claude Code, to `/v1/traces`. MLflow maps `claude_code.interaction`, `claude_code.llm_request` and `claude_code.tool` to `AGENT`, `LLM` and `TOOL` (`translation/claude_code.py`). The content is `<REDACTED>` if the user does not set `OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_TOOL_DETAILS` or `OTEL_LOG_TOOL_CONTENT`.
 - **Agent SDK.** For the TypeScript Claude Agent SDK, use `createTracedQuery(query)`. For the Python Claude Agent SDK, use `mlflow.anthropic.autolog()`.
@@ -263,7 +261,7 @@ The AI Gateway (3.13.0) can also trace Claude Code, Codex and Gemini CLI. It wor
 
 ## 6. Writing traces with no server
 
-All three APIs below work in 3.17.2 with `mlflow.set_tracking_uri("sqlite:////abs/path.db")` and the **full** `mlflow` package. A test ran each of them.
+All three APIs below work in 3.17.2 with `mlflow.set_tracking_uri("sqlite:////abs/path.db")` and the full `mlflow` package. A test ran each of them.
 
 - **`mlflow.start_span(name, span_type=...)`** is a context manager. **`@mlflow.trace`** is a decorator. Both make spans under the active trace, or start a new trace.
 - **`MlflowClient().start_trace(name, span_type, inputs, attributes, tags, experiment_id, start_time_ns, run_id, links)`**, with `start_span`, `end_span` and `end_trace`, takes explicit IDs and times. Use it to replay events that happened earlier.
@@ -279,7 +277,7 @@ Be careful with these behaviors:
 
 ## 7. Recommendation
 
-MLflow is a reasonable **first** backend for provevi, if provevi treats MLflow as one driver behind its own interface. Provevi must not take MLflow's schema as its own.
+MLflow is a reasonable first backend for provevi, if provevi treats MLflow as one driver behind its own interface. Provevi must not take MLflow's schema as its own.
 
 Reasons to use MLflow:
 
@@ -290,7 +288,7 @@ Reasons to use MLflow:
 
 Risks, and how to handle each one:
 
-1. **The schema changes often and is internal.** Ten trace migrations came in 18 months, and analytics tables are new. Do not read or write the SQLite tables from provevi. Use the MLflow client APIs, or OTLP. Pin a minor version in the driver.
+1. **The schema changes often and is internal.** Twelve trace migrations came in about 28 months, and analytics tables are new. Do not read or write the SQLite tables from provevi. Use the MLflow client APIs, or OTLP. Pin a minor version in the driver.
 2. **The supported paths keep moving.** MLflow retired the file store over 3.6.0 to 3.13.0. It replaced the Claude Code hook in 3.12.0 and 3.13.0. Keep the driver small, and test it against each MLflow minor release.
 3. **The clients disagree about SQLite.** Only full Python `mlflow` writes SQLite in process. The plugins for Claude Code and Codex, the TypeScript SDK and `mlflow-tracing` need a server, and `mlflow-tracing` drops spans in silence. For agent CLIs, plan to run `mlflow server --backend-store-uri sqlite:///...`. If a URI is wrong, make the provevi driver fail loudly.
 4. **The dependency is heavy.** Full `mlflow` takes about 509 MB. Load it only inside the driver, as an optional extra.

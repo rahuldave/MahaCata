@@ -4,7 +4,7 @@ provrun is a Python library that runs agents and model calls on data that provca
 
 **Status:** phases 0 to 4 are built. Commit `5d8246b` made the workspace, and commit `2524d03` added snapshots and provrun. [provrun.md](provrun.md) is the guide for users. This plan records the design, so some steps below describe work that is now finished.
 
-The design comes from three sources. The first source is the private planning documents of the larger system that provrun serves. The sections of its implementation spec on access, evidence and execution matter most. The second source is the agent execution spec of an earlier, private runtime. The third source is the current Microsoft documentation of the Foundry Agent Service.
+The design comes from three sources. The first source is the private planning documents of the larger system that provrun serves. Of those documents, the sections of the implementation spec on access, evidence and execution are the most important to the design. The second source is the agent execution spec of an earlier, private runtime. The third source is the current Microsoft documentation of the Foundry Agent Service.
 
 ## Terms
 
@@ -87,7 +87,7 @@ Each step of a run writes an evidence event. The steps of one run follow this or
 7. `Outputter` writes `output_artifact_created` for each output.
 8. `RunContext` writes `run_completed` or `run_failed`, and then commits the evidence bundle.
 
-A step that raises an error writes `step_failed`. The PydanticAI backend also writes `trace_imported`, just before `sandbox_completed`. The agent can write `note_added`.
+A step that raises an error writes `step_failed`. The PydanticAI backend also writes `trace_imported`, immediately before `sandbox_completed`. The agent can write `note_added`.
 
 ### Room for later backends
 
@@ -115,7 +115,7 @@ An evidence event has these fields:
 | `refs` | The pinned logical URIs that the event is about. |
 | `data` | Small facts, for example a model name, a token count or a decision. |
 | `payload` | The SHA-256 of a large payload, for example a prompt or a response, stored apart from the event. |
-| `confidence` | `observed`, `parsed`, `inferred` or `verified`. Events that provrun writes itself are `observed`. |
+| `confidence` | `observed`, `parsed`, `inferred` or `verified`. Events that provrun sees itself are `observed`. A provider's account of a tool that it ran, and an imported trace, are `parsed`. |
 | `prev` | The SHA-256 of the previous event of the run. The chain shows when someone changes or removes an event. |
 
 Events refer to logical URIs and not to paths on a disk, so that a later job can ask for the same snapshot.
@@ -124,7 +124,7 @@ At the end of a run, the recorder writes a manifest with the hash of the last ev
 
 The recorder also opens an OpenTelemetry span for each step. The spans use the GenAI semantic conventions, for example `invoke_agent` and `execute_tool`. Those conventions are still at Development status, so provrun pins one version. When no exporter is set, the spans go nowhere and cost little.
 
-Model calls and tool calls inside PydanticAI must reach the recorder without help from the agent. provrun wraps the PydanticAI model in a subclass of its `WrapperModel` that writes `model_called`. It also wraps each toolset in a subclass of `WrapperToolset` that writes `tool_called`. The agent can add notes and citations through a tool, and those events have the component `agent`.
+Model calls and tool calls inside PydanticAI must reach the recorder without help from the agent. provrun gives the agent one PydanticAI capability, which writes `model_called` for each model request and `tool_called` for each tool call. A capability is PydanticAI's hook on each step of an agent run. The agent can add notes and citations through a tool, and those events have the component `agent`.
 
 ## Phases
 

@@ -1,6 +1,6 @@
 # Capture routes for Claude Code and Codex
 
-Research for provevi, as of 2026-10-31. Provevi is the planned evidence store and trace store. It must
+The research on this page is for provevi, and it is current as of 2026-10-31. Provevi is the planned evidence store and trace store. It must
 record every model call, tool call, prompt, subagent and session event of a coding agent. It records each
 one as an OpenTelemetry span and as an evidence event in a hash chain.
 
@@ -25,7 +25,7 @@ one as an OpenTelemetry span and as an evidence event in a hash chain.
   Codex calls it a rollout file.
 - **Model call.** One HTTP request from the agent to the model API and its response.
 
-A note on the documentation sites. The OpenAI URLs `developers.openai.com/codex/hooks` and
+Note: the OpenAI URLs `developers.openai.com/codex/hooks` and
 `developers.openai.com/codex/config-advanced` now return a 308 redirect to `learn.chatgpt.com/docs/...`.
 The page cites the target URLs. The Codex GitHub `docs/` folder holds only stubs that point to the site.
 
@@ -79,7 +79,7 @@ The `additionalContext` field goes to the model as a system reminder, with a cap
 
 **Model calls in hooks.** No hook receives a model request or a model response. The nearest data are
 `last_assistant_message` on `Stop` and `SubagentStop`, the text deltas on `MessageDisplay`, and
-`PostToolBatch`, which fires just before the next model call. Hooks give tool calls, prompts and
+`PostToolBatch`, which fires immediately before the next model call. Hooks give tool calls, prompts and
 lifecycle events. They give no token counts.
 
 ### 2. Built-in OpenTelemetry
@@ -156,7 +156,7 @@ claude_code.interaction            one span for each user prompt
 ```
 
 Bash subprocesses inherit `TRACEPARENT`. In `-p` mode and in Agent SDK sessions, Claude Code reads an
-inbound `TRACEPARENT` and `TRACESTATE` from the environment. Provevi can therefore set the parent trace.
+inbound `TRACEPARENT` and `TRACESTATE` from the environment. So provevi can set the parent trace.
 
 ### 3. Session transcripts
 
@@ -170,7 +170,7 @@ https://code.claude.com/docs/en/claude-directory.
 - **Large outputs.** `~/.claude/projects/<project>/<session>/tool-results/` holds tool outputs that were
   too large for the main file.
 - **Retention.** Claude Code deletes these files after `cleanupPeriodDays`, which is 30 by default. Set
-  the value higher, or copy the files out, so that evidence stays.
+  the value higher, or copy the files out, to keep the evidence.
 
 The documentation says the transcript holds messages, tool calls and tool results. It also holds the
 system prompt, tool definitions and the parameters of each model request. The files are plain text and
@@ -254,7 +254,7 @@ request body that went to the model.
 
 ### 6. Hooks, notify and OpenTelemetry
 
-**Hooks.** Codex now has a hooks system that copies the Claude Code model. Hooks are on by default. The
+**Hooks.** Codex now has a hooks system that copies the design of the Claude Code hooks. Hooks are on by default. The
 source is https://learn.chatgpt.com/docs/hooks.
 
 - **Configuration.** Put hooks in `hooks.json` or in a `[hooks]` table of `config.toml`, in `~/.codex/`
@@ -353,7 +353,7 @@ Codex cuts command output and MCP results at 64 KB in the rollout file. The `rea
   `reasoning_output_tokens`), `turn.failed` and `error`.
 - **Item events.** `item.started`, `item.updated` and `item.completed`. Each carries an `item` with `id`
   and `type`.
-- **Item types.** The item types are in the table below.
+- **Item types.** The table below lists the item types and their fields.
 
 | Item `type` | Fields |
 |---|---|
@@ -371,7 +371,7 @@ types that are generated from the app server protocol. Its event stream was not 
 ### 8. Gaps for Codex
 
 - **No raw model requests.** No route gives the full request body. The rollout file gives the instructions,
-  the items and the usage, and Provevi can rebuild the request from them.
+  the items and the usage, and provevi can rebuild the request from them.
 - **Encrypted reasoning.** Reasoning text is encrypted in the rollout file. Only summaries are readable.
 - **Hosted tools.** Hooks do not cover `WebSearch` and other hosted tools. The rollout file and
   `exec --json` (`web_search` items) do show them.
@@ -438,4 +438,4 @@ types that are generated from the app server protocol. Its event stream was not 
 4. **Use `codex exec --json` or the SDK for automated runs.** Record each event. Join it to the rollout
    file by `thread_id`.
 5. **Record what is missing.** Store a field in the evidence that says the request body and the reasoning
-   text are not available for Codex. A reader of the evidence then knows the record has no gap by error.
+   text are not available for Codex. A reader of the evidence then knows that the gap is expected and is not an error.

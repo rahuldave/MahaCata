@@ -187,7 +187,7 @@ lakefs-acme://acme-data-sales/66e31b0b4f4106b90daacf5a46a349884414697fc9ef3f190b
 
 On a bucket scheme, such as `files`, a logical URI takes `branch:`, `commit:` and `version:`. A branch goes in the path. A commit or a version goes on to the physical URI as `?at=`, on the default branch of the scheme. provcat refuses `tag:`, because a bucket has no tags. It passes `ts:` on to the bucket, which refuses it. A commit made on another branch reads only through its physical URI, which `provc commit` prints.
 
-In [the tour](tour.md), the last line of `day1.csv` goes from `2,west,12` to `2,west,15` after the folder's commit. `$ID` holds the commit, and `$VERSION` takes the version ID that `pin` prints. The name then reads the version, which is the file as it is now, and the commit, which is the file as it was. It refuses a tag:
+In [the tour](tour.md), the last line of `day1.csv` goes from `2,west,12` to `2,west,15` after the folder's commit. `$ID` holds the commit, and `$VERSION` takes the version ID that `pin` prints. The name then reads two versions of the file. The version ID gives the file as it is now, and the commit gives the file as it was. provcat refuses a tag:
 
 ```
 $ ID=0537ea725a5756b72794cdfdcb4a8f2ae9ab7932a133b8a2e3351f4e8c3973ac
@@ -210,9 +210,9 @@ provc: files://sales/orders/day1.csv?at=tag:v1: files goes to a bucket, which ha
 
 ## Write, commit, branch and merge
 
-provcat writes to every store but GitHub and Hugging Face. On lakeFS it commits, branches and merges. This example puts a month of orders on `main`, corrects it on a branch, and merges the correction.
+provcat writes to every store except GitHub and Hugging Face. On lakeFS it commits, branches and merges. This example puts a month of orders on `main`, corrects it on a branch, and merges the correction.
 
-The example uses the store `lakefs-acme` of the example configuration. That store needs a lakeFS at the address in `LAKEFS_S3_ENDPOINT`, the keys of the AWS profile `lakefs-acme`, and a repository `acme-data-sales`. [The reference lakeFS target](lakefs-target.md) sets these up. A lakeFS commit and a lakeFS merge take every change on the branch, including files that the URI does not name.
+The example uses the store `lakefs-acme` of the example configuration. That store needs a lakeFS at the address in `LAKEFS_S3_ENDPOINT`, the keys of the AWS profile `lakefs-acme`, and a repository `acme-data-sales`. [The reference lakeFS target](lakefs-target.md) sets these up. A lakeFS commit and a lakeFS merge take every change on the branch. They also take the changes to files that the URI does not name.
 
 ```
 $ printf 'id,total\n1,30\n2,12\n' > orders.csv

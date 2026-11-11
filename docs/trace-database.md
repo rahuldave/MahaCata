@@ -29,7 +29,7 @@ MLflow keeps each span as one JSON text, so a question about a message or a tool
 
 ## The package and its command
 
-A new package in the workspace, proposed name `provtrace`, with its own command. It depends on provevi, and provevi never imports it. The command reads a provevi store, and it opens that store read-only.
+A new package in the workspace builds the trace database, and it has its own command. Its proposed name is `provtrace`. It depends on provevi, and provevi never imports it. The command reads a provevi store, and it opens that store read-only.
 
 | Command | What it does |
 |---|---|
@@ -100,7 +100,7 @@ provrun writes all of these, so each change needs the agent that owns provrun.
 
 The span IDs are there now. provrun owns its tracer provider. So each step's event holds its trace ID, span ID and parent span ID, and so does each tool call that the provider runs. Runs written before provrun owned its provider have none.
 
-Each run is one trace now. provrun opens a root span for the run, and each top-level step's `parent_span_id` names it. The root span writes no event of its own. `run_created`, and `run_completed` or `run_failed`, hold its `trace_id` and `span_id`, and their times are its start and end. So the build makes the run's `AGENT` span from those two events, with that span ID. Runs written before the root span have a separate trace for each step.
+Each run is one trace now. provrun opens a root span for the run, and each top-level step's `parent_span_id` names it. The root span writes no event of its own. Its `trace_id` and `span_id` are in `run_created` and in `run_completed` or `run_failed`, and the times of those events are its start and end. So the build makes the run's `AGENT` span from those two events, with that span ID. Runs written before the root span have a separate trace for each step.
 
 The start of each step is there now too. Each step's event holds `started_at`, so the build can give a duration. Runs written before this field have none. A tool that the provider ran has no `started_at` either, because provrun did not see it run.
 

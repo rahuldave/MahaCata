@@ -50,7 +50,7 @@ Only these kinds of span were present:
 
 - **The schema belonged to MLflow.** The repair script read MLflow's tables with SQL, and an MLflow migration could rename what it read. Opening an old database also runs MLflow's migrations, so a read-only reader can fail or change the file.
 - **Trace IDs came from a global,** so a retry or a thread could link a run to the wrong trace.
-- **Spans held whole documents,** so the database grew without limit, and showing one answer meant loading megabytes.
+- **Spans held whole documents,** so the database grew without limit. To show one answer, a reader loaded megabytes.
 - **Readers assumed one span.** The judges and the web page read the first span and expected chat messages. An agent trace's first span has a prompt and no messages, so judges got no conversation from an agent run.
 - **Agent steps were not spans,** so no query could find every call of one tool without parsing message lists.
 - **Attribute names came from libraries,** such as LiteLLM's `response_cost`, and could change. The agent span named the model's class, not the model.
@@ -58,9 +58,9 @@ Only these kinds of span were present:
 - **Deleted runs left their traces behind.**
 - **WAL mode did not stay on.** The runtime set it once, but the largest file was back in the default mode.
 - **The run-to-trace link was kept twice,** in the runtime's database and in MLflow's, so the two could disagree.
-- **Nothing showed whether a row had changed,** so the traces were not evidence in the sense of provrun's hash chain.
+- **Nothing in the database showed whether a row had changed,** so the traces were not evidence in the sense of provrun's hash chain.
 
-The runtime's own notes also expected MLflow's SQLite store to go away. [The MLflow note](mlflow-tracing.md) found that it is not going away. Only the older file store is retired.
+The runtime's own notes also expected MLflow's SQLite store to go away. [The MLflow note](mlflow-tracing.md) found that the SQLite store stays. MLflow retires only the older file store.
 
 ## Notes for provevi
 

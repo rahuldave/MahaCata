@@ -2,7 +2,7 @@
 title: A runnable tour of provrun
 ---
 
-This tour follows one file from a store, through the provcat cache, into a run of an agent, and into the evidence of that run. It needs no model, no key and no network, except in the last step, which is optional. The agent answers with the LiteLLM setting `mock_response`. The store is moto, a local server that speaks the S3 protocol, which the tests also use.
+This tour follows one file from a store, through the provcat cache, into a run of an agent, and into the evidence of that run. It needs no model, no key and no network, except in the last two steps, Steps 16 and 17, which are optional. The agent answers with the LiteLLM setting `mock_response`. The store is moto, a local server that speaks the S3 protocol, which the tests also use.
 
 A script, `tours/provrun/run.sh`, runs every step and prints each command before its output. The output below is from that script. The run IDs, times, version IDs and hashes differ on each run. [What provrun does](provrun-features.md) shows the features first, and [provrun.md](provrun.md) is the reference. [The provcat tour](tour.md) shows provcat alone.
 
@@ -56,12 +56,12 @@ Add `--online` to run Steps 16 and 17 too, which call a real model. The script s
 
    The script does these things:
 
-   - It makes the scratch folder `/tmp/provrun-tour`, or the folder in `TOUR_DIR`. It refuses a folder that is already there, unless an earlier tour made it, and a second start in the same shell.
+   - It makes the scratch folder `/tmp/provrun-tour`, or the folder in `TOUR_DIR`. It stops with an error if that folder is already there. When an earlier tour made the folder, the error says to run `source tours/provrun/stop.sh` first. It also stops on a second start in the same shell.
    - It points `PROVCAT_CONFIG`, `PROVCAT_CACHE` and `PROVRUN_RUNS` at that folder, so the tour does not touch your own cache or runs.
    - It sets fake AWS keys for moto. It unsets `AWS_PROFILE`, `AWS_SESSION_TOKEN`, the provcat hook variables, the proxy and Postgres variables, and every `OTEL_`, `LOGFIRE_`, `MLFLOW_` and `LITELLM_` variable. These variables would change what a run records.
    - It keeps the old values in a shell variable that it does not export, so that `stop.sh` can put them back. It never prints them.
    - It hides one LiteLLM warning, that a logging coroutine was never awaited, through `PYTHONWARNINGS`.
-   - It starts moto on port 5055, or the port in `TOUR_S3_PORT`. It starts the collector on port 4318, or the port in `TOUR_OTLP_PORT`. It refuses a port that is in use.
+   - It starts moto on port 5055, or the port in `TOUR_S3_PORT`. It starts the collector on port 4318, or the port in `TOUR_OTLP_PORT`. It stops with an error if a port is in use.
    - It makes the buckets `data` and `runs`, with versioning on, and copies the tour's files into the folder.
 
 2. Copy each command of the steps below into the same shell, in order. Copy only the text after `$ `.
@@ -230,7 +230,7 @@ dr-xr-xr-x /tmp/provrun-tour/runs/run-20261102T224004Z-d7651699/input
 -r--r--r-- /tmp/provrun-tour/runs/run-20261102T224004Z-d7651699/input/report.txt
 ```
 
-The input and its folder are read-only, so a write to the file fails with `Permission denied`. The root user ignores read-only bits, so as root, for example in a container, the write succeeds. Then `input_verified` is what catches a change.
+The input and its folder are read-only, so a write to the file fails with `Permission denied`. The root user ignores read-only bits, so as root, for example in a container, the write succeeds. Then the check that writes `input_verified` catches a change.
 
 **What happened:**
 - The stager cloned the snapshot into `input/` and made the folder and the file read-only. The agent knows the file as `/input/report.txt`. The LiteLLM backend has no file system, so it puts the text of the file into the prompt under that name. The PydanticAI backend mounts the folder at `/input`.
@@ -428,7 +428,7 @@ The command exits with status 1. Without `--store`, `prove verify` checks only t
 
 ## Step 10: Run under a telemetry policy
 
-The operator's telemetry policy says what may record or send data from a run, besides the evidence. This one approves LiteLLM at the tested version, sends spans nowhere, and lets a run reach only OpenAI.
+The operator's telemetry policy says what may record or send data from a run, besides the evidence. The tour's policy approves LiteLLM at the tested version, sends spans nowhere, and lets a run reach only OpenAI.
 
 Run the file under it, with four variables set. Two name a collector for spans and its token. One names an MLflow database with its password. The last is a LiteLLM setting that provrun changes for the run. Then print the `telemetry` part of the run's first event, `run_created`.
 
@@ -653,7 +653,7 @@ $ cat $TOUR_DIR/collector.log
 
 ## Step 13: Copy a run into MLflow
 
-MLflow is a place to look at runs, with a web viewer. A policy can approve an MLflow destination. The tour's MLflow destination has no endpoint, so it names the SQLite evidence store's own file. MLflow there receives names only:
+MLflow is a place to look at runs, with a web viewer. A policy can approve an MLflow destination. The tour's MLflow destination has no endpoint, so it names the file of the SQLite evidence store. MLflow there receives names only:
 
 ```
 $ cat $TOUR_DIR/mlflow.yaml
@@ -726,7 +726,7 @@ $ test -e $TOUR_DIR/elsewhere.db || echo "no copy"
 no copy
 ```
 
-The run gives no copy to the place that the policy does not approve. The event names the variable, and records no path of the file.
+The run made no copy in the file that the policy does not approve. The event names the variable, and records no path of the file.
 
 ## Step 14: Ask for the reply in pieces
 
@@ -763,7 +763,7 @@ Revenue in 2025 was 42 million.
 - `model_called` says `streamed`, with the tokens in and out from the stream's last chunk, and why the model stopped. It also holds `first_token_ms`, the milliseconds to the first piece, which differs on each run, so the step does not print it.
 - `response.txt` holds the whole reply, as for a run that does not stream.
 
-A program can watch a run as it goes, through the run's live feed. The telemetry policy decides what a viewer sees, as the level of its destination of kind `live`. With no such destination, a viewer sees only the end. This policy names a viewer, `browser`, that receives `names`. The script `follow.py` starts the same run under it with `start_run`, and prints each item of the feed as it comes, with the keys of the data it shows:
+A program can watch a run as it goes, through the run's live feed. The level of the policy's destination of kind `live` sets what a viewer sees. With no such destination, a viewer sees only the end. This policy names a viewer, `browser`, that receives `names`. The script `follow.py` starts the same run under it with `start_run`. It prints each item of the feed as it comes, with the keys of the data that the item shows:
 
 ```
 $ cat $TOUR_DIR/live.yaml
@@ -810,7 +810,7 @@ experiment://acme/demo/dev/revenue/retrieval?at=commit:a0b99d93dd3e6e032c08fa798
 8386baf7befc41bccec929be03e8a1dec4c9f37b2422a5d5eb11f4333fa3faef
 ```
 
-A run file names its experiment beside its agent. As the run starts, the broker decides the experiment, before anything reads it. Then provrun pins it through the run's catalog, so the catalog's checks and hooks see it, and `run_created` records the URI, the pin and the hash. `prove access` lists the broker's grants. The experiment's grant, in the mode `pinned_read`, comes before the input's:
+A run file names its experiment beside its agent. As the run starts, the broker decides whether the run may read the experiment, before anything reads it. Then provrun pins it through the run's catalog, so the catalog's checks and hooks see it. `run_created` records the URI, the pin and the hash. `prove access` lists the broker's grants. The experiment's grant, in the mode `pinned_read`, comes before the input's:
 
 ```
 $ { echo "experiment: experiment://acme/demo/dev/revenue/retrieval"; cat $TOUR_DIR/run.yaml; } > $TOUR_DIR/exp.yaml
@@ -860,7 +860,7 @@ run-20261110T045534Z-11b04ed6: the evidence and the outputs verify, and match th
 **What happened:**
 - Each version of the experiment has its own pin, so a run says which version it ran, though the run file names no version.
 - `prove verify` read the first run's experiment at that run's pin, after the second version was written, and its hash matched.
-- The broker granted the experiment before the run read it. It checks the experiment's org and environment as it checks an input's, so a `dev` run cannot name an experiment whose URI says `prod`. An experiment on a branch, such as `?at=branch:prod`, must be in the run's `allow` list, and so must a `commit:` whose value is not a commit ID.
+- The broker granted the experiment before the run read it. It checks the experiment's org and environment as it checks an input's, so a `dev` run cannot name an experiment whose URI says `prod`. An experiment on a branch, such as `?at=branch:prod`, must be in the run's `allow` list. So must a `commit:` whose value is not a commit ID.
 - An experiment that cannot be pinned, such as one in a store with no commits, stops the run before the run folder is made. An experiment that the broker refuses fails the run instead, and so does a grant that has expired by the time the run opens. The evidence records the deny.
 - The second run records the first as its parent. A parent that the store does not hold stops the run before the run folder is made.
 
@@ -1077,9 +1077,9 @@ The examples `claude-run.yaml` and `claude-agent.yaml` in `packages/provrun/exam
 
 ## Step 17: Stream a real model in your own agent (needs ANTHROPIC_API_KEY)
 
-This step also runs only with `--online`, and costs less than a cent. A run file asks for a streamed reply with `stream: true`, as Step 14 showed. Your own code can stream too, and still get provrun's evidence, by giving its PydanticAI agent provrun's capability, `evidence_capability`. The script `streamed.py` does this, with one tool. It prints the reply as it arrives, then the events that the capability wrote.
+This step also runs only with `--online`, and costs less than a cent. A run file asks for a streamed reply with `stream: true`, as Step 14 showed. Your own code can stream too, and still get provrun's evidence. It gives its PydanticAI agent provrun's capability, `evidence_capability`. The script `streamed.py` does this, with one tool. It prints the reply as it arrives, then the events that the capability wrote.
 
-The agent, and how it is run. `PROVRUN_TOUR_MODEL` can name another model, such as PydanticAI's `test`, which needs no key; the tests run the script that way:
+The part of the script below makes the agent and runs it. `PROVRUN_TOUR_MODEL` can name another model, such as PydanticAI's `test`, which needs no key. The tests run the script that way:
 
 ```
 $ sed -n "/^model = /,/^    print()/p" tours/provrun/streamed.py
@@ -1111,7 +1111,7 @@ model_called claude-haiku-5-5 streamed 460 17 stop
 - Each `model_called` holds the tokens in and out, and why the model stopped. The capability reads them from the whole response, after the stream ends.
 - The tool call wrote `tool_called`.
 
-This script writes only events. It has no store, no bundle and no telemetry policy, which `provr run` gives a run. Its evidence has no `run_created` first and no `run_completed` last, so `provr verify` does not pass it. The script refuses a folder that is not empty, as a second run there would add to the first.
+This script writes only events. It has no store, no bundle and no telemetry policy, which `provr run` gives a run. Its evidence has no `run_created` first and no `run_completed` last, so `provr verify` does not pass it. The script stops with an error if its folder is not empty, because a second run there would add to the first.
 
 ## Where each step lives in the code
 

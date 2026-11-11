@@ -2,7 +2,7 @@
 title: "Tutorial: run an agent on a named report, and check what it did"
 ---
 
-In this tutorial, you ask an agent a question about a report, and then you answer the questions that come later. Which version of the report did the agent read? What did it answer? Has anyone changed the record since? All three packages of MahaCata take part. provcat names the report and keeps its versions, provrun runs the agent, and provevi keeps the evidence of each run and checks it.
+In this tutorial, you ask an agent a question about a report, and then you answer the questions that come later. You find which version of the report the agent read, what it answered, and whether anyone has changed the record since. All three packages of MahaCata take part. provcat names the report and keeps its versions, provrun runs the agent, and provevi keeps the evidence of each run and checks it.
 
 The tutorial takes about 15 minutes. It needs no account and no key, because the agent's answer is fixed in the run file. The last step is optional, and asks a real model.
 
@@ -204,7 +204,7 @@ The note says that the run folder is the only copy of the run. A run file can al
 
 ## Step 6: Look at what the agent read
 
-The run folder holds the input that the agent read, in `input/`, and its answer, in `output/`. The evidence is in `evidence/`. `bundle.json` holds the `bundle`, `pinned` and `note` that `provr run` printed, with `bundle` under the key `uri`. They say where provrun committed a copy of the run folder, when a run file names a store for runs. The files in `payloads/` hold the prompt and the answer, and each one is named by the SHA-256 hash of its content.
+The run folder holds the input that the agent read, in `input/`, and its answer, in `output/`. The evidence is in `evidence/`. `bundle.json` holds the `bundle`, `pinned` and `note` that `provr run` printed, with `bundle` under the key `uri`. The three fields say where provrun committed a copy of the run folder, when a run file names a store for runs. The files in `payloads/` hold the prompt and the answer, and each one is named by the SHA-256 hash of its content.
 
 ```
 $ find $TOUR_DIR/runs/$R1 -type f | sort
@@ -256,7 +256,7 @@ The events follow the run in order:
 - **Events 7 and 8.** These record the prompt and the model's answer, and the payloads hold their text.
 - **Event 10.** provrun checked that the input had not changed while the agent ran.
 
-`prove access` prints the broker's decisions. This tutorial uses the stub broker, which allows each input that the run file names, if its org and environment are those of the run.
+`prove access` prints the broker's decisions. This tutorial uses the stub broker. It grants access to each input that the run file names, if the input's org and environment are those of the run.
 
 ```
 $ uv run prove --store $S access $R1

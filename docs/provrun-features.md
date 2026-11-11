@@ -131,7 +131,7 @@ $ cat $TOUR_DIR/runs/$R3/input/report.txt
 Revenue in 2025 was 42 million.
 ```
 
-## Check a run, and find a change
+## Check a run and find a changed output
 
 `provr verify` checks the chain, the payloads and the outputs. It also compares the run folder with the bundle committed in the store. A changed output fails the check:
 
@@ -317,7 +317,7 @@ no copy
 
 ## Name the experiment a run belongs to
 
-An experiment is a versioned folder in the catalog, such as `experiment://acme/demo/dev/revenue/retrieval`. A run file names it with `experiment:`, beside `agent:`. As the run starts, the broker decides the experiment, and provrun pins it through the catalog. `run_created` records the URI, the pin and the SHA-256 of its file:
+An experiment is a versioned folder in the catalog, such as `experiment://acme/demo/dev/revenue/retrieval`. A run file names it with `experiment:`, beside `agent:`. As the run starts, the broker decides on access to the experiment, and provrun pins it through the catalog. `run_created` records the URI, the pin and the SHA-256 of its file:
 
 ```
 $ uv run python tours/provrun/event.py $R12 run_created experiment experiment_pin experiment_sha256
@@ -356,7 +356,7 @@ $ uv run prove --store $E verify --config $PROVCAT_CONFIG $R12
 run-20261110T045534Z-11b04ed6: the evidence and the outputs verify, and match the committed bundle; its experiment matches experiment://acme/demo/dev/revenue/retrieval?at=commit:a0b99d93dd3e6e032c08fa7987f6fd841c70b61b3d698cc73ad8a0a2ce1f816a
 ```
 
-The broker decides the experiment before it is read, as it decides each input. An experiment that cannot be pinned stops the run before the run folder is made. One that the broker refuses fails the run, and the evidence records the deny. A run that another run starts records `parent_run`, from `provr run --parent-run RUN_ID` or the `parent_run` argument. The parent must be in the run's evidence store. [provrun's page](provrun.md#name-the-experiment) says more.
+The broker decides on access to the experiment before provrun reads it, as it does for each input. An experiment that cannot be pinned stops the run before the run folder is made. One that the broker refuses fails the run, and the evidence records the deny. A run that another run starts records `parent_run`, from `provr run --parent-run RUN_ID` or the `parent_run` argument. The parent must be in the run's evidence store. [provrun's page](provrun.md#name-the-experiment) says more.
 
 ## Use it from a program
 

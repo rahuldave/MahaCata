@@ -28,7 +28,7 @@ provevi takes in two kinds of record and stores them through a driver:
 
 Each evidence event already holds the trace ID and span ID of its step (`otel.ids` in provrun). Each span should hold the run ID, as the attribute `provrun.run_id`. With both links, a reader can go from an event to its span and back.
 
-The trust of a record is kept in the event's `confidence` field:
+The event's `confidence` field says how far a reader can trust the record:
 
 - **observed:** written by provrun's own code or hook at the moment of the step.
 - **parsed:** read from something another program wrote, such as a library span, a Claude Code transcript or a Codex rollout file.
@@ -57,13 +57,13 @@ Candidate drivers, by URI scheme:
 | Scheme | What it stores | State |
 |---|---|---|
 | `file` | JSONL events and `payloads/<sha256>` in a folder. provrun commits the folder through provcat when the run sets a bundle scheme. | Built in Phase 1. |
-| `sqlite` | provevi's own tables (see "The run record"). With the optional extra `provevi[mlflow]`, also a copy of each experiment, run and trace in MLflow's tables in the same file. | Its tables are built in Phase 2. The copy in MLflow comes in Phase 4. |
-| `mlflow+http` | The MLflow copy, through a running `mlflow server`. MLflow's Claude Code and Codex plugins, its TypeScript SDK and the small `mlflow-tracing` package need one. | Not in the plan yet. |
+| `sqlite` | provevi's own tables (see "The run record"). With the optional extra `provevi[mlflow]`, also a copy of each experiment, run and trace in MLflow's tables in the same file. | Its tables are built in Phase 2, and the copy in MLflow in Phase 4. |
+| `mlflow+http` | The MLflow copy, through a running `mlflow server`. MLflow's Claude Code and Codex plugins, its TypeScript SDK and the small `mlflow-tracing` package need one. | No driver of its own. The copy of Phase 4 can write to a tracking server, at an http or https URL. |
 | `otlp` | Sends spans on to any OpenTelemetry collector. Stores nothing. | Not in the plan yet. |
 
 ## MLflow
 
-**Writing straight to SQLite is not going away.** The research corrects this point. MLflow 3.17.2 (2026-10-20) writes traces into a `sqlite:///` file with no server, through the full `mlflow` package. SQLite has been the default store since 3.7.0. What MLflow retired is the file store, `./mlruns`. Since 3.13.0 it fails unless `MLFLOW_ALLOW_FILE_STORE=true` is set.
+**MLflow still writes straight to SQLite.** The research corrects the belief that this path is going away. MLflow 3.17.2 (2026-10-20) writes traces into a `sqlite:///` file with no server, through the full `mlflow` package. SQLite has been the default store since 3.7.0. What MLflow retired is the file store, `./mlruns`. Since 3.13.0 it fails unless `MLFLOW_ALLOW_FILE_STORE=true` is set.
 
 These clients cannot write to SQLite, and need a server:
 
@@ -118,7 +118,7 @@ provrun's own capture, a PydanticAI capability or a wrapper around a call, stays
 
 For Claude Code and Codex, each hook event becomes one evidence event. When the session ends, provevi hashes the new transcript or rollout lines into the chain. It keeps them as raw bytes, because their formats are not documented. Claude Code deletes transcripts after 30 days unless `cleanupPeriodDays` is raised.
 
-## Problems the research found in provrun, now fixed
+## Problems the research found in provrun
 
 The research found five problems in provrun, and all five are fixed:
 
@@ -128,7 +128,7 @@ The research found five problems in provrun, and all five are fixed:
 - **`otel.py` claimed a schema URL for conventions 1.37.0,** although the GenAI conventions moved to their own repository with no release yet. It now claims none.
 - **The LiteLLM pin held back every fix since March 2026.** Commit 227fed4 moved provrun to `litellm==1.83.0` and PydanticAI 2.64.0.
 
-## Where provevi sits: inside a provrun run
+## Where provevi sits in a provrun run
 
 Every write to provevi happens inside the flow of a provrun program. Nothing else writes evidence.
 
@@ -164,7 +164,7 @@ Two decisions were added on 2026-11-01:
 
 For decision 3:
 
-- A span belongs to a run because it reached that run's receiver, so no run ID written by the agent program needs to be trusted.
+- A span belongs to a run because it reached that run's receiver. So provevi does not need to trust a run ID that the agent program writes.
 - No span can arrive after the hash chain is sealed.
 - No service has to run before a run starts.
 - The receiver is written so that it can later run as a long-lived daemon, `prove serve`, with the same code. That waits until runs move to containers or other machines, or until several runs at once contend for one SQLite file. Even then, provrun opens and seals each run with the daemon, and the daemon refuses spans for a run that is not open.
@@ -195,7 +195,7 @@ Grants, refusals, inputs and outputs are views over `provevi_events`, so the rec
 | MLflow | What provevi writes there |
 |---|---|
 | `experiments` | One per experiment that runs name, such as `acme/risk/dev/credit/q`. A run that names none goes in its agent class's, such as `acme/demo/dev/revenue-agent`. |
-| `runs` | One per run, with provrun's own run ID. |
+| `runs` | One per run. MLflow picks its run ID, and the tag `provrun.run_id` holds provrun's. |
 | `params`, `tags`, `metrics` | The settings, the organisation, domain and environment, and the token counts, costs and call counts. |
 | `datasets`, `inputs` | Each staged input. The source is a JSON object with the full SHA-256, and with `bodies` the URI and the pinned URI. The digest is 32 characters of the SHA-256 of the name and the source. |
 | traces and spans | The spans of the run. Each trace names the run in `mlflow.sourceRun`. |
@@ -212,14 +212,14 @@ The first plan wrote the one `runs` row with provrun's ID straight into MLflow's
 - **It lets MLflow pick the run ID,** and tags the run `provrun.run_id` with provrun's ID. The run's name is provrun's ID too. provevi finds the copy by the tag, and records MLflow's ID in no table of its own.
 - **It keeps provrun's trace ID.** MLflow names the trace `tr-` and provrun's trace ID, both in a database and on a tracking server, and keeps each span ID.
 - **It writes spans and assessments through private parts of MLflow's client,** `client._tracking_client.store.log_spans` and `client._tracing_client.log_assessment`. The public tracing calls add the user name and the git commit, and `log_assessment` has no public call. provevi pins MLflow to 3.17 for this reason.
-- **It finds an experiment by its unique name,** with `get_experiment_by_name`. The experiment's number differs from place to place, so `provevi_experiments` does not keep it.
+- **It finds an experiment by its unique name,** with `get_experiment_by_name`. The experiment's number differs from place to place, so provevi's tables do not keep it.
 
 ### What a test showed
 
-A test with MLflow 3.17.2 checked these:
+A test with MLflow 3.17.2 checked the first plan, before it changed. It checked these:
 
 - provevi's tables, made first in the same SQLite file, did not stop MLflow from making its own tables. A new client opened the file afterwards.
-- A run row with provrun's ID, resumed with `start_run(run_id=...)`, took settings, metrics, an input, a trace and a judgement.
+- A run row with provrun's ID, resumed with `start_run(run_id=...)`, took settings, metrics, an input, a trace and a judgement. A tracking server takes no such row, so the plan dropped it.
 - `get_run`, `search_runs` by tag, `search_traces` by run and `get_trace` all returned provrun's ID. The trace's `mlflow.sourceRun` was provrun's ID.
 - MLflow refused a 64-character SHA-256 as a dataset digest, with "'digest' exceeds the maximum length of 36 characters". A 32-character digest worked, with the full SHA-256 in the source.
 - `mlflow server` on the file served the run and its input, and its web page loaded.
@@ -264,7 +264,7 @@ Before this, provevi called each agent class an experiment. Version 2 of the sto
 1. **A context pack is a named, versioned set of pinned inputs.** A run, an experiment or a promoted agent would name packs, and a run would record each pack's pin. Packs come before promotion, since a promoted agent's spec names the packs it needs. Packs are not built.
 2. **A tool may bring in outside information, such as a web search.** Each call would be an event that holds the query and the answer's hash, with the answer as a payload. A promoted agent's spec would say what it may reach, and a check would compare the two. Events for outside calls are not built. provrun's tools today, `grep` and `note`, reach nothing outside the run.
 
-## Libraries first, with a command line on top
+## Each package is a library first
 
 provcat, provrun and provevi are each a library first. Each command line program is a small orchestrator on top of its library, and holds no logic that the library lacks. So another program, such as a workflow orchestrator, can use the three packages directly.
 
@@ -294,4 +294,4 @@ The command does not take in an agent's files after the fact. That import runs a
 
 ## Open questions
 
-None now.
+There are no open questions now.

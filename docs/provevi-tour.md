@@ -31,7 +31,7 @@ You need Python 3.13, [uv](https://docs.astral.sh/uv/) and `bash`.
    cd MahaCata
    ```
 
-2. Install the packages. This installs MLflow too.
+2. Install the packages. The command installs MLflow too.
 
    ```
    uv sync
@@ -39,7 +39,7 @@ You need Python 3.13, [uv](https://docs.astral.sh/uv/) and `bash`.
 
 ## Run the whole tour
 
-Run the script. It takes about a minute, most of it for starting Python and MLflow.
+Run the script. It takes about a minute, and most of the time goes to the start of Python and MLflow.
 
 ```
 bash tours/provevi/run.sh
@@ -57,7 +57,7 @@ The script makes its scratch folder, runs the steps, and deletes the folder.
 
    The script does these things:
 
-   - It makes the scratch folder `/tmp/provevi-tour`, or the folder in `TOUR_DIR`. It refuses a folder that is already there, unless an earlier tour made it.
+   - It makes the scratch folder `/tmp/provevi-tour`, or the folder in `TOUR_DIR`. It stops with an error if that folder is already there. When an earlier tour made the folder, the error says to run `source tours/provevi/stop.sh` first.
    - It points `PROVRUN_RUNS` and `PROVCAT_CACHE` at that folder, so the tour does not touch your own runs or cache. It sets `STORE` to the tour's SQLite file.
    - It unsets `PROVRUN_TELEMETRY_POLICY`, the provcat variables, and every `MLFLOW_`, `OTEL_`, `LOGFIRE_` and `LITELLM_` variable, because a run records the telemetry variables of the shell.
    - It writes the document `report.txt` and the run file `run.yaml` into the folder.
@@ -71,7 +71,7 @@ The script makes its scratch folder, runs the steps, and deletes the folder.
    source tours/provevi/stop.sh
    ```
 
-   It deletes the scratch folder, and gives back each variable that `start.sh` changed its old value.
+   It deletes the scratch folder, and sets each variable that `start.sh` changed back to its old value.
 
 ## The tour's files
 
@@ -206,7 +206,7 @@ run-20261102T191955Z-52539489: the evidence and the outputs verify; no committed
 
 **What happened:**
 - With the row gone, the chain no longer joins, and the manifest counts one event more than the file holds. `prove verify` exits with 1.
-- Without `--store`, `prove verify` reads the run folder, which still verifies. A check of the store and a check of the folder are separate, so changing one of them shows.
+- Without `--store`, `prove verify` reads the run folder, which still verifies. A check of the store and a check of the folder are separate, so a change to one of them shows.
 
 ## Step 5: Check a telemetry policy
 

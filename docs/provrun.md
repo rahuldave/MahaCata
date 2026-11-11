@@ -1,6 +1,8 @@
 # provrun
 
-provrun runs agents and model calls on data that provcat resolves, and records the evidence of each run. provrun is the caller of record. It makes the run ID, asks the broker for each input, makes read-only snapshots of the inputs through provcat and runs the agent. Then it writes the evidence and the outputs as one bundle. [provrun-plan.md](provrun-plan.md) has the design and the reasons for it. [What provrun does](provrun-features.md) shows each feature with real output, and [the tour](provrun-tour.md) runs the same commands from a script, `tours/provrun/run.sh`.
+provrun runs agents and model calls on data that provcat resolves, and records the evidence of each run. provrun is the caller of record, which is the process that owns a run and records its evidence. It makes the run ID, asks the broker for each input, makes read-only snapshots of the inputs through provcat and runs the agent. Then it writes the evidence and the outputs as one bundle.
+
+[provrun-plan.md](provrun-plan.md) has the design and the reasons for it. [What provrun does](provrun-features.md) shows each feature with real output, and [the tour](provrun-tour.md) runs the same commands from a script, `tours/provrun/run.sh`.
 
 ## Terms
 
@@ -93,7 +95,12 @@ On macOS `/tmp` is a link to `/private/tmp`, and `find_run` gives the real path.
 | `read_events(folder)` | The events in the evidence folder of a run, as `provr show` prints them. |
 | `run_agent(agent, catalog=..., org=..., ...)` | Runs an agent spec with the run settings given one by one. |
 
-`run_file` can run inside a server's event loop, such as FastAPI's, and several runs can go at once. A run does its slow plain-Python steps in threads. These steps scan the libraries for patches at the start and at the end, open the run, fetch and stage the inputs, check them, collect the outputs, seal the run, send the last spans and copy the run into MLflow. Each scan takes about a fifth of a second. So the server goes on answering other requests meanwhile.
+`run_file` can run inside a server's event loop, such as FastAPI's, and several runs can go at once. A run does its slow plain-Python steps in threads, so the server goes on answering other requests while they run. These steps do the following:
+
+- scan the libraries for patches at the start and at the end, which takes a few hundred milliseconds for each scan;
+- open the run, fetch and stage the inputs, and check them;
+- collect the outputs and seal the run;
+- send the last spans, and copy the run into MLflow.
 
 A cancel waits for the step in hand to end. Then the run ends with `run_failed`, whose error is `CancelledError`, and the cancel goes on to the caller. A cancel that comes while the run is being sealed waits for the seal. That run keeps the `run_completed` or `run_failed` it was given, and then the cancel goes on to the caller.
 
@@ -140,7 +147,7 @@ outcome = await live.result()
 - `{"n": 8, "type": "text", "text": "Revenue "}` at the `bodies` level only, for each piece of a streamed reply, or once for the whole of a reply that does not stream;
 - `{"n": 14, "type": "done", "status": "completed", "run_id": ...}` last. The status is `completed`, `failed` or `cancelled`, as the run's last event says. A run that ended before it opened has no events, so its status is that of its task, and its run ID is `null`.
 
-The run's telemetry policy sets the level, as the level of its destination of kind `live`. A run file's `telemetry` section can lower it, or leave the viewer out. A policy with no live viewer shows nothing but the `done` item. [provevi's page](provevi.md#show-a-run-to-a-live-viewer) says what each level shows:
+The level comes from the run's telemetry policy. It is the level of the policy's destination of kind `live`. A run file's `telemetry` section can lower it, or leave the viewer out. A policy with no live viewer shows nothing but the `done` item. [provevi's page](provevi.md#show-a-run-to-a-live-viewer) says what each level shows:
 
 - At `names`, an event shows its data under keys that hold names, such as `model`, `status` and `parent_run`, when each value is a plain name. Its `experiment` and `experiment_pin` show when each is an experiment's URI of plain parts, perhaps pinned to a commit. Its component and actor show when they are plain names.
 - `usage` adds the counts and timings, such as the tokens in and out.
@@ -158,7 +165,7 @@ A viewer that falls behind by more than 1000 items is dropped. It gets each item
 
 `live.cancel()` cancels the run. A run that has opened ends with `run_failed`, unless it was being sealed. A run being sealed ends as it was sealed, and its `done` item says so, as `replay` does. `live.result()` then raises `CancelledError`. A run cancelled before it opened leaves no run folder and no evidence.
 
-The feed lives only as long as the program. The evidence is the lasting record.
+The feed lasts only as long as the program. The evidence is the lasting record.
 
 `packages/provrun/examples/live_server.py` is a small FastAPI server that sends a run's feed to a browser, as server-sent events. The server runs only the run file it was started with, so a browser cannot name a file on the server:
 
@@ -338,7 +345,7 @@ A tool that the provider ran gets a span too, as a child of the `model_called` s
 
 The names are those of release 1.37.0 of the semantic conventions. The GenAI conventions have since moved to their own repository, `open-telemetry/semantic-conventions-genai`, which has no release and no schema URL yet. So provrun claims no schema URL. `provrun/otel.py` keeps every name in one place.
 
-LiteLLM's OpenTelemetry loggers, such as `otel`, `logfire` and `arize`, make no span of their own when a span is active. They write onto the active span, which is provrun's `model_called` span, often after that span ended. So the LiteLLM backend sets `USE_OTEL_LITELLM_REQUEST_SPAN=true` before each call, and those loggers make their own span. The setting stays for the rest of the process. If you set that variable yourself to another value, provrun keeps it and warns. A run empties LiteLLM's callback lists, as "Control of library telemetry" below says, so this matters only for a logger added during a call.
+LiteLLM's OpenTelemetry loggers, such as `otel`, `logfire` and `arize`, make no span of their own when a span is active. They write onto the active span, which is provrun's `model_called` span, often after that span ended. So the LiteLLM backend sets `USE_OTEL_LITELLM_REQUEST_SPAN=true` before each call, and those loggers make their own span. The setting stays for the rest of the process. If you set that variable yourself to another value, provrun keeps it and warns. A run empties LiteLLM's callback lists, as "Control of library telemetry" below says, so the setting has an effect only on a logger that is added during a call.
 
 The evidence has two modes. In the strict mode, a lost event stops the run. provrun still closes the evidence, writes the manifest and the bundle, and then raises the error. In the lenient mode, provrun warns and goes on. In both modes, the manifest marks the evidence as incomplete and names each lost event.
 
@@ -508,7 +515,7 @@ provrun sends OTLP over HTTP itself, with protobuf. Its sender reads no variable
 
 provrun sends the spans in batches while the run goes on. It sends the rest when the run ends, after the run's own span has ended, to all places at once.
 
-The run's end waits up to about ten seconds in all, however many places there are. It waits in a thread, so the event loop goes on. The `OTEL_BSP_*` variables do not change the batches. A request that started before the run's end, and a gRPC call, keep their own timeout, from `OTEL_EXPORTER_OTLP_TIMEOUT`. A place that cannot be reached gives a warning with the number of spans lost. The run does not fail, and its evidence does not record the loss, because the evidence is closed by then.
+The run's end waits up to about ten seconds in all, for any number of places. It waits in a thread, so the event loop goes on. The `OTEL_BSP_*` variables do not change the batches. A request that started before the run's end, and a gRPC call, keep their own timeout, from `OTEL_EXPORTER_OTLP_TIMEOUT`. A place that cannot be reached gives a warning with the number of spans lost. The run does not fail, and its evidence does not record the loss, because the evidence is closed by then.
 
 ### Copy a sealed run into MLflow
 
@@ -532,7 +539,7 @@ The summary of `provr run`, and `outcome.mlflow`, say where the copy went:
            "mlflow_run_id": "...", "trace_id": "tr-...", "spans": 7}
 ```
 
-The run's end waits for the copy, for 120 seconds at most, `COPY_SECONDS` in `provrun.destinations`. Unless you set them, MLflow retries a server twice, and waits 20 seconds for each answer. A copy that fails, or takes too long, gives a warning, and the summary has `"copied": false` with the error. The run does not fail, because its evidence is sealed by then. `prove mlflow RUN` makes the copy again, once the cause is fixed. Step 13 of [the tour](provrun-tour.md) makes a copy.
+The run's end waits for the copy, for 120 seconds at most, `COPY_SECONDS` in `provrun.destinations`. If you do not set them, MLflow retries a server twice, and waits 20 seconds for each answer. A copy that fails, or takes too long, gives a warning, and the summary has `"copied": false` with the error. The run does not fail, because its evidence is sealed by then. `prove mlflow RUN` makes the copy again, once the cause is fixed. Step 13 of [the tour](provrun-tour.md) makes a copy.
 
 ## The stub broker
 
@@ -557,7 +564,7 @@ schemes:
     ref: main
 ```
 
-provrun prints the pinned URI of the commit. Another run can commit the same branch first and take in this bundle. Then provrun reads the newest commit, and accepts it if it holds this bundle. 
+provrun prints the pinned URI of the commit. Another run can commit the same branch first and take in this bundle. Then provrun reads the newest commit, and accepts it if it holds this bundle.
 
 If the store for bundles is `file`, which has no commits, provrun writes the bundle and says that it is not pinned. A bucket for bundles must have versioning on. Otherwise the commit fails, and so does the bundle. If the bundle cannot be written or committed, a strict run fails, and a lenient run warns.
 

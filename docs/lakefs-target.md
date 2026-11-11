@@ -37,21 +37,21 @@ lakeFS can keep the objects in S3, ADLS Gen2 or GCS instead. That takes a `block
 
 Without lakeFS, provcat reads and writes S3, GCS and Azure buckets directly. It branches in any bucket. In a bucket with versioning on, it also pins and commits, as "Commits in a bucket" in [the design](design.md#commits-in-a-bucket) explains. The cloud's own access control keeps orgs apart.
 
-### Why lakeFS 1.86.0, patched
+### Why the setup uses a patched lakeFS 1.86.0
 
 lakeFS 1.87.0 removed the external authorization server and the access-list server. It also moved to the Business Source License 1.1, which is not an open-source license. So this setup stays on 1.86.0, the last Apache 2.0 release, built from source so it can be changed.
 
 Stock 1.86.0 did not keep orgs apart. The fork fixes that. `PROVCAT.md` at the root of the fork lists every change, why we made it, and its test. In short:
 
 - **lakeFS:**
-  - staging and linking can use storage outside the repository only with `fs:ImportFromStorage` on it, which no org has;
-  - storage names cannot use `.` or `..` segments, or `@`, `?` or `#`;
-  - meta-range IDs are plain names.
+  - staging and linking can use storage outside the repository only with `fs:ImportFromStorage` on it, which no org has
+  - storage names cannot use `.` or `..` segments, or `@`, `?` or `#`
+  - meta-range IDs are plain names
 - **The access-list server:**
-  - callers need a token;
-  - the policy calls work;
-  - deleting a user or a group takes its keys or its policy with it;
-  - the Admins policy is guarded.
+  - callers need a token
+  - the policy calls work
+  - deleting a user or a group takes its keys or its policy with it
+  - the Admins policy is guarded
 
 ## Start and stop it
 
@@ -61,7 +61,7 @@ Build the fork first, as [the setup page](setup.md) explains under "Build lakeFS
 uv run python packages/provcat/scripts/lakefs_acl_local.py
 ```
 
-It runs in the foreground. Ctrl+C, `kill` or closing the terminal stops lakeFS, and then the access-list server. Start it again with the same command.
+It runs in the foreground. If you press Ctrl+C, run `kill` or close the terminal, lakeFS stops, and then the access-list server stops. Start it again with the same command.
 
 When it is ready, it prints two lines:
 
@@ -85,7 +85,7 @@ The script has these options:
 | `--cache-seconds` | `25` | After a repair, how long lakeFS may still answer from its policy cache. |
 | `--admin-wait` | `90` | After a repair, how long to wait for lakeFS to take the new admin keys. |
 
-The ports are fixed by the first run, because the config files hold them. A later run with other ports is refused. A port that something else already uses is refused too.
+The first run fixes the ports, because the config files hold them. The script refuses a later run with other ports. It also refuses a port that something else already uses.
 
 ## The folder
 
@@ -96,7 +96,7 @@ The first run makes the folder and writes everything into it. Later runs reuse i
 | `lakefs.yaml` | 0600 | The lakeFS config, with a random secret key. |
 | `acl.yaml` | 0600 | The access-list server config, with its own random secret key. |
 | `api-token` | 0600 | The random token between lakeFS and the access-list server. |
-| `credentials` | 0600 | An AWS credentials file with every key, as "Users and keys" explains. |
+| `credentials` | 0600 | An AWS credentials file with every key, as "Orgs, users and keys" explains. |
 | `lakefs-db/` | 0700 | The lakeFS metadata: repositories, branches and commits. |
 | `acl-db/` | 0700 | The access-list server's users, groups, policies and keys. |
 | `data/` | 0700 | The objects of every repository, one folder for each. |
@@ -157,7 +157,7 @@ Stop the server, then start it with every org you want, the old ones too:
 uv run python packages/provcat/scripts/lakefs_acl_local.py --org acme --org globex --org initech
 ```
 
-A run only adds. It keeps the keys of the orgs that already exist, and prints the new ones as `(new: initech)`. It also writes each org's policy again, so a change to the policy in the script reaches an existing server.
+A run only adds orgs. It keeps the keys of the orgs that already exist, and prints the new ones as `(new: initech)`. It also writes each org's policy again, so a change to the policy in the script reaches an existing server.
 
 Each run also checks the saved key of every org it is given with `--org`. If that key no longer works, the run deletes all of the org's keys and makes a new one.
 
@@ -175,7 +175,7 @@ export LAKEFS_S3_ENDPOINT=http://127.0.0.1:8002
 
 The example configuration, `packages/provcat/config/provcat.example.yaml`, then works as it is. Its store `lakefs-acme` uses the profile `lakefs-acme`, and `lakefs-globex` uses `lakefs-globex`. The logical schemes pick the store from the org in the URI, so `data+table://acme/...` reads and writes with acme's keys only. The store `lakefs` uses the admin's keys.
 
-Give each org a configuration with only its own store, and only its own profile in its credentials file. The mapping in one shared configuration routes requests; the keys are what keep orgs apart. [The design](design.md#tenants) explains this under "Tenants".
+Give each org a configuration with only its own store, and only its own profile in its credentials file. The mapping in one shared configuration routes requests. The keys keep orgs apart. [The design](design.md#tenants) explains this under "Tenants".
 
 `AWS_SHARED_CREDENTIALS_FILE` hides `~/.aws/credentials` in that shell. So the plain S3 stores lose their keys there. Use another shell for them, or copy the profiles into `~/.aws/credentials`.
 
@@ -208,21 +208,21 @@ A change to a policy can take up to about 23 seconds to apply, because lakeFS ca
 
 The fork refuses calls that would leave the admin unable to do anything:
 
-- deleting the `Admins` group;
-- deleting the `ACL(_-_)` policy of a group that exists, or detaching it from its own group;
-- making an `ACL(_-_)` policy for a group that does not exist;
-- writing anything into `ACL(_-_)Admins` but the full-access statement.
+- deleting the `Admins` group
+- deleting the `ACL(_-_)` policy of a group that exists, or detaching it from its own group
+- making an `ACL(_-_)` policy for a group that does not exist
+- writing anything into `ACL(_-_)Admins` but the full-access statement
 
-Each refusal answers 400.
+The fork answers each refused call with status 400.
 
 ### Repair the admin
 
 The admin can still lock itself out in other ways:
 
-- leave the `Admins` group;
-- join a group with a deny policy;
-- attach a deny policy to itself or to `Admins`;
-- delete its own keys or its own user.
+- leave the `Admins` group
+- join a group with a deny policy
+- attach a deny policy to itself or to `Admins`
+- delete its own keys or its own user
 
 To undo any of these, run the script with `--repair-admin`:
 
@@ -230,31 +230,31 @@ To undo any of these, run the script with `--repair-admin`:
 uv run python packages/provcat/scripts/lakefs_acl_local.py --repair-admin
 ```
 
-With the server running, both ports in use, it repairs it in place and exits. Otherwise it starts the server and repairs it first. It works through the access-list server and the token, not through lakeFS, so a locked-out admin does not stop it. It does the same steps every time:
+If the server runs, with both ports in use, the script repairs the admin in place and exits. Otherwise it starts the server and repairs the admin first. It works through the access-list server and the token, not through lakeFS, so a locked-out admin does not stop it. It does the same steps every time:
 
-1. It makes the `Admins` group again if it is missing. It writes the `Admins` policy back to its full-access statement, and detaches every other policy from `Admins`, also ones that only allow.
+1. It makes the `Admins` group again if it is missing. It writes the `Admins` policy back to its full-access statement, and detaches every other policy from `Admins`, including the ones that only allow.
 2. It puts the admin back in `Admins`, takes it out of every other group, and detaches the policies on the admin itself.
 3. It deletes the admin's keys, makes a new key, and saves it in `credentials`.
 4. It waits until lakeFS takes the new key for policies and for repositories, after lakeFS's policy cache has expired.
 
 It prints what it changed, for example `repaired the admin: put the admin back in Admins; made new admin keys`. It exits 1 if lakeFS still refuses the new key after `--admin-wait` seconds.
 
-## What it protects, and what it does not
+## What the setup protects and what it does not
 
-It protects each org's data from the other orgs:
+The setup protects each org's data from the other orgs:
 
 - **Org keys.** An org's keys reach only that org's repositories. That covers objects, commits, branches, staged and linked addresses, storage names and meta-range IDs.
 - **The access-list server.** It takes only calls that carry the token, and it listens on `127.0.0.1` only.
 - **The secrets.** The config files, the token and the keys are readable by your user only.
 
-It does not protect against these:
+The setup does not protect against these:
 
 - **Your own user account.** Anyone who can read `<dir>` has the admin keys and the token.
 - **Other machines.** Both programs listen on `127.0.0.1`. Do not expose them on a network without TLS and a firewall.
 - **Revocation at once.** lakeFS caches each user's policies, so a revoked policy can work for up to about 23 seconds.
 - **Server paths.** Error messages and stat replies show absolute paths on the server.
 - **Every admin mistake.** The guards cover the admin's own policy, and `--repair-admin` undoes the rest. They do not stop the admin from deleting an org's data.
-- **A rare race.** If a policy is deleted and made again at the very moment it is attached, a stale link can survive. It has not been reproduced.
+- **A rare race.** If a policy is deleted and made again at the same moment that it is attached, a stale link can survive. It has not been reproduced.
 
 ## Test it
 
@@ -283,7 +283,7 @@ The fork has its own Go tests. From `~/Projects/lakeFS`:
 GOTOOLCHAIN=go1.26.4 go test ./pkg/api ./pkg/graveler/... ./pkg/catalog/... ./pkg/pyramid/... ./contrib/auth/...
 ```
 
-## When something goes wrong
+## Errors and their fixes
 
 | What you see | Why | What to do |
 |---|---|---|

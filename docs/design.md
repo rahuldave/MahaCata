@@ -73,7 +73,7 @@ A driver that can be written also has two methods for writing:
 - **`put(uri, src, cache)`:** writes the local file `src` at the URI, and returns its `Entry`.
 - **`delete(uri, cache)`:** deletes one object.
 
-The `file`, `s3`, `gcs`, `azure` and `lakefs` drivers can be written. The `github` and `hf` drivers cannot, and the base class refuses with a `StoreError`. The `lakefs` driver has `commit`, `branch` and `merge`. The `s3`, `gcs` and `azure` drivers have `commit` and `branch`, and a commit needs versioning on the bucket. "Writes" below explains each.
+The `file`, `s3`, `gcs`, `azure` and `lakefs` drivers can be written. The `github` and `hf` drivers cannot, and the base class raises a `StoreError`. The `lakefs` driver has `commit`, `branch` and `merge`. The `s3`, `gcs` and `azure` drivers have `commit` and `branch`, and a commit needs versioning on the bucket. "Writes" below explains each.
 
 To add a driver, write a subclass of `Store`, set `driver`, give its options and their types in `option_types()`, and decorate the class with `register_driver`. A store entry with `driver: <name>` then uses it.
 
@@ -92,7 +92,7 @@ Each driver uses its cloud's Python SDK, never a command-line tool. The version 
 
 `LocalCache` writes every file to a temporary name under `.provcat/tmp` and then renames it, so a reader never sees half a file. The records under `.provcat` are named by a hash of the store and the key, so two keys never share or block a record:
 
-- **`meta`:** the version of each cached file, with its size, modification time, inode and SHA-256. If the time or the inode changed, as after a copy of the cache, provcat hashes the file and keeps it if the hash matches. If the size or the hash differs, provcat fetches the file again. A rewrite in place that keeps the size, the time and the inode is not noticed, as provcat hashes the file only when the time or the inode changed. On Linux a tick of the clock can be a few milliseconds, so the inode tells apart two files of one size from one tick. Two writes of one file take turns, so its record describes the last one. A read that sees the record change while it checks the file gets no file, and fetches it again.
+- **`meta`:** the version of each cached file, with its size, modification time, inode and SHA-256. If the time or the inode changed, as after a copy of the cache, provcat hashes the file and keeps it if the hash matches. If the size or the hash differs, provcat fetches the file again. provcat does not notice a rewrite in place that keeps the size, the time and the inode. It hashes the file only when the time or the inode changed. On Linux a tick of the clock can be a few milliseconds, so the inode tells apart two files of one size from one tick. Two writes of one file take turns, so its record describes the last one. If the record changes while a read checks the file, the read gets no file and fetches it again.
 - **`done`:** a folder that was fetched whole.
 - **`refs`:** a branch, tag or default branch pinned to a commit. The record includes the kind, so `tag:v1` and `branch:v1/x` do not touch each other.
 - **`locks`:** one lock file for each folder and each file. Fetches of one folder, and writes of one file, run one at a time, in threads and in processes.
@@ -109,7 +109,7 @@ Each method of `Catalog` runs through a lifecycle spot, and the hooks of the app
 - **The fetch answer.** The hooks at `fetch` get the local path. They get no SHA-256, because a digest of a folder reads every file. A hook can compute it.
 - **No cache layers yet.** Every hook runs before the base cache. A hook that returns an answer without calling `next` skips the cache and the store. A layer between the base cache and the store needs the drivers to call it, and that is not built.
 - **The principal.** It is the user of the process until profiles come. A caller can name it with `principal=`.
-- **Hooks from a caller.** A program that no launcher started can pass hooks to each `Catalog`, so several apps can share one process. The hooks of the process run last, next to the store. So they see the request that runs, and a caller adds hooks and never gets round one.
+- **Hooks from a caller.** A program that no launcher started can pass hooks to each `Catalog`, so several apps can share one process. The hooks of the process run last, next to the store. So they see the request that runs. A caller can add hooks, but it cannot skip a hook of the process.
 - **Files.** `open`, `read_block` and `close` run in `Catalog.open_file`. A read fetches the whole pinned file at open, so `read_block` runs on the copy in the cache. The cache of blocks is not built.
 
 - **The snapshot spot.** It gets the physical URI before the pin, because the pin runs inside it.
@@ -119,7 +119,7 @@ A snapshot runs `pin` and `fetch` inside its own spot, with the logical URI. A f
 
 ### The GitHub driver
 
-The GitHub driver checks the kind of a ref through the git refs API, so `tag:main` reads the tag and not the branch. It follows an annotated tag to its commit. It fetches a folder as one tarball of the commit. It skips links, devices and names with `..` in the tarball, and unpacks with the Python `data` filter. Offline mode serves a file inside a folder that was fetched whole. The token goes only to the host of `api_url`, and `gh auth token` is asked for that host.
+The GitHub driver checks the kind of a ref through the git refs API, so `tag:main` reads the tag and not the branch. It follows an annotated tag to its commit. It fetches a folder as one tarball of the commit. It skips links, devices and names with `..` in the tarball, and unpacks with the Python `data` filter. Offline mode serves a file inside a folder that was fetched whole. The token goes only to the host of `api_url`, and the driver asks `gh auth token` for the token of that host.
 
 The GitHub driver also reads files that Git LFS keeps. Git LFS is the Git extension that keeps large files outside the repository, with a small pointer file in their place. The contents API and the tarball both give the pointer file. So after each download, the driver looks for pointer files and asks the Git LFS batch API for their content, 100 at a time. It checks the size and the SHA-256 of each object against its pointer, and it keeps nothing that does not match.
 
@@ -133,9 +133,9 @@ The driver asks the Hub for the branches and the tags, so `tag:main` reads the t
 
 The driver calls the Hub API itself, through `huggingface_hub`, with the timeout of the store. It tries a call again after a 429, a 5xx or a network error. Each call names the pinned commit.
 
-The driver downloads each file with the functions under `hf_hub_download` of `huggingface_hub`. They read a file that Xet keeps with the hf_xet package, or over plain HTTP if hf_xet is not installed. A download over plain HTTP waits `HF_HUB_DOWNLOAD_TIMEOUT` seconds, 10 by default, not the timeout of the store. Xet is the storage under Hugging Face, and it splits files into chunks. The driver fetches a folder file by file, from one listing of the folder at the commit.
+The driver downloads each file with the functions under `hf_hub_download` of `huggingface_hub`. Xet is the storage under Hugging Face, and it splits files into chunks. The functions read a file that Xet keeps with the hf_xet package, or over plain HTTP if hf_xet is not installed. A download over plain HTTP waits `HF_HUB_DOWNLOAD_TIMEOUT` seconds, 10 by default, not the timeout of the store. The driver fetches a folder file by file, from one listing of the folder at the commit.
 
-The driver checks each file it downloads. A file that Xet or Git LFS keeps must match the SHA-256 that the Hub lists, and any other file its git blob ID. The driver keeps nothing that does not match. It writes each file only into the provcat cache, not into the cache of `huggingface_hub` under `~/.cache/huggingface`, and it keeps no listings in memory. So the provcat cache holds the only copy. `huggingface_hub` and the Xet library still write small files of their own there, such as logs.
+The driver checks each file it downloads. A file that Xet or Git LFS keeps must match the SHA-256 that the Hub lists, and any other file its git blob ID. The driver keeps nothing that does not match. It writes each file only into the provcat cache, not into the cache of `huggingface_hub` under `~/.cache/huggingface`, and it keeps no listings in memory. So the provcat cache holds the only copy. `huggingface_hub` and the Xet library still write small files of their own under `~/.cache/huggingface`, such as logs.
 
 The token goes to the endpoint of the store, so the endpoint must use HTTPS. Only the test servers on this machine may use plain HTTP. A page link of the Hub must point at the endpoint too. The token does not go to the download hosts that the Hub sends a download to. hf_xet sends it only to the Hub, for a Xet token. Without `token_env`, `huggingface_hub` finds the token in `HF_TOKEN` or in the file that `hf auth login` writes.
 
@@ -156,13 +156,11 @@ The org is the tenant. It is the first part of every logical URI in the example 
 | `artifact+card://ORG/TEAM/ENV/PROJECT/NAME` | `lakefs-ORG://ORG-ml-PROJECT/ENV/TEAM/cards/NAME` |
 | `code://ORG/REPO/ENV/PATH` | `github://ORG/REPO/PATH?at=branch:ENV` |
 
-lakeFS has no orgs, so each org gets its own repositories, named `ORG-data-DOMAIN` or `ORG-ml-PROJECT`. Each environment is a branch of the repository. For code, the environment is the GitHub branch, and the org is the GitHub owner. The `code` patterns follow the GitHub rules for owners, repositories and branch names, so an org there can have `-` and capital letters.
+lakeFS has no orgs, so each org gets its own repositories, named `ORG-data-DOMAIN` or `ORG-ml-PROJECT`. Each environment is a branch of the repository. So two orgs never share a lakeFS repository, a branch or a commit history. For code, the environment is the GitHub branch, and the org is the GitHub owner. The `code` patterns follow the GitHub rules for owners, repositories and branch names, so an org there can have `-` and capital letters.
 
 GitHub ignores case in owner names, so `Octocat` and `octocat` are two logical names for one owner, with two cache folders. A branch name with `/`, such as `feature/x`, cannot be one segment. Name it with a selector, for example `code://ORG/REPO/main/PATH?at=branch:feature/x`.
 
 The `code` shape changed from `code://ORG/REPO/PATH`. An old URI still resolves, but its first path segment becomes the env. So rewrite old `code` URIs with an env.
-
-So two orgs never share a lakeFS repository, a branch or a commit history.
 
 In the lakeFS schemes, the `match` patterns keep the names apart and valid for lakeFS:
 
@@ -180,7 +178,7 @@ The rules for a field in a store name keep this mapping safe:
 - **One field.** The store name holds one field, next to fixed text with a `-`, as in `lakefs-{org}`. So no value can make a built-in name such as `file` or `s3`.
 - **A plain value.** The value must match its `match` pattern, and must be lowercase letters and digits only. So two different values never give one store name.
 
-The mapping is not access control. provcat does not know who runs it, and a physical URI, such as `lakefs-globex://...`, skips the mapping. The real boundary is the keys that a reader holds. Give each tenant a view with only its own stores, as the next section shows. Give it only its own profiles in its AWS files.
+The mapping is not access control. provcat does not know who runs it, and a physical URI, such as `lakefs-globex://...`, skips the mapping. The boundary is the keys that a reader holds. Give each tenant a view with only its own stores, as the next section shows. Give it only its own profiles in its AWS files.
 
 A shared cache is not a boundary either. Its folders, such as `<cache>/lakefs-globex/...`, are plain files. Give each tenant its own cache. Pins live under the store name, so a pin made through the `lakefs` store is not found through `lakefs-acme`.
 
@@ -193,7 +191,7 @@ The keys keep tenants apart only if the server checks them. lakeFS with its defa
   - Each org is refused the other's repositories, and cannot make a repository under the other's name or on its storage.
 - **lakeFS with access control from Treeverse.** lakeFS Cloud and lakeFS Enterprise can limit a user to its own repositories.
 
-The route needs a patch to lakeFS, kept on the branch `provcat` of the fork [rahuldave/lakeFS](https://github.com/rahuldave/lakeFS). Without it, stock lakeFS 1.86.0 lets one org read another's data:
+The route with the access-list server needs a patch to lakeFS, kept on the branch `provcat` of the fork [rahuldave/lakeFS](https://github.com/rahuldave/lakeFS). Without it, stock lakeFS 1.86.0 lets one org read another's data:
 
 - **Linking any address.** The stage and link calls let a user who may write to its own repository add an object at any address on the same storage. lakeFS checks the repository, not the address. The addresses follow a pattern that can be guessed. So acme could link one of globex's objects into an acme repository, and read it.
 - **Dots in names.** A storage namespace such as `local://acme-x/../globex-y` matches a policy on `namespace/local://acme-*`, but names globex's storage.
@@ -215,17 +213,17 @@ The access-list server route has these limits:
 - **The server needs a token.** Stock 1.86.0's access-list server took every caller, so anyone who reached its port could make an admin. On the fork it takes `api_token`, and refuses a call without `Authorization: Bearer <token>`. lakeFS sends its `auth.api.token` that way. The script makes one token for both, and keeps the server on `127.0.0.1` as well.
 - **Policies.** Stock 1.86.0's access-list server answered 501 to listing, deleting and detaching policies, and to policies on users. The fork implements them. To take an org's access away, detach its policy from its group, or delete the policy. lakeFS caches each user's policies for up to 23 seconds, so a change can take that long to apply. The script turns off the access-list server's own cache, which made a deleted user or key look present. The script rewrites each org's policy on every run.
 - **Group policies are guarded.** Each group made through the access-list levels has a policy named `ACL(_-_)<group>`. Deleting the Admins one locked the admin out, with no way back through the API. So the fork refuses these:
-  - deleting the Admins group;
-  - deleting the `ACL(_-_)` policy of a group that exists, or detaching it from its own group;
-  - making an `ACL(_-_)` policy for a group that does not exist;
-  - writing anything into the Admins policy but the full-access statement it holds.
+  - deleting the Admins group
+  - deleting the `ACL(_-_)` policy of a group that exists, or detaching it from its own group
+  - making an `ACL(_-_)` policy for a group that does not exist
+  - writing anything into the Admins policy except the full-access statement it holds
 
   Deleting any other group also deletes its `ACL(_-_)` policy.
 - **The admin can still lock itself out.** It can do so in any of these ways:
-  - leave the Admins group, or delete it;
-  - join a group with a deny policy;
-  - attach a deny policy to itself or to Admins;
-  - delete its own keys or its own user.
+  - leave the Admins group, or delete it
+  - join a group with a deny policy
+  - attach a deny policy to itself or to Admins
+  - delete its own keys or its own user
 
   Run `packages/provcat/scripts/lakefs_acl_local.py --repair-admin` to undo any of these. It works through the access-list server and its token, while the setup runs or as it starts. It does the same steps every time:
   1. It makes the Admins group again if it is missing. It writes the Admins policy back to its full-access statement, and detaches every other policy from Admins, also ones that only allow.
@@ -310,7 +308,7 @@ Git records when a commit was made, not when it was pushed. So the answer can di
 
 `hf://...?at=ts:TIME` and `?at=ts:BRANCH@TIME` work as on GitHub, with `main` in place of the default branch. The Hub lists the commits of a branch newest first, 100 a page. The driver takes the first one whose date is at or before TIME. It stops once it has read 10,000 commits.
 
-The Hub gives no parents of a commit. So the driver cannot keep to first parents, and a commit that someone made on another branch and merged with a merge commit counts too. The Hub itself merges a pull request as one new commit, so this matters only for history that someone pushed with git.
+The Hub gives no parents of a commit. So the driver cannot keep to first parents, and a commit that someone made on another branch and merged with a merge commit counts too. The Hub itself merges a pull request as one new commit, so the extra commits come only from history that someone pushed with git.
 
 ### A branch in a logical URI
 
@@ -332,7 +330,7 @@ A write takes a logical or a physical URI, and goes to a branch:
 
 - **No selector.** A logical URI writes to its scheme's default branch, which is the environment in the example configuration. So `data+table://acme/shared/dev/...` writes to branch `dev`.
 - **A branch selector.** `?at=branch:NAME` writes to that branch.
-- **Any other selector.** A commit, a tag, a version or a time names a fixed version, which cannot change, so the write is refused. A stage is refused too, even one that points at a branch. Write to the branch itself.
+- **Any other selector.** A commit, a tag, a version or a time names a fixed version. A fixed version cannot change, so the write is refused. A stage is refused too, even one that points at a branch. Write to the branch itself.
 - **A scheme must use the branch.** If a scheme's target has no `{ref}`, `?at=branch:NAME` would be dropped and the write would go to the default branch. So the write is refused.
 
 On lakeFS, a write is not seen in a pinned URI until it is committed. The commit gets metadata, and a commit through a logical URI adds `provcat.uri`, the logical URI it was made through. So a commit records where its data belongs in the catalog. lakeFS refuses a write to a commit or a tag. The driver checks that the ref is a branch first, so the error says so.
@@ -345,7 +343,7 @@ A local file is written through a temporary file in the same folder, so a reader
 
 lakeFS refuses some merges, and provcat says why:
 
-- **A conflict.** Both branches changed the same file since they split. lakeFS refuses the merge, unless `--strategy` picks a side. `source-wins` keeps the source's file, and `dest-wins` keeps the branch's file.
+- **A conflict.** Both branches changed the same file since they split. Unless `--strategy` picks a side, lakeFS refuses the merge. `source-wins` keeps the source's file, and `dest-wins` keeps the branch's file.
 - **Nothing to merge.** The branch already has every change in the source.
 - **Uncommitted changes.** The branch that receives the merge has writes that are not committed. Commit them, or delete them, first.
 
@@ -368,7 +366,7 @@ s3://acme-sales/main/tables/agreements/part-0.parquet
 s3://acme-sales/dev/tables/agreements/part-0.parquet
 ```
 
-A scheme maps a logical URI onto that layout with `{ref}`. This needs no new code in the resolver:
+A scheme maps a logical URI onto that layout with `{ref}`. The layout needs no new code in the resolver:
 
 ```yaml
 schemes:
@@ -414,7 +412,7 @@ A commit records its folder, such as `main/t`, and the first folder is the branc
 | `.provcat/commits/<ID>.json` | The folder, the commit number, the parent commit, the message, the metadata, the time, and each file's version ID and size. The ID is the SHA-256 of this object. |
 | `.provcat/log/<SHA-256 of the folder>/<10^15 - N>` | The ID of commit N of the folder. |
 
-A reader checks that the commit object hashes to its ID, so a changed commit is refused. A read at a commit gets each file's listed version. The cache keeps it apart from the live files.
+A reader checks that the commit object hashes to its ID, so a changed commit is refused. A read at a commit gets each file's listed version. The cache keeps these versions apart from the live files.
 
 `provc branch s3://acme-sales/dev --from main` copies every file of `main` to `dev`. `--from <commit ID>` copies the versions in a commit. S3 and GCS copy inside the cloud. Azure downloads and uploads.
 
@@ -430,7 +428,7 @@ lakeFS works differently. It keeps each branch pointer in its database, and a co
 What a bucket commit does not give:
 
 - **Several files written as one step.** Writers write files one by one, and a reader of the live folder can see half a change. Read at a commit to get one moment. Write through lakeFS to make several files appear at once.
-- **Commits that outlive their versions.** A lifecycle rule that deletes old versions, or a person who deletes one, breaks the commits that name it. A read of such a file fails with "not found". Keep old versions while their commits matter.
+- **Commits that outlive their versions.** A lifecycle rule that deletes old versions, or a person who deletes one, breaks the commits that name it. A read of such a file fails with "not found". Keep old versions while you still need to read their commits.
 - **One order across folders.** Each folder has its own log. A pin compares the commits of a folder and of the folders above it by their time, which comes from each writer's clock. A commit records its time to the microsecond. If a folder and a folder above it have the same time, the folder above counts as newer. So a pin gives the same answer every time, but the answer is wrong when the folder below came second. When two writers' clocks differ, a later commit can also get an earlier time and sort as older.
 - **ADLS Gen2.** An account with a hierarchical namespace keeps no blob versions, so it can neither pin nor commit.
 - **An atomic branch.** A branch copies file by file. If it fails halfway, the new branch is half made. Delete it and copy again.

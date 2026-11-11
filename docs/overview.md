@@ -2,7 +2,7 @@
 title: What MahaCata does
 ---
 
-MahaCata follows one file from a store, into a run of an agent, and into the evidence of that run. Three packages share the work. provcat names and fetches the file. provrun runs the agent on it. provevi keeps the evidence of the run, and checks it.
+MahaCata follows one file from a store, into a run of an agent, and into the evidence of that run. Three packages share the work. provcat names and fetches the file, provrun runs the agent on it, and provevi keeps the evidence of the run and checks it.
 
 This page shows one example from each package. Each one comes from [the provrun tour](provrun-tour.md), which runs the whole path on your own machine. Each package also has its own page of features and its own tour, listed at the end.
 
@@ -43,7 +43,7 @@ the evidence of the run                            provevi keeps it, queries it 
 
 provrun depends on provevi and provcat, and provevi depends on provcat. provcat depends on neither, so it works alone.
 
-## provcat names the file, and pins it
+## provcat names the file and pins it
 
 The run file names its input by a logical URI. provcat turns that name into a physical URI. Here it writes the file to a versioned bucket, and commits the folder.
 
@@ -90,9 +90,9 @@ $ uv run provr run $TOUR_DIR/run.yaml | tee $TOUR_DIR/r1.json
 
 `pinned` is the URI of the commit that holds the bundle. A checker can read the bundle back from it later.
 
-## provevi keeps the evidence, and checks it
+## provevi keeps the evidence and checks it
 
-provrun hands each event to a provevi store as it happens. A `sqlite` store keeps every run in one SQLite file, so you can ask questions across runs. Only runs started with `provr --store` go into that file. The tour put two runs in it, and this asks which of them read the report.
+provrun hands each event to a provevi store as it happens. A `sqlite` store keeps every run in one SQLite file, so you can ask questions across runs. Only runs started with `provr --store` go into that file. The tour put two runs in it. The command below asks which of them read the report.
 
 ```
 $ uv run prove --store $S runs --reading data://acme/demo/dev/reports/report.txt
@@ -113,7 +113,7 @@ prove: in the store: the manifest counts 13 events, and there are 12
 exit status 1
 ```
 
-Without `--store`, `prove verify` checks only the run folder, which still verifies.
+Without `--store`, `prove verify` checks only the run folder, and that check still passes.
 
 When the telemetry policy approves an MLflow destination, provrun has provevi copy each sealed run into MLflow, for MLflow's viewer. The policy says what each destination receives, from names only up to the prompts and answers.
 

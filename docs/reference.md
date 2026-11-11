@@ -23,7 +23,7 @@ In another project, install provcat from GitHub, with the extras that you need i
 pip install 'provcat[hf] @ git+https://github.com/rahuldave/MahaCata#subdirectory=packages/provcat'
 ```
 
-In a clone, `uv sync` installs all four.
+In a clone, `uv sync` installs all four extras.
 
 ## Commands
 
@@ -54,7 +54,7 @@ Every command but `config` takes a URI, logical or physical. These options go be
 
 ## Catalog URIs
 
-A URI has the form `scheme://first/part/part?at=kind:value`. The part after `?at=` is the selector. It picks a version.
+A URI has the form `scheme://first/part/part?at=kind:value`. The part after `?at=` is the selector, which picks a version.
 
 A **logical URI** has a scheme that the configuration defines, for example `data+table` or `code`. A **physical URI** has a scheme that names a store, for example `s3`, `github` or `file`. provcat resolves a logical URI to a physical URI in one step.
 
@@ -75,7 +75,7 @@ In the example configuration, the org is the tenant and the first part of every 
 | `stage:NAME` | Look up NAME in the `stages` section and use the selector stored there. |
 | `ts:TIME` | Use the newest commit of the branch made at or before TIME. TIME is a date, a date and time, or Unix seconds. The `lakefs`, `github` and `hf` drivers resolve it. A GitHub or Hugging Face URI names a branch other than the default as `ts:BRANCH@TIME`. |
 
-A bucket keeps only branches in its path, and a fixed version goes in `?at=`. A bucket is a store of the `s3`, `gcs` or `azure` driver. A bucket scheme is a logical scheme whose target is a bucket, such as `files` in the example. On a bucket scheme, the selectors work like this:
+A bucket is a store of the `s3`, `gcs` or `azure` driver. A bucket keeps only branches in its path, and a fixed version goes in `?at=`. A bucket scheme is a logical scheme whose target is a bucket, such as `files` in the example. On a bucket scheme, the selectors work like this:
 
 | Selector | On a bucket scheme |
 |---|---|
@@ -215,7 +215,7 @@ cat = Catalog(config, hooks=hooks.load("ingest", "hooks.yaml"))   # one app of a
 | Rule | What it means |
 |---|---|
 | `hooks` is a dict, a `Hooks` or a `Proxy`. | A dict maps spots, and `"*"`, to lists of functions. `hooks.load(app, path)` gives the `Proxy` of one app of a hooks file, with its `cache_root`. |
-| The process's hooks run last. | If `PROVCAT_HOOKS` is set, or `~/.config/provcat/hooks.yaml` exists, the caller's hooks run first, and then those of the file's `default` app, next to the store. So the process's gates see the request that runs, even if a caller's hook changes it. A caller adds hooks and never gets round one. |
+| The process's hooks run last. | If `PROVCAT_HOOKS` is set, or `~/.config/provcat/hooks.yaml` exists, the caller's hooks run first, and then those of the file's `default` app, next to the store. So the process's gates see the request that runs, even if a caller's hook changes it. A caller adds hooks and never gets past one. |
 | `app` and `principal` name the caller. | Each hook gets them in `ctx`. The principal is otherwise the user of the process. It must be a name, with no space at its ends and no control character. `principal` alone keeps the process's hooks. |
 | An app of the hooks file needs its hooks. | If the process's hooks file names the app, the caller passes `hooks.load(app)`. Other hooks under that app's name are refused. |
 | A launched process refuses them. | If a launcher started the process with `PROVCAT_APP`, a `Catalog` refuses `hooks` and `principal`. So code inside such a process cannot drop its gates. |
@@ -272,6 +272,6 @@ provcat stores a GitHub or Hugging Face file under its commit, so the file never
 
 Each write of a key takes that key's lock, a file under `<cache>/.provcat/locks/`, so two processes never write one key at once. The lock files stay after the write, one for each key. The locks need a filesystem with `flock`, such as a local disk. On a network share without it, each fetch fails with `cannot write ... in the cache`, so keep the cache on a local disk. A lock is not shared between a host and a container through Docker Desktop's bind mount.
 
-The record of a file holds its size, modification time, inode and SHA-256. provcat hashes the file again when the time or the inode changed, as after a copy of the cache. A rewrite in place that keeps all three is not noticed.
+The record of a file holds its size, modification time, inode and SHA-256. provcat hashes the file again when the time or the inode changed, as after a copy of the cache. provcat does not notice a rewrite in place that keeps the size, the time and the inode.
 
 A fetch can rewrite a cached file in place when a branch moves. So do not mount a cached path into a container. Mount a snapshot instead. `Catalog.snapshot(uri)` pins the URI, fetches that version, and copies it into `<cache>/.provcat/snapshots/<kind>/<sha256>/<name>`. The kind is `file` or `folder`, the folder name is the SHA-256 of the content, and the copy is read-only. Before provcat uses a snapshot again, it checks the digest, and it replaces a snapshot that someone changed.

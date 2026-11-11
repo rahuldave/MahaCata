@@ -81,7 +81,7 @@ The list `_custom_logger_compatible_callbacks_literal` at `litellm/__init__.py:1
 - **The per-call `logger_fn=` argument.** `litellm/utils.py:943` stores it in a module global, `user_logger_fn`.
 - **Named integrations from environment variables.** No environment variable adds a callback by itself. But a named integration reads its settings from the environment when it starts. For example, "logfire" needs `LOGFIRE_TOKEN` (`litellm/litellm_core_utils/litellm_logging.py:3994`), and "otel" reads `OTEL_EXPORTER`, `OTEL_ENDPOINT`, `OTEL_HEADERS` and the `OTEL_EXPORTER_OTLP_*` variables (`litellm/integrations/opentelemetry.py:112` to `litellm/integrations/opentelemetry.py:117`).
 - **The proxy configuration file.** A LiteLLM proxy `config.yaml` sets `litellm_settings.callbacks`. provrun does not run the proxy, so this path applies only if provrun calls the proxy code.
-- **Other libraries.** `mlflow.litellm.autolog()` adds an MLflow callback. The other agent covers it.
+- **Other libraries.** `mlflow.litellm.autolog()` adds an MLflow callback. The page on MLflow autolog covers it.
 
 ### The "otel" integration and the global tracer provider
 
@@ -239,7 +239,7 @@ The test `t11_mlflow_provider.py` set provrun's provider first and then made an 
 | `MLFLOW_USE_DEFAULT_TRACER_PROVIDER=false` | provrun's and `MlflowV3SpanProcessor` | The MLflow span and its child |
 | `MLFLOW_TRACE_PROPAGATE_TO_OTEL_CONTEXT=true` | provrun's only | The child span, with the MLflow span as its parent |
 
-So with `false`, MLflow exports every span of provrun's provider, which includes PydanticAI and LiteLLM spans. Logfire and MLflow both want the global provider. Logfire with `local=True` and MLflow in its default isolated mode do not compete for it.
+So with `false`, MLflow exports every span of provrun's provider, which includes PydanticAI and LiteLLM spans. Logfire and MLflow can both take the global provider. Logfire with `local=True` and MLflow in its default isolated mode do not compete for it.
 
 ### An approved export to Logfire under provrun's provider
 
@@ -337,7 +337,7 @@ Before and after each model call and at the end of the run, provrun can check th
 ## Open questions
 
 - **The beta headers fetch.** I did not find which LiteLLM call path first loads the Anthropic beta headers configuration. A mock call did not load it.
-- **Response redaction in LiteLLM.** With `turn_off_message_logging`, the test showed redacted messages. I did not check whether the response text in the standard logging object was redacted too.
+- **Response redaction in LiteLLM.** With `turn_off_message_logging`, the test showed redacted messages. The response text was still present in the standard logging object in the test output. I did not check further.
 - **Overriding the `X-Stainless-*` headers.** I did not test whether `default_headers` can remove the headers, or only change their values.
 - **MLflow with the guarded provider.** When the guarded provider refused MLflow's processor, MLflow's span also did not reach provrun's exporter. I did not find the cause.
 - **Exports to the real Logfire service.** Neither form of the approved Logfire path was tested against the real service, because the task forbids it.
