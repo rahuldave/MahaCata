@@ -2,7 +2,7 @@
 title: "Tutorial: keep the evidence of runs, and ask questions of it"
 ---
 
-In this tutorial, you keep the evidence of three runs of an agent in one SQLite file, and you ask that file questions. Which runs read a file? Which version of the agent ran? Has the record changed? provevi is the package that keeps, reads and checks the evidence, and its command is `prove`. provrun makes the runs, and provevi does the rest.
+In this tutorial, you keep the evidence of three runs of an agent in one SQLite file, and you ask that file which runs read a file, which version of the agent ran, and whether the record changed. provevi is the package that keeps, reads and checks the evidence, and its command is `prove`. provrun makes the runs, and provevi does the rest.
 
 The tutorial takes about 10 minutes. It needs no account, no key and no server. The agent's answer is fixed in the run file, and its input is a file on this machine.
 
@@ -135,7 +135,7 @@ acme/finance/dev/revenue-question  first run run-20261110T193639Z-3de5d577
     run-20261110T193659Z-09f923ef
 ```
 
-A change to the model, the instructions or a setting makes a new version. A change to the prompt or the inputs does not. The summary leaves out the instructions and the settings, because a setting may hold a secret, so two versions can show the same summary.
+A change to the model, the instructions or a setting makes a new version, but a change to the prompt or the inputs does not. The summary leaves out the instructions and the settings, because a setting may hold a secret. So two versions can show the same summary.
 
 ## Step 3: Find the runs that read a file
 
@@ -147,7 +147,7 @@ run-20261110T193639Z-3de5d577
 run-20261110T193659Z-09f923ef
 ```
 
-The question takes one query in the SQLite file, however many runs the store holds. Without the store, provevi would have to open the evidence of every run folder.
+The question takes one query in the SQLite file, for any number of runs in the store. Without the store, provevi would have to open the evidence of every run folder.
 
 ## Step 4: Read the events of a run
 
@@ -170,7 +170,7 @@ $ uv run prove --store $S show $R1 | awk '{print $1, $3, $4}'
 12 run_completed RunContext
 ```
 
-Event 0 records the agent's spec and the settings of the run. Events 1 and 2 record the broker's decision on the input, and events 3 to 5 record the copy of the input that the agent read. Events 7 and 8 record the prompt and the answer. `prove access` prints only the broker's decisions:
+Event 0 records the agent's spec and the settings of the run. Events 1 and 2 record the broker's decision on the input. Events 3 to 5 record the copy of the input that the agent read. Events 7 and 8 record the prompt and the answer. `prove access` prints only the broker's decisions:
 
 ```
 $ uv run prove --store $S access $R1
@@ -200,7 +200,7 @@ The check of the store's copy now fails, and exits with status 1. Each line name
 
 - The numbers of the events skip from 2 to 4.
 - The hash chain breaks at the gap.
-- The store keeps the URIs that each event names in a table of their own, and the URIs of event 3 are still there, with no event.
+- The store keeps the URIs that each event names in a table of their own. The URIs of event 3 are still there, with no event.
 - The store holds one event fewer than the manifest counts.
 
 ```

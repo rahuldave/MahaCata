@@ -86,7 +86,7 @@ $ uv run provr --store $STORE run $TOUR_DIR/run.yaml 2> /dev/null > $TOUR_DIR/fi
 
 ## Ask questions across runs
 
-The `sqlite` store answers questions about many runs at once. Which runs read a file, and which agents ran:
+The `sqlite` store answers questions about many runs at once. These commands ask which runs read a file, and which agents ran:
 
 ```
 $ uv run prove --store $STORE runs --reading file://$TOUR_DIR/report.txt
@@ -105,7 +105,7 @@ acme/demo/dev/revenue-question  first run run-20261102T191955Z-52539489
 
 Both runs are one version of the agent class. A version is the start of the SHA-256 of the agent's spec, without its prompt and its inputs. Changed instructions or a new model make a new version.
 
-What a run was allowed to read, and why:
+`prove access` shows what a run was allowed to read, and why:
 
 ```
 $ uv run prove --store $STORE access $RUN1
@@ -282,7 +282,7 @@ tracking
 None
 ```
 
-The first URL matches although it is written another way. The second matches with its user, password and driver. The third reads as `otel.example.com` to one URL parser, but a client could connect to `evil.example`, so it matches nothing. [The reference](provevi.md#check-a-telemetry-policy) lists every URL that is refused.
+The first URL is written another way, but it matches. The second matches with its user, password and driver. The third reads as `otel.example.com` to one URL parser, but a client could connect to `evil.example`, so it matches nothing. [The reference](provevi.md#check-a-telemetry-policy) lists every URL that is refused.
 
 ## Copy a run into MLflow
 
@@ -352,7 +352,7 @@ run_completed            span_id trace_id
 
 At `names`, the feed kept only the keys that hold names, such as `model` and `status`. The purpose, the file's name, the paths, the spec and the token counts stayed out. At `bodies`, it adds them, and the model's answer as a `text` item. [The reference](provevi.md#show-a-run-to-a-live-viewer) says what each level shows.
 
-A run's experiment and its parent run show at `names` too, when they are plain. An experiment's URI shows with no selector, or pinned to a commit. One that names a branch stays out, as a branch's name may hold any text:
+A run's experiment and its parent run show at `names` too, when they are plain. An experiment's URI shows with no selector, or pinned to a commit. One that names a branch stays out, because a branch's name may hold any text:
 
 ```python
 from provevi import EvidenceEvent, shown_at

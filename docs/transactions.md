@@ -7,7 +7,7 @@ This page answers what a write and a commit guarantee in lakeFS, in provcat's di
 Each claim carries one mark:
 
 - **[src]** means that the claim was read in source code, at the file and line given.
-- **[src]** paths in lakeFS are in the fork, branch `provcat`, at `~/Projects/lakeFS`.
+- **[src]** paths in lakeFS are in the fork [rahuldave/lakeFS](https://github.com/rahuldave/lakeFS), branch `provcat`.
 - **[doc]** means that a research agent read the claim on the web page given, on 30 October 2026.
 - **[not verified]** means that no source was found, or that the claim comes from reading code, with no test.
 
@@ -50,11 +50,11 @@ The table gives what each platform offers today.
 
 - **MinIO.** MinIO supports `If-Match` and `If-None-Match` on uploads since PR 16551, merged 7 Feb 2023. Fixes for multipart uploads came in Sept 2025. An open issue, 19442, says a matching ETag returns 304 and not 412. [doc] https://github.com/minio/minio/pull/16551
 - **moto.** moto honours `If-None-Match` on `put_object` from 5.0.15, and on multipart completion from 5.0.23. It honours `If-Match` on `put_object` from 5.1.5, and on `delete_object` from 5.1.22. [doc] https://github.com/getmoto/moto/blob/master/CHANGELOG.md
-- **lakeFS S3 gateway.** The gateway accepts `If-None-Match: *` on PutObject. It answers `If-Match` with "not implemented". [src] `~/Projects/lakeFS/pkg/api/apiutil/conditions.go:16-36`, `pkg/gateway/operations/putobject.go:332-358`
+- **lakeFS S3 gateway.** The gateway accepts `If-None-Match: *` on PutObject. It answers `If-Match` with "not implemented". [src] `pkg/api/apiutil/conditions.go:16-36`, `pkg/gateway/operations/putobject.go:332-358`
 
 ### GCS
 
-GCS gives every object a generation number, which changes on every write, and a metageneration, which changes on every metadata change. A request with `ifGenerationMatch=0` proceeds only if no live object has the name. Noncurrent versions do not block it. The XML API uses `x-goog-if-generation-match`. [doc] https://docs.cloud.google.com/storage/docs/request-preconditions
+GCS gives every object a generation number and a metageneration. The generation changes on every write, and the metageneration changes on every metadata change. A request with `ifGenerationMatch=0` proceeds only if no live object has the name. Noncurrent versions do not block it. The XML API uses `x-goog-if-generation-match`. [doc] https://docs.cloud.google.com/storage/docs/request-preconditions
 
 ### Azure Blob and ADLS Gen2
 
@@ -64,11 +64,11 @@ Azure Blob takes `If-Match`, `If-None-Match`, `If-Modified-Since` and `If-Unmodi
 
 ### What no platform gives
 
-No platform writes or deletes two objects as one atomic step. Every system below therefore builds a multi-object commit in the same way. It writes immutable data objects first, and then it makes one atomic single-key write, the commit point, that names them.
+No platform writes or deletes two objects as one atomic step. So every system below builds a multi-object commit in the same way. It writes immutable data objects first, and then it makes one atomic single-key write, the commit point, that names them.
 
 ## How lakeFS makes a commit atomic
 
-The source is `~/Projects/lakeFS`, branch `provcat`. All paths below are relative to it.
+The source is the fork [rahuldave/lakeFS](https://github.com/rahuldave/lakeFS), branch `provcat`. All paths below are relative to it.
 
 ### Where the branch pointer lives
 
@@ -96,9 +96,9 @@ Each KV driver implements `SetIf` as an atomic CAS:
 
 ### Ranges and metaranges in the bucket
 
-Ranges and metaranges are SSTable files, named by the SHA-256 of their contents. [src] `pkg/graveler/sstable/writer.go:129-153`, `pkg/catalog/catalog.go:61`. The tier file system uploads each one with a plain `adapter.Put` and no condition. [src] `pkg/pyramid/tier_fs.go:207-232`. A name is a hash of the contents, so two writers of one name write the same bytes, and a condition adds nothing.
+Ranges and metaranges are SSTable files, named by the SHA-256 of their contents. [src] `pkg/graveler/sstable/writer.go:129-153`, `pkg/catalog/catalog.go:61`. The tier file system uploads each one with a plain `adapter.Put` and no condition. [src] `pkg/pyramid/tier_fs.go:207-232`. A name is a hash of the contents, so two writers of one name write the same bytes. A condition then adds nothing.
 
-User data objects get a new, unique physical path on every upload, built from an `xid`. lakeFS therefore never overwrites a data object. [src] `pkg/upload/path_provider.go:102-106`, `pkg/gateway/operations/putobject.go:364`
+User data objects get a new, unique physical path on every upload, built from an `xid`. So lakeFS never overwrites a data object. [src] `pkg/upload/path_provider.go:102-106`, `pkg/gateway/operations/putobject.go:364`
 
 I found no use of bucket conditional writes in the block adapters, the tier file system or graveler. A search for `IfNoneMatch`, `IfMatch` and `IfGenerationMatch` under `pkg/block`, `pkg/pyramid` and `pkg/graveler` found nothing. [src]
 
@@ -106,12 +106,12 @@ I found no use of bucket conditional writes in the block adapters, the tier file
 
 An object write calls `safeBranchWrite`. It reads the branch, writes the entry to that staging token, and reads the branch again. If the staging token changed in between, it writes the entry again to the new token, up to a fixed number of tries. [src] `pkg/graveler/graveler.go:1952-1995`
 
-The result is that a racing write is never lost:
+So a racing write is never lost:
 
 - If the commit's iterator read the entry in the sealed token, the commit holds it. The entry also sits in the new staging token, with the same value, and the next commit sees no change.
 - If the iterator did not read it, the entry is in the new staging token, and the next commit holds it.
 
-Also, two commits can merge. Suppose commit A seals token T0, and commit B then seals T1 before A builds its tree. A's step 2 reads both sealed tokens and commits both. B then finds no sealed tokens and fails with "no changes". [src, by reading `graveler.go:2329` and `2382-2407`, not tested]. A commit therefore holds every write that was staged before its last branch read in step 2. It is not limited to the writes before the commit call.
+Also, two commits can merge. Suppose commit A seals token T0, and commit B then seals T1 before A builds its tree. A's step 2 reads both sealed tokens and commits both. B then finds no sealed tokens and fails with "no changes". [src, by reading `graveler.go:2329` and `2382-2407`, not tested]. So a commit holds every write that was staged before its last branch read in step 2. It is not limited to the writes before the commit call.
 
 ### What a reader gets
 
@@ -125,7 +125,7 @@ Also, two commits can merge. Suppose commit A seals token T0, and commit B then 
 
 `If-None-Match: *` runs through `handleUpdate`. It checks the condition against the branch, and writes the staging entry with CAS. [src] `graveler.go:1918-1949`, `pkg/graveler/staging/manager.go:117-136`. Suppose a commit seals the token between the first write and the token check. Then `safeBranchWrite` runs the update again on the new token. The second check finds the entry from the first try in the sealed token, and fails. The client gets 412, but its object is written. [not verified, from reading only]
 
-### lakeFS documentation
+### What the lakeFS documentation says
 
 The lakeFS internals page says that references and uncommitted metadata live in the KV store. It also says that a commit uses optimistic locking, with a CAS on the branch at the end. The reason is that the KV interface has no transactions. [doc] https://docs.lakefs.io/concepts/internals/ The design of the KV store is at https://github.com/treeverse/lakeFS/blob/master/design/accepted/metadata_kv/index.md [doc]
 
@@ -145,7 +145,7 @@ Sources [doc]: https://projectnessie.org/guides/introduction/ and https://github
 
 A Delta table commits by creating `_delta_log/<N>.json`, where N is the next version number. The storage must let only one writer create a given file. The creation of that file is the commit point. [doc] https://docs.delta.io/latest/delta-storage.html
 
-S3 had no put-if-absent, so multi-cluster writes on S3 needed `S3DynamoDBLogStore`, which kept the lock in DynamoDB. delta-rs 1.0.0 removed that store and uses S3 conditional writes by default. Its writers can no longer coordinate with Delta Spark writers that use DynamoDB. [doc] https://github.com/delta-io/delta-rs/discussions/4482
+S3 had no put-if-absent. So multi-cluster writes on S3 needed `S3DynamoDBLogStore`, which kept the lock in DynamoDB. delta-rs 1.0.0 removed that store and uses S3 conditional writes by default. Its writers can no longer coordinate with Delta Spark writers that use DynamoDB. [doc] https://github.com/delta-io/delta-rs/discussions/4482
 
 I did not find whether Delta Spark uses S3 conditional writes. [not verified]
 
@@ -169,9 +169,9 @@ An Iceberg table commits by swapping the catalog's pointer from the old metadata
 
 - **One object at a time.** `put` writes one object, and `delete` removes one object. Each is atomic on its own. [src] `packages/provcat/src/provcat/stores/objects.py`
 - **Last writer wins.** No driver sends a condition on `put`. [src]
-- **The S3 version of a small file is the one written.** A file up to 64 MB goes in one `PutObject`, whose reply gives its ETag. A larger file goes in a multipart upload, which gives no ETag, so a HEAD reads it after. A write by someone else in between gives their ETag. [src] `packages/provcat/src/provcat/stores/s3.py`
+- **The S3 version of a small file is the one written.** A file up to 64 MB goes in one `PutObject`, whose reply gives its ETag. A larger file goes in a multipart upload. The upload gives no ETag, so a HEAD reads the ETag after the upload. A write by someone else in between gives their ETag. [src] `packages/provcat/src/provcat/stores/s3.py`
 - **The S3 delete checks and then deletes.** A write between the HEAD and the DeleteObject is deleted. [src]
-- **Several files are never one step.** A reader of a live folder can see half a change. Read at a commit for one moment, or write through lakeFS. [src]
+- **Several files are never one step.** A reader of a live folder can see half a change. To see one moment, read at a commit, or write through lakeFS. [src]
 
 ### What a commit is
 
@@ -181,12 +181,14 @@ A commit of a folder writes two objects at the top of the bucket. The design pag
 2. It lists every version under the folder, deleted ones too, twice. It goes on only when the two listings are equal, and tries up to five times.
    It lists after it reads N, because commit N listed before it made its entry. So the list is never older than commit N's.
 3. If the file list equals commit N's list, there is nothing to commit.
-4. It writes the commit object, `.provcat/commits/<ID>.json`, with put-if-absent. The ID is the SHA-256 of the object, so an object already there must hold the same bytes, and provcat checks that.
+4. It writes the commit object, `.provcat/commits/<ID>.json`, with put-if-absent. The ID is the SHA-256 of the object. So an object already there must hold the same bytes, and provcat checks that.
 5. It creates log entry N + 1, `.provcat/log/<SHA-256 of the folder>/<10^15 - (N + 1)>`, with put-if-absent. **This create is the commit point.** If another commit took N + 1 first, it goes back to step 1. The losing commit object stays in the bucket, but no log entry names it, so nothing reads it.
 
 ### Why the file list is a snapshot
 
-Every write makes a new version ID, and every delete makes a delete marker on S3, or a deletion time on GCS. Suppose the two listings are equal. Then no key changed between its read in the first listing and its read in the second. So every listed version was current at one moment, between the end of the first listing and the start of the second. Snapshot algorithms call the method "double collect". The unit test `packages/provcat/tests/unit/test_bucket_commits.py` checks that a change between the listings makes the commit list again. [src]
+Every write makes a new version ID. Every delete makes a delete marker on S3, or a deletion time on GCS. Suppose the two listings are equal. Then no key changed between its read in the first listing and its read in the second. So every listed version was current at one moment, between the end of the first listing and the start of the second.
+
+Snapshot algorithms call the method "double collect". The unit test `packages/provcat/tests/unit/test_bucket_commits.py` checks that a change between the listings makes the commit list again. [src]
 
 An upload in progress is not an object, so the commit leaves it out. The commit is then older than the upload, but it is still a snapshot. [doc, for S3]
 
@@ -204,7 +206,7 @@ On S3, `If-None-Match` checks only the current version. Someone who deletes log 
 
 - **Commits that outlive their versions.** A lifecycle rule that expires old versions, or a person who deletes one, breaks the commits that name it. A read then fails with "not found". [src]
 - **One order across folders.** Each folder has its own log. A pin compares the commits of a folder and of the folders above it by their time, which comes from each writer's clock. A commit records its time to the microsecond. If a folder and a folder above it have the same time, the folder above counts as newer. So a pin gives the same answer every time, but the answer is wrong when the folder below came second. When two writers' clocks differ, a later commit can also get an earlier time and sort as older. [src]
-- **ADLS Gen2.** Blob versioning does not work on accounts with a hierarchical namespace, so provcat cannot pin or commit there, and says so. [doc]
+- **ADLS Gen2.** Blob versioning does not work on accounts with a hierarchical namespace. So provcat cannot pin or commit there, and it says so. [doc]
 - **An atomic branch.** A branch copies file by file. [src]
 - **Cost.** A commit lists every version under the folder twice, so it slows as the history grows. [src]
 

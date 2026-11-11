@@ -1,4 +1,4 @@
-# MLflow autolog: what it records, and how to keep it out of a run
+# What MLflow autolog records and how to keep it out of a run
 
 Research date: 2026-11-01. The versions are MLflow 3.17.2, pydantic-ai 2.64.0, litellm 1.83.0, openai 3.41.0, anthropic 2.3.0 and opentelemetry-sdk 1.45.1.
 
@@ -44,7 +44,7 @@ Every flavor goes through the same steps:
 
 Gorilla marks each patch on the class. It sets `_gorilla_active_patch_<name>` to the patch and `_gorilla_original_<name>` to the original (`utils/gorilla.py:62`, `65`, `apply` at 263). `revert_patches` (`safety.py:710`) reverts each stored patch and runs any cleanup callbacks in `_AUTOLOGGING_CLEANUP_CALLBACKS` (line 25).
 
-Two flavors, `litellm` and `openai`, put the decorator on an inner `_autolog()` and keep work outside it. The source gives the reason. The decorated body does not run on disable, so the callback removal must sit outside (`litellm/__init__.py:68` to 71, `openai/autolog.py:113` to 116).
+Two flavors, `litellm` and `openai`, put the decorator on an inner `_autolog()` and keep work outside it. The decorated body does not run on disable, so, as the source says, the callback removal must sit outside (`litellm/__init__.py:68` to 71, `openai/autolog.py:113` to 116).
 
 Each `autolog()` call also sends a usage event to MLflow's telemetry service through `_record_event(AutologgingEvent, ...)`, for example at `pydantic_ai/__init__.py:256`. Section 4 covers that service.
 
@@ -84,7 +84,7 @@ After `mlflow.autolog()`, `_post_import_hooks` held hooks for 32 libraries. The 
 The `Agent.__init__` patch changes a global behaviour. `patched_agent_init` (line 85) sets `self.instrument = True` when the agent's `instrument` is `None`. The `Instrumentation` capability exists only for an instrumented agent. So the LLM and tool spans depend on that patch. Also, an instrumented agent writes PydanticAI's own OTel spans to the global tracer provider. `otel_interplay.py` showed both effects:
 
 - **Our provider gets spans.** With a global SDK tracer provider in place, autolog made our exporter receive `invoke_agent agent` and `chat test`. These spans carry `gen_ai.input.messages`, `gen_ai.output.messages` and `pydantic_ai.all_messages`. Without autolog, the same agent wrote no PydanticAI span.
-- **Old agents stay instrumented.** After `mlflow.pydantic_ai.autolog(disable=True)`, an agent that was built while autolog was on still wrote PydanticAI spans. A new agent did not.
+- **Old agents stay instrumented.** After `mlflow.pydantic_ai.autolog(disable=True)`, an agent that was built while autolog was on still wrote PydanticAI spans. An agent built after the disable wrote none.
 
 An agent with `instrument = False` set after construction gets only the `Agent.run` span (`instrument_false.py`). In pydantic-ai 2.64.0, `instrument` is a property and not an `Agent()` argument.
 
@@ -127,7 +127,7 @@ The OpenAI and Anthropic wrappers add a W3C `traceparent` header to the request 
 
 The scripts wrote to `sqlite:///<scratch>/<name>.db` and printed every key of `spans.content`. The script `helpers.py` holds the dump code.
 
-### What every trace gets
+### Fields that every trace gets
 
 Every stored span has the keys `trace_id`, `span_id`, `parent_span_id`, `name` and `status` in `content`. It also has `start_time_unix_nano`, `end_time_unix_nano`, `attributes`, `events` and `links`. There is no `kind` key.
 
@@ -240,7 +240,7 @@ The logger tries to set chat messages and tools through `mlflow.tracing.utils.se
 
 The async logger runs on LiteLLM's logging worker. In a script that ends the event loop at once, the worker did not run. Then the span was lost, with the warning "coroutine 'Logging.async_success_handler' was never awaited". The scripts wait 1.5 seconds after each `acompletion`.
 
-### PydanticAI on an OpenAI model, with `mlflow.autolog()`
+### PydanticAI on an OpenAI model under `mlflow.autolog()`
 
 `generic_autolog.py` turned on `mlflow.autolog()` and ran a PydanticAI agent on `OpenAIChatModel` with the stub client. Two flavors wrote spans into one tree:
 
@@ -297,11 +297,11 @@ Two related paths are outside MLflow. `Agent.instrument_all()` in pydantic-ai, a
 | `sampling_zero`: everything on, with `MLFLOW_TRACE_SAMPLING_RATIO=0` | all | 0 | 3 of 3 |
 | `recipe`: everything on, then `guard.suppress_all()` | none | 0 | 0 of 3 |
 
-### What each switch does
+### Each switch and its effect
 
 - **`mlflow.<flavor>.autolog(disable=True)`.** It reverts the flavor's gorilla patches at once, and it records `disable=True`. Later hooks and `mlflow.genai.evaluate()` respect that record. It does not reset `instrument=True` on agents that exist already. For LiteLLM, it leaves `MlflowLogger` in the async lists.
 - **`mlflow.autolog(disable=True)`.** It disables flavors that `mlflow.autolog()` turned on. It does not touch a flavor that a direct flavor call turned on (`tracking/fluent.py:3844`). It leaves the import hooks in place, set to disable.
-- **`mlflow.tracing.disable()`.** It replaces MLflow's tracer provider with a `NoOpTracerProvider` (`tracing/provider.py:938` to 976). The patches stay, but each patched call makes a no-op span, so no span is stored and no header is sent. The LiteLLM logger also writes nothing, because it uses the same provider.
+- **`mlflow.tracing.disable()`.** It replaces MLflow's tracer provider with a `NoOpTracerProvider` (`tracing/provider.py:938` to 976). The patches stay. But each patched call makes a no-op span, so no span is stored and no header is sent. The LiteLLM logger also writes nothing, because it uses the same provider.
 - **`disable_autologging()`.** The context manager (`utils/autologging_utils/__init__.py:544`) sets a module flag that `safe_patch` and the PydanticAI v2 wrappers read. The LiteLLM logger does not read it.
 - **`MLFLOW_TRACE_SAMPLING_RATIO=0`.** The sampler drops every root span (`tracing/provider.py:744`). The flavors still make a span context and still send the header.
 - **No environment variable disables tracing.** The tracing variables in `environment_variables.py` set the destination, sampling, export and buffers. None of them is an off switch.
@@ -319,7 +319,7 @@ The default is `MLFLOW_USE_DEFAULT_TRACER_PROVIDER=true`. MLflow then keeps a pr
 
 1. **MLflow joins our provider.** MLflow added `MlflowV3SpanProcessor` to our provider (`tracing/provider.py:667` to 683). A span from the `provrun` tracer was then stored in the MLflow database, and MLflow spans went to our exporter.
 2. **A new URI removes our provider.** `mlflow.set_tracking_uri(other)` set the global provider back to a `ProxyTracerProvider` (`tracing/provider.py:197` to 205). Our provider was gone.
-3. **Disable removes it too.** `mlflow.tracing.disable()` set the global provider to a `NoOpTracerProvider`. That stops every OTel span in the process, and provrun's spans with them.
+3. **Disable removes it too.** `mlflow.tracing.disable()` set the global provider to a `NoOpTracerProvider`. The no-op provider stops every OTel span in the process, and provrun's spans with them.
 
 So provrun must keep the variable at `true`.
 
@@ -329,7 +329,7 @@ MLflow sends usage events, such as each `autolog()` call, to `config.mlflow-tele
 
 ### The recipe
 
-`guard.py` holds a sketch of the recipe as `suppress_all()`. It passed the `recipe` scenario. The steps:
+`guard.py` holds a sketch of the recipe as `suppress_all()`. It passed the `recipe` scenario, and it has these steps:
 
 1. **Set the environment.** Set `MLFLOW_USE_DEFAULT_TRACER_PROVIDER=true`, `MLFLOW_DISABLE_TELEMETRY=true` and `MLFLOW_TRACE_SAMPLING_RATIO=0`, before MLflow is imported if possible. If MLflow is imported already, call `set_telemetry_client()`.
 2. **Disable by name.** Call `mlflow.autolog(disable=True)`, and then `mlflow.<flavor>.autolog(disable=True, silent=True)` for each flavor. The named calls revert patches that a flavor call made. They also record `disable=True`, so that `mlflow.genai.evaluate()` and import hooks leave the flavor off.

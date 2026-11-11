@@ -55,7 +55,7 @@ Add `--online` to run Step 11 too, which reads GitHub and Hugging Face. The scri
 
    The script does these things:
 
-   - It makes the scratch folder `/tmp/provcat-tour`, or the folder in `TOUR_DIR`. It refuses a folder that is already there, unless an earlier tour made it.
+   - It makes the scratch folder `/tmp/provcat-tour`, or the folder in `TOUR_DIR`. It stops with an error if that folder is already there. When an earlier tour made the folder, the error says to run `source tours/provcat/stop.sh` first.
    - It points `PROVCAT_CONFIG` and `PROVCAT_CACHE` at that folder, so the tour does not touch your own cache.
    - It sets fake AWS keys for moto, and unsets `AWS_PROFILE`, `AWS_SESSION_TOKEN` and the provcat variables `PROVCAT_HOOKS`, `PROVCAT_APP` and `PROVCAT_TENANT`.
    - It starts moto on port 5055, or the port in `TOUR_S3_PORT`. It refuses a port that is in use.
@@ -70,7 +70,7 @@ Add `--online` to run Step 11 too, which reads GitHub and Hugging Face. The scri
    source tours/provcat/stop.sh
    ```
 
-   It stops moto, deletes the scratch folder, and gives back each variable that `start.sh` changed its old value. In a new shell, it stops the tour in `/tmp/provcat-tour`, or in the folder that `TOUR_DIR` names.
+   It stops moto, deletes the scratch folder, and gives each variable that `start.sh` changed its old value back. In a new shell, it stops the tour in `/tmp/provcat-tour`, or in the folder that `TOUR_DIR` names.
 
 ## The tour's configuration
 
@@ -286,7 +286,7 @@ order,region,amount
 2,west,12
 ```
 
-The cache keeps the live folder, the commit and the version apart, so a fixed version's file never changes. The read of the commit in Step 3 put the commit there, and Step 4 put the version. A read through the name and a read through the physical URI share one copy. Offline, the name reads the copy it fetched last, and the commit reads its own copy.
+The cache keeps the live folder, the commit and the version apart, so the cached file of a fixed version never changes. The read of the commit in Step 3 put the commit there, and Step 4 put the version. A read through the name and a read through the physical URI share one copy. Offline, the name reads the copy it fetched last, and the commit reads its own copy.
 
 ## Step 8: Give a program a snapshot
 
@@ -342,7 +342,7 @@ The first read went through the lookup and the fetch, and each line names the lo
 
 ## Step 11: Read GitHub and Hugging Face (needs the network)
 
-This step runs only with `--online`. The scheme `code` sends a name to GitHub, and its third part is the branch. A Hugging Face URI takes a time.
+This step runs only with `--online`. The scheme `code` sends a name to GitHub, and its third part is the branch. A Hugging Face URI can take a time as its selector.
 
 ```
 $ uv run provc pin 'code://octocat/Hello-World/master/README'

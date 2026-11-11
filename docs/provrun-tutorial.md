@@ -117,9 +117,9 @@ $ R1=$(uv run python tours/provrun-tutorial/field.py $TOUR_DIR/r1.json run_id)
 
 ## Step 3: Look at the run folder
 
-The run folder holds four folders. `input/` holds the input that the agent read, and `output/` holds its answer. `scratch/` is the agent's space to work in, and it is empty here, so `find` does not show it.
+The run folder holds four folders. `input/` holds the input that the agent read, and `output/` holds its answer. `scratch/` is the agent's space to work in. It is empty here, so `find` does not show it.
 
-`evidence/` holds the events in `events.jsonl` and the payloads. It also holds `manifest.json`, which provrun writes as the run ends. The manifest gives the number of events, the hash of the last event and the names of the payloads. So a removed event or payload shows up.
+`evidence/` holds the events in `events.jsonl` and the payloads. It also holds `manifest.json`, which provrun writes as the run ends. The manifest gives the number of events, the hash of the last event and the names of the payloads, so a removed event or payload shows up.
 
 ```
 $ find $PROVRUN_RUNS/$R1 -type f | sort
@@ -188,7 +188,7 @@ $ uv run python tours/provrun-tutorial/event.py $R1 snapshot_materialized
 
 ## Step 5: Read the prompt and the answer
 
-The prompt and the answer can be large, so an event keeps each one in a payload, and holds its hash. The prompt holds the instructions, the input under its name in the run folder, `/input/q3.txt`, and the question:
+The prompt and the answer can be large. So an event keeps each one in a payload, and holds its hash. The prompt holds the instructions, the input under its name in the run folder, `/input/q3.txt`, and the question:
 
 ```
 $ uv run python tours/provrun-tutorial/payload.py $R1 prompt_rendered
@@ -206,7 +206,7 @@ payload d092ca7582c9211ace9c28b2de0ff2da92138c756b2cb2c961ca507c715efb87
 
 ## Step 6: Ask for an input that the run may not read
 
-The broker decides whether a run may read each input, before the agent starts. The stub broker allows a local file only in the environment `dev`, because a local path names no environment. Make a copy of the run file for `prod`, and run it. The run fails, and `provr run` exits with status 1.
+The broker decides whether a run may read each input, before the agent starts. The stub broker grants access to a local file only in the environment `dev`, because a local path names no environment. Make a copy of the run file for `prod`, and run it. The run fails, and `provr run` exits with status 1.
 
 ```
 $ sed "s/env: dev/env: prod/" $TOUR_DIR/run.yaml > $TOUR_DIR/prod.yaml
@@ -218,7 +218,7 @@ $ uv run python tours/provrun-tutorial/field.py $TOUR_DIR/r2.json error
 AccessDenied: access to file:///tmp/provrun-tutorial/q3.txt denied: a physical file URI names no environment; the stub grants one only in dev, and the run is in prod
 ```
 
-The refused run still has a run folder and evidence. The evidence records the request, the refusal and the end of the run, and the agent never started:
+The denied run still has a run folder and evidence. The evidence records the request, the denial and the end of the run, and the agent never started:
 
 ```
 $ R2=$(uv run python tours/provrun-tutorial/field.py $TOUR_DIR/r2.json run_id)
@@ -235,7 +235,7 @@ a physical file URI names no environment; the stub grants one only in dev, and t
 
 ## Step 7: Check a run
 
-`provr verify` checks the hash chain of the events, the payloads, the manifest and the outputs of a run. Both runs verify. The refused run failed, but its evidence is whole.
+`provr verify` checks the hash chain of the events, the payloads, the manifest and the outputs of a run. Both runs verify. The denied run failed, but its evidence is whole.
 
 ```
 $ uv run provr verify $R1
@@ -307,7 +307,7 @@ You ran an agent, and read each part of its run folder:
 
 - The input is a read-only copy, and the evidence holds the SHA-256 hash of its bytes.
 - The answer is in `output/`, and the evidence holds the prompt and the answer as payloads.
-- The broker decides each input before the agent starts, and a refusal is evidence too.
+- The broker decides each input before the agent starts, and the evidence records a denial too.
 - `provr verify` checks the whole record, and a program runs a run file with `run_file_sync`.
 
 The tutorial leaves out several features. An input can be a logical URI, which provcat turns into a pinned version in a store. A run can commit a copy of its folder to a store, and keep its evidence in SQLite. A telemetry policy says which libraries may send data from a run, and where.
