@@ -6,7 +6,7 @@ This page lists provevi's commands, stores, tables, policy keys, exit codes and 
 
 provevi stores, reads and checks the evidence of provrun's runs. Its command is `prove`. Phases 1, 2 and 4 of [the plan](provevi-plan.md) are built. Phase 1 gave the package, the `file` store and the checks. Phase 2 gave the `sqlite` store, which answers questions across runs. Phase 4 gave the copy in MLflow, for MLflow's viewer.
 
-Of Phase 3, provevi's part is built. It reads and checks the telemetry policy. provrun applies steps 2 to 10. They record the telemetry variables, own the providers, turn off each library's own telemetry, and find what cannot be turned off. Step 9 sends provrun's spans to approved destinations, using provevi's rule that matches a variable to a destination. For MLflow, provrun calls Phase 4's copy when a run is sealed.
+provevi's part of Phase 3 is built. It reads and checks the telemetry policy. provrun applies steps 2 to 10. They record the telemetry variables, own the providers, turn off each library's own telemetry, and find what cannot be turned off. Step 9 sends provrun's spans to approved destinations, using provevi's rule that matches a variable to a destination. For MLflow, provrun calls Phase 4's copy when a run is sealed.
 
 Experiments as catalog objects and the span receiver come in later phases.
 
@@ -144,7 +144,7 @@ The store answers questions across runs:
 
 ## Experiments and agent classes
 
-An experiment is a question a team asks again and again in a project. It is a folder in the catalog, such as `experiment://acme/risk/dev/credit/q`, holding one file, `experiment.yaml`. A commit of the folder is a version, so the folder must be in a store with commits, such as lakeFS or a versioned bucket. [The design](provevi-design.md#experiments-agents-and-workflows) says why an experiment holds no agent spec.
+An experiment is a question a team asks again and again in a project. It is a folder in the catalog, such as `experiment://acme/risk/dev/credit/q`, and it holds one file, `experiment.yaml`. A commit of the folder is a version, so the folder must be in a store with commits, such as lakeFS or a versioned bucket. [The design](provevi-design.md#experiments-agents-and-workflows) says why an experiment holds no agent spec.
 
 ```yaml
 kind: agent-eval
@@ -163,7 +163,7 @@ metrics: [accuracy]
 
 A file with another key is refused, and so is a single text where a list belongs.
 
-`write_experiment(catalog, uri, experiment, message)` writes the file and commits the folder. It returns a `PinnedExperiment`, with the URI, the pin, which is the URI with `?at=commit:...`, and the file's SHA-256. `read_experiment(catalog, uri)` reads the newest version, or the version that the URI's `?at=` names. Both go through the catalog's hooks. A store whose pin names no commit, such as a local folder, is refused.
+`write_experiment(catalog, uri, experiment, message)` writes the file and commits the folder. It returns a `PinnedExperiment`, which holds the URI, the pin and the file's SHA-256. The pin is the URI with `?at=commit:...`. `read_experiment(catalog, uri)` reads the newest version, or the version that the URI's `?at=` names. Both go through the catalog's hooks. A store whose pin names no commit, such as a local folder, is refused.
 
 A run names its experiment beside its agent. provrun records the fields `experiment`, `experiment_pin` and `experiment_sha256` in `run_created`. [provrun's page](provrun.md#name-the-experiment) shows the run file. The store keeps each version that runs report.
 
@@ -271,7 +271,7 @@ A policy endpoint holds no user and no password, because the policy holds no sec
 
 It gives `None` when neither endpoint variable is set. provrun then makes no OTLP exporter. An OpenTelemetry library left to itself would send to `localhost:4318` instead.
 
-An MLflow destination needs the tracking URI too. provrun sets it on the client itself, because MLflow's default, when `MLFLOW_TRACKING_URI` is unset, is not the evidence store's file.
+An MLflow destination needs the tracking URI too. provrun sets it on the client itself. When `MLFLOW_TRACKING_URI` is unset, MLflow's default is not the evidence store's file.
 
 This program matches three URLs against a policy with two destinations:
 
@@ -433,7 +433,7 @@ destinations:
     receives: names
 ```
 
-`policy.live_level()` gives that level, or `None` when the policy names no live viewer, and then a run shows nothing live. A policy names one live viewer at most, and no library feeds it. A library's spans reach the viewer as `span_recorded` events. A run file can lower the level with `narrow`, as for any destination.
+`policy.live_level()` gives that level, or `None` when the policy names no live viewer. With `None`, a run shows nothing live. A policy names one live viewer at most, and no library feeds it. A library's spans reach the viewer as `span_recorded` events. A run file can lower the level with `narrow`, as for any destination.
 
 The feed is a list of items, each a JSON object with a `type` and `n`, its number in the feed from 1:
 

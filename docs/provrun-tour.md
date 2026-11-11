@@ -653,7 +653,7 @@ $ cat $TOUR_DIR/collector.log
 
 ## Step 13: Copy a run into MLflow
 
-MLflow is a place to look at runs, with a web viewer. A policy can approve an MLflow destination. This one has no endpoint, so it names the SQLite evidence store's own file, and MLflow there receives names only:
+MLflow is a place to look at runs, with a web viewer. A policy can approve an MLflow destination. The tour's MLflow destination has no endpoint, so it names the SQLite evidence store's own file. MLflow there receives names only:
 
 ```
 $ cat $TOUR_DIR/mlflow.yaml
@@ -1023,7 +1023,7 @@ $ uv run python tours/provrun/event_types.py $R10
 22 run_completed 
 ```
 
-The agent called the model three times. It searched the report, noted the line, and wrote the answer with the filesystem tool `write_file`. `trace_imported` holds PydanticAI's whole message history. Look at what was blocked, what the collector got, and the copy, and verify the run:
+The agent called the model three times. It searched the report, noted the line, and wrote the answer with the filesystem tool `write_file`. `trace_imported` holds PydanticAI's whole message history. Look at what was blocked, at what the collector got and at the copy. Then verify the run:
 
 ```
 $ uv run prove telemetry $PROVRUN_RUNS/$R10

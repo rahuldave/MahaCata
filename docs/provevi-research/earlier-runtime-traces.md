@@ -54,7 +54,7 @@ Only these kinds of span were present:
 - **Readers assumed one span.** The judges and the web page read the first span and expected chat messages. An agent trace's first span has a prompt and no messages, so judges got no conversation from an agent run.
 - **Agent steps were not spans,** so no query could find every call of one tool without parsing message lists.
 - **Attribute names came from libraries,** such as LiteLLM's `response_cost`, and could change. The agent span named the model's class, not the model.
-- **Errors were caught and ignored** when writing assessments, deleting runs and reading traces. A lost assessment left no record.
+- **Errors were caught and ignored** when the runtime wrote assessments, deleted runs and read traces. A lost assessment left no record.
 - **Deleted runs left their traces behind.**
 - **WAL mode did not stay on.** The runtime set it once, but the largest file was back in the default mode.
 - **The run-to-trace link was kept twice,** in the runtime's database and in MLflow's, so the two could disagree.

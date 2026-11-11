@@ -418,7 +418,7 @@ A reader checks that the commit object hashes to its ID, so a changed commit is 
 
 `provc branch s3://acme-sales/dev --from main` copies every file of `main` to `dev`. `--from <commit ID>` copies the versions in a commit. S3 and GCS copy inside the cloud. Azure downloads and uploads.
 
-### What is guaranteed
+### What a commit in a bucket guarantees
 
 A bucket writes one object at a time. It never writes several objects in one step. So a commit is made safe in two ways:
 

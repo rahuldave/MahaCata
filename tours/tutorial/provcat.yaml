@@ -1,0 +1,17 @@
+# The catalog of the tutorial: one store and one name.
+cache:
+  root: ${oc.env:TOUR_DIR}/cache
+
+stores:
+  # moto, a local server that speaks the S3 protocol.
+  local-s3:
+    driver: s3
+    endpoint_url: http://localhost:${oc.env:TOUR_S3_PORT,5055}
+
+schemes:
+  # data://org/domain/env/path is the file at that path in the bucket data.
+  data:
+    parts: [org, domain, env]
+    rest: path
+    target: "local-s3://data/{ref}/{org}/{domain}/{env}/{path}"
+    ref: main

@@ -150,7 +150,7 @@ acme/demo/dev/revenue-question  first run run-20261102T191955Z-52539489
 ```
 
 **What happened:**
-- The agent class is the agent's name in its org, domain and environment. The store found it in the runs, and nothing was declared.
+- The agent class is the agent's name in its org, domain and environment. The store found it in the runs, and no one declared it.
 - Both runs are one version of the class, the start of the SHA-256 of the agent's spec without its prompt and inputs. A changed model or instructions would make a new version.
 - `agent show` prints the version's backend, model, tools and limits. It never prints the agent's `settings`, which may hold secrets.
 - `runs --reading` found both runs, because each staged the document as an input.
@@ -330,7 +330,7 @@ run_completed            span_id trace_id
 
 ## Step 9: Write an experiment, and read each version
 
-An experiment is a folder in the catalog, at a URI such as `experiment://acme/risk/dev/credit/revenue`, holding `experiment.yaml`. Each commit of the folder is a version. `tours/provevi/experiment.py` writes one twice and reads both versions back. Its bucket is S3, which moto mocks in the script's process, so the step needs no server.
+An experiment is a folder in the catalog, at a URI such as `experiment://acme/risk/dev/credit/revenue`, and it holds `experiment.yaml`. Each commit of the folder is a version. `tours/provevi/experiment.py` writes one twice and reads both versions back. Its bucket is S3, which moto mocks in the script's process, so the step needs no server.
 
 ```
 $ uv run python tours/provevi/experiment.py

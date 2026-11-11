@@ -118,7 +118,7 @@ These settings in provrun affect the whole process:
 - During a run, provrun sets a few environment variables, as "Control of library telemetry" below says. It puts them back when the last run that is going on ends.
 - The first run sets OpenTelemetry's global tracer, meter and logger providers to provrun's own. They stay for the rest of the process.
 - When the LiteLLM backend first calls LiteLLM, it sets `litellm.suppress_debug_info`, so LiteLLM prints nothing on stdout. This also applies to the program's own LiteLLM calls.
-- Before each LiteLLM call, the backend sets the environment variable `USE_OTEL_LITELLM_REQUEST_SPAN` to `true`, so that LiteLLM's tracing does not write onto provrun's span. A value that is already set is kept, with a warning if it is not `true`.
+- Before each LiteLLM call, the backend sets the environment variable `USE_OTEL_LITELLM_REQUEST_SPAN` to `true`, so that LiteLLM's tracing does not write onto provrun's span. A value that is already set is kept, and the backend warns if that value is not `true`.
 
 ### Watch a run as it goes
 
@@ -263,7 +263,7 @@ The evidence does not record the pieces. It records each whole response once, as
 
 A stream can fail partway, after some pieces were handed on. Then its `step_failed` holds `pieces`, the number handed on, and a payload with the text so far, under `partial_response`. So the evidence holds all that a viewer of the run saw. [Step 14 of the tour](provrun-tour.md#step-14-ask-for-the-reply-in-pieces) streams a run.
 
-## What a run does
+## The events that each step of a run writes
 
 Each step writes an evidence event:
 
@@ -288,13 +288,13 @@ In the PydanticAI backend, one PydanticAI capability writes `model_called` and `
 - the output tool, when the agent answers through one, as `tool_called` with `output_tool` set;
 - each tool that the provider ran itself, such as a web search, as `tool_called` with `provider_run` set and confidence `parsed`. provrun sees only the provider's account of such a call.
 
-The backend gives text output and no provider tools, so its runs have neither of the last two. Other code can pass the capability, `evidence_capability`, to its own agent, and stream; Step 17 of the [tour](provrun-tour.md) streams Claude Haiku this way. In a streamed request, the output tool's event comes before the `model_called` that asked for it.
+The backend gives text output and no provider tools, so its runs have neither of the last two. Other code can pass the capability, `evidence_capability`, to its own agent, and stream. Step 17 of the [tour](provrun-tour.md) streams Claude Haiku this way. In a streamed request, the output tool's event comes before the `model_called` that asked for it.
 
 Each `model_called` event lists the tool calls that the model asked for, under `tool_calls`. The list includes a call to an unknown tool, or a call with bad arguments. PydanticAI refuses such a call before the tool runs, so it has no `tool_called` event.
 
 The PydanticAI agent sees `/input` read-only, `/output` and `/scratch`. If the agent tries to write to `/input`, the sandbox refuses. The refusal is in the evidence as `step_failed`, and the model gets the refusal as a message, so it can try another way.
 
-## The evidence
+## What the evidence holds
 
 The run folder holds the evidence:
 
@@ -383,7 +383,7 @@ The value of a name ending in `_ENDPOINT`, `_URI` or `_URL` is recorded in one o
 - A URL without a host, such as `sqlite:///data/mlflow.db`, gives its scheme only, as `sqlite:<path not recorded>`.
 - A bare name of letters and hyphens, such as `databricks`, is kept.
 - A URL with a port that is not a number is recorded as `<not recorded: not a valid URL>`.
-- Any other value is recorded as `<not recorded: not a URL>`. This includes a value with an `@` outside its user part, and a value such as `localhost:5000`, which has no `//`.
+- Any other value is recorded as `<not recorded: not a URL>`. Such values include a value with an `@` outside its user part, and a value such as `localhost:5000`, which has no `//`.
 
 Every other variable, such as a token, a header or a key, is recorded by its name only. For example:
 
@@ -398,9 +398,9 @@ Every other variable, such as a token, a header or a key, is recorded by its nam
 
 `overridden` holds the user's own value of each setting above that the run changed, such as `"LITELLM_MODE": "DEV"`.
 
-A library that the program imported before the run read the environment before provrun set it. The run records such libraries; this is not a failure, because a program that passes in a model has imported its library already.
+A library that the program imported before the run read the environment before provrun set it. The run records such libraries. Such an import is not a failure, because a program that passes in a model has imported its library already.
 
-**The providers.** OpenTelemetry has one global tracer provider, meter provider and logger provider in a process, and each can be set once. The first run sets all three to provrun's own. provrun's spans come from its own provider, so the step events of a run hold span IDs. A step event is one that a step writes when it ends, such as `model_called`; `run_created` is not one.
+**The providers.** OpenTelemetry has one global tracer provider, meter provider and logger provider in a process, and each can be set once. The first run sets all three to provrun's own. provrun's spans come from its own provider, so the step events of a run hold span IDs. A step event is one that a step writes when it ends, such as `model_called`. `run_created` is not one.
 
 provrun's tracer and logger providers refuse a processor that provrun did not add through their `add_span_processor` and `add_log_record_processor`. MLflow does this when `MLFLOW_USE_DEFAULT_TRACER_PROVIDER` is false. Code that reaches into a provider's private parts can still add one. The checks below find a global provider that was replaced.
 
@@ -522,7 +522,7 @@ The event names the variable, and records only the scheme, host and port of its 
 
 When the run is sealed, provrun calls provevi's `copy_run` in a process of its own, with the user's variables. The copy changes variables and loaded modules while it works, and these do not reach another run of the program.
 
-It reads the run back from the store and checks its chain. Then it writes one MLflow run and one trace, cut to the level the destination receives. [provevi's page](provevi.md#copy-a-run-into-mlflow) gives its rules. A failed run is copied too. A cancelled or interrupted run is not.
+It reads the run back from the store and checks its chain. Then it writes one MLflow run and one trace, cut to the level the destination receives. [provevi's page](provevi.md#copy-a-run-into-mlflow) gives its rules. A failed run is copied too, but a cancelled or interrupted run is not copied.
 
 The summary of `provr run`, and `outcome.mlflow`, say where the copy went:
 
