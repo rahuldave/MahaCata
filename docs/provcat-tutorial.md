@@ -269,7 +269,7 @@ order,region,amount
 
 The name without a selector still reads `main`, so code that reads `main` sees no change until you copy the work back.
 
-## Step 7: Read from the cache, without asking the store
+## Step 7: Fetch a file to the cache, and read it offline
 
 provcat keeps the files that it reads in its cache. `provc fetch` puts a file there, and prints the local path, so that a program that wants a path can read the file.
 
@@ -322,7 +322,7 @@ You gave two stores two names, and read and wrote files only by those names:
 - **A local file** by the name `notes://sales/targets.csv`, with no server.
 - **A versioned file** in a bucket by the name `data://sales/orders/day1.csv`. You committed its folder, pinned it, and read the old version after a change.
 - **A branch** `dev`, which changed while `main` stayed as it was.
-- **The cache**, which read a pinned version with no store.
+- **The cache**, which read a pinned version without asking the store.
 
 The tutorial leaves out several features. provcat also reads and writes lakeFS, GCS and Azure, and reads GitHub and Hugging Face. One name can go to another store than the rest of its scheme. Hooks can record or refuse each request of an app, and a snapshot gives a program a read-only copy of a commit.
 
