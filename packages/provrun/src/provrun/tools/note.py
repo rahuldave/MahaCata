@@ -5,8 +5,14 @@ from pydantic_ai import RunContext
 
 from . import RunDeps
 
+__all__ = ["add_note"]
 
-async def add_note(ctx: RunContext[RunDeps], text: str, refs: list[str] | None = None) -> str:
+
+async def add_note(
+    ctx: RunContext[RunDeps],  # PydanticAI's run context; ctx.deps.run is the provrun run
+    text: str,  # The note
+    refs: list[str] | None = None,  # Paths or URIs that the note is about, for example /input/report.txt
+) -> str:  # "noted"
     """Add a note to the record of this run, for example a reason or a citation.
 
     Args:

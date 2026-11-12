@@ -49,21 +49,30 @@ from .spec import AgentSpec, RunFile
 from .stagers import InProcessStager, Stager
 from .telemetry import Telemetry, load_policy
 
+__all__ = ["RunOutcome", "run_agent", "run_file", "run_file_sync"]
+
 
 @dataclass
 class RunOutcome:
-    run_id: str
-    status: str  # "completed" or "failed"
-    folder: Path
-    bundle: Bundle
-    result: RunResult | None = None
-    artifacts: list[Artifact] | None = None
-    error: BaseException | None = None
-    mlflow: dict | None = None  # where the sealed run was copied in MLflow, when the policy approves a place
+    """What a run gives back: its ID, status, folder and bundle, and its result or error.
 
-    def to_dict(self) -> dict:
-        """The summary that ``provr run`` prints, as plain values. It has
-        ``mlflow`` only when the run was to be copied into MLflow."""
+    run_agent raises, and gives no outcome, for the errors its docstring lists."""
+
+    run_id: str  # The run's ID
+    status: str  # "completed" or "failed"
+    folder: Path  # The run folder
+    bundle: Bundle  # Where the bundle went
+    result: RunResult | None = None  # What the backend returned; None if the run failed before or in the backend
+    artifacts: list[Artifact] | None = None  # The files in the output folder, a failed run's too; None if none were collected
+    error: BaseException | None = None  # The Exception that failed the run; None for a run that completed
+    mlflow: dict | None = None  # Where the sealed run was copied in MLflow, when the policy approves a place
+
+    def to_dict(
+        self,
+    ) -> dict:  # The run ID, status, folder, bundle URI, pin, note and error, and mlflow when there is a copy
+        """Give the summary that ``provr run`` prints, as plain values.
+
+        It has ``mlflow`` only when the run was to be copied into MLflow."""
         d = {"run_id": self.run_id, "status": self.status, "folder": str(self.folder),
              "bundle": self.bundle.uri, "pinned": self.bundle.pinned, "note": self.bundle.note,
              "error": f"{self.error.__class__.__name__}: {self.error}" if self.error else None}
@@ -81,40 +90,68 @@ def input_name(uri: str, given: str | None) -> str:
     return u.segments[-1] if u.segments else u.authority
 
 
-async def run_agent(agent: AgentSpec, *, catalog: Catalog, org: str, domain: str, env: str, actor: str,
-                    allow: list[str] | None = None, broker: Broker | None = None,
-                    resolver: Resolver | None = None, stager: Stager | None = None,
-                    backend: Backend | None = None, runs_root: Path | None = None,
-                    mode: str | None = None, bundle_scheme: str | None = None,
-                    store: EvidenceStore | None = None, policy: TelemetryPolicy | str | Path | None = None,
-                    telemetry: dict | None = None, feed: Any = None, experiment: str | None = None,
-                    parent_run: str | None = None) -> RunOutcome:
-    """Run agent once. With no broker, a StubBroker allows the inputs of the
-    spec and the URIs in allow. The evidence goes through store, a provevi
-    store, by default the file store in the run folder.
+async def run_agent(
+    agent: AgentSpec,  # The agent to run
+    *,
+    catalog: Catalog,  # The catalog that resolves and snapshots the inputs, pins the experiment and takes the bundle
+    org: str,  # The run's org, one part of the run URI
+    domain: str,  # The run's domain, one part of the run URI
+    env: str,  # The run's environment, one part of the run URI; dev makes the evidence mode lenient by default
+    actor: str,  # Who runs it; each event records it
+    allow: list[str] | None = None,  # More URIs that the default StubBroker allows; unused when broker is given
+    broker: Broker | None = None,  # Decides each request; None is a StubBroker that allows the spec's inputs, the URIs in allow, and the experiment if it has no selector or a commit ID
+    resolver: Resolver | None = None,  # Makes each input's snapshot; None is a ProvcatResolver on catalog
+    stager: Stager | None = None,  # Stages the snapshots for the agent; None is an InProcessStager
+    backend: Backend | None = None,  # Runs the agent; None loads the backend that the spec names
+    runs_root: Path | None = None,  # The folder that holds run folders; None is provevi's default runs root
+    mode: str | None = None,  # The evidence mode, "strict" or "lenient"; None is lenient in dev and strict elsewhere
+    bundle_scheme: str | None = None,  # A logical scheme to write the bundle through; None keeps it in the run folder
+    store: EvidenceStore | None = None,  # The provevi store for the evidence; None is the file store in the run folder
+    policy: TelemetryPolicy | str | Path | None = None,  # The operator's telemetry policy, or its file; None is the file that PROVRUN_TELEMETRY_POLICY names, else a policy that approves nothing
+    telemetry: dict | None = None,  # A run file's telemetry section, which narrows the policy
+    feed: Any = None,  # A provrun.live.LiveFeed, which gets each event and each piece of a streamed reply as they come; start_run makes one
+    experiment: str | None = None,  # The URI of the experiment that the run belongs to
+    parent_run: str | None = None,  # The ID of the run that started this one, which run_created records
+) -> RunOutcome:  # The outcome, completed or failed; a failed run's outcome holds its error, but for the errors raised
+    """Run one agent spec once, and seal its evidence and bundle.
 
-    policy is the operator's telemetry policy, or the path of its file; by
-    default, the file that PROVRUN_TELEMETRY_POLICY names, else a policy that
-    approves nothing. telemetry, a run file's telemetry section, narrows it.
     provrun.telemetry says what a run does with the policy.
 
     A bad setting, a telemetry section that widens the policy, or an unknown
     backend raises RunSettingError before the run folder is made; so does a
-    telemetry problem in strict mode. Any later error fails the run, and the
-    outcome holds it. feed, a provrun.live.LiveFeed, gets each event and each
-    piece of a streamed reply as they come; start_run makes one.
+    telemetry problem in strict mode. Any later Exception fails the run, and
+    the outcome holds it, but for these, which are raised as the run ends:
 
-    experiment is the URI of the experiment that the run belongs to. The run
-    asks the broker for it first, in the mode pinned_read, and records the
-    decision once it opens. A refusal is recorded as access_denied, and the
-    run fails without reading the experiment. Otherwise the run
-    pins it through catalog, so the catalog's checks and hooks see it, and
-    run_created records the URI, the pin and the SHA-256 of its file. An
-    experiment that cannot be pinned raises RunSettingError before the run
-    folder is made. parent_run is the ID of the run that started this one,
-    which run_created records too. It must be a run in the same evidence
-    store, or under runs_root for the file store, or RunSettingError is
-    raised; a store that cannot read runs back is not checked."""
+    - EvidenceError, when finishing the run fails: in strict mode, an event
+      that could not be written, such as run_completed, or a bundle that
+      could not be written; in either mode, evidence that could not be sealed;
+    - CancelledError, for a cancel;
+    - another BaseException that is not an Exception.
+
+    An error while the run opens, once its folder is made, such as a store
+    that cannot open the run or, in strict mode, a run_created that cannot
+    be written, is raised too: the folder is left, and there is no outcome.
+
+    A cancel before the run opens, while the telemetry is set up, the broker
+    decides the experiment, the experiment is pinned or the parent run is
+    checked, leaves no run folder and no run_failed. A cancel after that, or
+    another BaseException, is raised once the run is sealed, with run_failed.
+    A BaseException of its own kind is recorded as itself. A KeyboardInterrupt
+    or SystemExit raised in the agent reaches the run as a cancel: asyncio
+    raises it out of the backend's task, run_failed records CancelledError,
+    and the caller gets the KeyboardInterrupt or SystemExit.
+
+    The run asks the broker for the experiment first, in the mode
+    pinned_read, and records the decision once it opens. A refusal is
+    recorded as access_denied, and the run fails without reading the
+    experiment. Otherwise the run pins it through catalog, so the catalog's
+    checks and hooks see it, and run_created records the URI, the pin and the
+    SHA-256 of its file. An experiment that cannot be pinned raises
+    RunSettingError before the run folder is made.
+
+    parent_run must be a run in the same evidence store, or under runs_root
+    for the file store, or RunSettingError is raised; a store that cannot
+    read runs back is not checked."""
     if parent_run is not None and (not isinstance(parent_run, str) or not _RUN_ID.fullmatch(parent_run)):
         raise RunSettingError(f"parent_run must be a run ID, such as run-20260101T000000Z-0a1b2c3d; got {parent_run!r}")
     tel = Telemetry.prepare(load_policy(policy), telemetry, evidence_mode(env, mode))
@@ -364,14 +401,23 @@ async def _steps(ctx: RunContext, agent: AgentSpec, stager: Stager | None, backe
     return outcome, error
 
 
-async def run_file(rf: RunFile, *, catalog: Catalog, runs_root: Path | None = None, mode: str | None = None,
-                   bundle_scheme: str | Literal[False] | None = None, **parts) -> RunOutcome:
-    """Run a checked run file. bundle_scheme, when given, takes the place of
-    the run file's; False writes no bundle through the catalog. The other
-    keyword arguments (broker, resolver, stager, backend, store, policy, feed,
-    parent_run) go to run_agent, with the run file's telemetry section and
-    experiment; an experiment argument takes the place of the run file's. Without store, the run file's store setting opens one, and
-    without that the file store is used."""
+async def run_file(
+    rf: RunFile,  # The run file, as RunFile.load returns it
+    *,
+    catalog: Catalog,  # The catalog, as run_agent takes it
+    runs_root: Path | None = None,  # The folder that holds run folders; None is provevi's default runs root
+    mode: str | None = None,  # The evidence mode, "strict" or "lenient"; None is lenient in dev and strict elsewhere
+    bundle_scheme: str | Literal[False] | None = None,  # Takes the place of the run file's; False writes no bundle through the catalog
+    **parts: Any,  # broker, resolver, stager, backend, store, policy, feed, parent_run or experiment, passed to run_agent
+) -> RunOutcome:  # The outcome, as run_agent gives it
+    """Run a checked run file through run_agent.
+
+    The other keyword arguments, ``**parts``, go to run_agent: broker,
+    resolver, stager, backend, store, policy, feed, parent_run and
+    experiment. run_agent gets the run file's settings, telemetry section and experiment;
+    an experiment argument takes the place of the run file's. Without store,
+    the run file's store setting opens one, and without that the file store
+    is used. run_agent's errors are raised as it raises them."""
     s = rf.settings
     if parts.get("store") is None and s.store is not None:
         from provevi import open_store
@@ -383,6 +429,11 @@ async def run_file(rf: RunFile, *, catalog: Catalog, runs_root: Path | None = No
                            telemetry=rf.telemetry, experiment=parts.pop("experiment", rf.experiment), **parts)
 
 
-def run_file_sync(rf: RunFile, **kw) -> RunOutcome:
-    """run_file, for a caller with no event loop running."""
+def run_file_sync(
+    rf: RunFile,  # The run file, as RunFile.load returns it
+    **kw: Any,  # The keyword arguments of run_file, such as catalog
+) -> RunOutcome:  # The outcome, as run_file gives it
+    """Run a checked run file, for a caller with no event loop running.
+
+    The keyword arguments, ``**kw``, are those of run_file, such as catalog."""
     return asyncio.run(run_file(rf, **kw))

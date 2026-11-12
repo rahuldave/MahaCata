@@ -8,9 +8,16 @@ from pydantic_ai import RunContext
 
 from . import RunDeps
 
+__all__ = ["grep_file"]
 
-async def grep_file(ctx: RunContext[RunDeps], path: str, pattern: str,
-                    context_lines: int = 2, regex: bool = False) -> str:
+
+async def grep_file(
+    ctx: RunContext[RunDeps],  # PydanticAI's run context; ctx.deps holds the sandbox
+    path: str,  # The path of the file in the sandbox, for example /input/report.txt
+    pattern: str,  # The text to find; a literal unless regex is true
+    context_lines: int = 2,  # The number of lines to show before and after each match
+    regex: bool = False,  # Treat the pattern as a regular expression
+) -> str:  # The matching lines with their numbers, or a sentence that says why there are none
     """Search a file for lines that match a pattern, without case.
 
     Args:

@@ -16,6 +16,8 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
+__all__: list[str] = []
+
 
 def main() -> int:
     try:

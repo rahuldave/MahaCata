@@ -16,6 +16,8 @@ from collections.abc import Iterator
 from opentelemetry import trace
 from opentelemetry.context import Context
 
+__all__: list[str] = []
+
 # The release of the semantic conventions whose GenAI names provrun uses. It is
 # a note for readers, not a schema URL: the GenAI names have no release now.
 NAMES_FROM = "1.37.0"

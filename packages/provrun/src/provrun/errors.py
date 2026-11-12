@@ -1,7 +1,11 @@
-"""Errors raised by provrun. Every error that provrun raises on purpose is a
-ProvrunError, so a program that calls provrun can catch them in one place."""
+"""Errors raised by provrun.
+
+Every error that provrun raises on purpose is a ProvrunError, so a program
+that calls provrun can catch them in one place."""
 
 import provevi
+
+__all__ = ["ProvrunError", "RunFileError", "RunNotFound", "RunSettingError"]
 
 
 class ProvrunError(Exception):
@@ -17,5 +21,6 @@ class RunSettingError(ProvrunError, ValueError):
 
 
 class RunNotFound(ProvrunError, provevi.RunNotFound):
-    """No run folder has the run ID or path that was given. It is also a
-    provevi RunNotFound."""
+    """No run folder has the run ID or path that was given.
+
+    It is also a provevi RunNotFound."""
