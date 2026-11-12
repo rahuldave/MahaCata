@@ -22,19 +22,32 @@ if TYPE_CHECKING:
     from .context import RunContext
     from .resolve import Snapshot
 
+__all__ = ["InProcessStager", "InputCheckError", "Stager"]
+
 
 class InputCheckError(ProvrunError):
     """A staged input changed during the run."""
 
 
 class Stager(ABC):
+    """Makes the snapshots of a run visible to its agent, and checks them after the run."""
+
     @abstractmethod
-    def stage(self, ctx: RunContext, inputs: list[tuple[str, Snapshot]]) -> RunSpec:
+    def stage(
+        self,
+        ctx: RunContext,  # The run; its recorder takes the evidence
+        inputs: list[tuple[str, Snapshot]],  # Each input's name under /input, and its snapshot
+    ) -> RunSpec:  # The staged inputs and the run's folders, as the backend gets them
         """Stage (name, snapshot) pairs for one run."""
 
-    def verify_inputs(self, ctx: RunContext, run: RunSpec) -> None:
-        """Hash each staged input again, write input_verified, and raise
-        InputCheckError if one changed."""
+    def verify_inputs(
+        self,
+        ctx: RunContext,  # The run; its recorder takes one input_verified for each input
+        run: RunSpec,  # The run spec that stage returned
+    ) -> None:  # Nothing
+        """Hash each staged input again, and write input_verified for each.
+
+        Raises InputCheckError if one changed."""
         changed = []
         for i in run.inputs:
             with ctx.recorder.step("input_verified", self.__class__.__name__, refs=[i.uri, i.pinned]) as step:
@@ -47,7 +60,17 @@ class Stager(ABC):
 
 
 class InProcessStager(Stager):
-    def stage(self, ctx: RunContext, inputs: list[tuple[str, Snapshot]]) -> RunSpec:
+    """Copies each snapshot, read-only, into the run folder's input folder."""
+
+    def stage(
+        self,
+        ctx: RunContext,  # The run; its folder holds the input folder, and its recorder takes input_staged
+        inputs: list[tuple[str, Snapshot]],  # Each input's name, one part of a path and not repeated, and its snapshot
+    ) -> RunSpec:  # The staged inputs, seen by the agent at /input/<name>, and the run's output and scratch folders
+        """Copy each snapshot to <run folder>/input/<name>, and check its SHA-256.
+
+        Then make the input folder read-only. Raises ValueError for a bad or
+        repeated name, and InputCheckError if a copy differs from its snapshot."""
         input_dir = ctx.folder / "input"
         names = [name for name, _ in inputs]
         for name in names:

@@ -52,6 +52,8 @@ from ..uri import Uri
 from . import Entry, register_driver
 from .s3 import S3Store
 
+__all__ = []
+
 _PAGE = 1000
 _MAX_COMMITS = 100_000  # a ts: search reads at most this many commits
 _SETTLE = 600  # seconds; a ts: pin closer to now than this is not cached

@@ -28,7 +28,9 @@ that the hooks do not see, so do not use them over a catalog.
 from __future__ import annotations
 
 import shutil
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+__all__ = ["CatalogFileSystem"]
 
 try:
     from fsspec import AbstractFileSystem
@@ -39,6 +41,9 @@ except ImportError as e:  # pragma: no cover - depends on the install
 from .errors import ConfigError, NotFound, StoreError
 from .stores import Entry
 from .uri import Uri, parse
+
+if TYPE_CHECKING:
+    from .catalog import Catalog
 
 
 def _name(u: Uri) -> str:
@@ -60,14 +65,24 @@ def _who(catalog) -> str:
 
 
 class CatalogFileSystem(AbstractFileSystem):
-    """fsspec over a Catalog. Use ``catalog.fs()`` to make one."""
+    """fsspec over a Catalog. Use ``catalog.fs()`` to make one.
+
+    The call is ``CatalogFileSystem(catalog=None, **kw)``; fsspec's metaclass
+    hides it from the signature above.
+
+    The keyword arguments, other than catalog, go to fsspec's
+    AbstractFileSystem, as its storage options."""
 
     protocol = ("provcat",)
     root_marker = ""
     cachable = False
     _bound: Any = None
 
-    def __init__(self, catalog=None, **kw):
+    def __init__(
+        self,
+        catalog: Catalog | None = None,  # The catalog to read and write through; None takes the bound one, or Catalog.open()
+        **kw: Any,  # Options for fsspec's AbstractFileSystem
+    ):
         super().__init__(**kw)
         if catalog is None:
             catalog = self._bound
@@ -78,10 +93,15 @@ class CatalogFileSystem(AbstractFileSystem):
         self.catalog = catalog
 
     @classmethod
-    def over(cls, catalog, register: bool = True, replace: bool = False) -> CatalogFileSystem:
-        """A file system over catalog. With register, each logical scheme of
-        the catalog becomes an fsspec protocol that opens this catalog. A
-        later catalog with the same app, principal, tenant and hooks takes
+    def over(
+        cls,
+        catalog: Catalog,  # The catalog to read and write through
+        register: bool = True,  # Make each logical scheme of the catalog an fsspec protocol that opens this catalog
+        replace: bool = False,  # Take a scheme over from a catalog with another context or other hooks
+    ) -> CatalogFileSystem:  # A file system over the catalog; ConfigError when a scheme clashes
+        """Make a file system over a catalog; by default, register its logical schemes with fsspec.
+
+        A later catalog with the same app, principal, tenant and hooks takes
         the scheme over. One with another context, or other hooks, is
         refused, so fsspec never runs one caller's reads through another's
         hooks; it uses register=False, or replace=True to take the scheme
@@ -115,7 +135,11 @@ class CatalogFileSystem(AbstractFileSystem):
             return [cls._strip_protocol(p) for p in path]
         return str(path)
 
-    def unstrip_protocol(self, name: str) -> str:
+    def unstrip_protocol(
+        self,
+        name: str,  # A path, which is a whole URI
+    ) -> str:  # The same path: it already has its scheme
+        """Return the path unchanged, because a path here is a whole URI."""
         return name
 
     @staticmethod
@@ -129,14 +153,29 @@ class CatalogFileSystem(AbstractFileSystem):
         return {"name": name, "size": e.size or 0, "type": "file" if e.kind == "file" else "directory",
                 "version": e.version, "uri": str(e.uri)}
 
-    def info(self, path, **kw) -> dict:
+    def info(
+        self,
+        path: str,  # A URI, logical or physical
+        **kw: Any,  # Ignored; fsspec passes options here
+    ) -> dict:  # name, size, type ("file" or "directory"), version and uri; FileNotFoundError when there is none
+        """Describe one file or folder through Catalog.stat.
+
+        provcat ignores the keyword arguments that fsspec passes."""
         path = self._strip_protocol(path)
         try:
             return self._info(path, self.catalog.stat(path))
         except NotFound as e:
             raise _missing(e) from e
 
-    def ls(self, path, detail=True, **kw):
+    def ls(
+        self,
+        path: str,  # A URI, logical or physical
+        detail: bool = True,  # Return the info dict of each entry, not only its name
+        **kw: Any,  # Ignored; fsspec passes options here
+    ) -> list:  # For a folder, its entries; for a file, the file itself. FileNotFoundError when there is none
+        """List a folder through Catalog.list. Each name is a URI under path.
+
+        provcat ignores the keyword arguments that fsspec passes."""
         path = self._strip_protocol(path)
         u = parse(path)
         try:
@@ -149,7 +188,17 @@ class CatalogFileSystem(AbstractFileSystem):
             raise _missing(e) from e
         return out if detail else [o["name"] for o in out]
 
-    def expand_path(self, path, recursive=False, maxdepth=None, assume_literal=False, **kw):
+    def expand_path(
+        self,
+        path: str | list[str],  # A URI or glob pattern, or a list of them
+        recursive: bool = False,  # Include everything under each folder
+        maxdepth: int | None = None,  # How many levels deep a recursive expansion goes; None for all
+        assume_literal: bool = False,  # Take the paths as they are, not as glob patterns; a path with ?at= always is
+        **kw: Any,  # Passed on to fsspec
+    ) -> list[str]:  # The matching paths
+        """Expand glob patterns as fsspec does, except that a path with ?at= is taken literally.
+
+        The other keyword arguments go on to fsspec's expand_path."""
         paths = path if isinstance(path, list) else [path]
         if any("?at=" in str(p) for p in paths):
             assume_literal = True  # "?" there starts a selector, not a pattern
@@ -163,7 +212,11 @@ class CatalogFileSystem(AbstractFileSystem):
         except NotFound as e:
             raise _missing(e) from e
 
-    def rm_file(self, path):
+    def rm_file(
+        self,
+        path: str,  # The URI of a file on a branch
+    ) -> None:  # Deletes the file through Catalog.delete; a folder is left to go with its files
+        """Delete one file. FileNotFoundError when there is none."""
         path = self._strip_protocol(path)
         try:
             self.catalog.delete(path)
@@ -174,16 +227,41 @@ class CatalogFileSystem(AbstractFileSystem):
                 raise
             # A folder goes away with its files; rm(recursive=True) deletes them.
 
-    def cp_file(self, path1, path2, **kw):
+    def cp_file(
+        self,
+        path1: str,  # The URI of the file to copy
+        path2: str,  # The URI to write the copy at, on a branch
+        **kw: Any,  # Ignored; fsspec passes options here
+    ) -> None:  # Writes the copy; it runs the spots of a read and a write
+        """Copy a file by reading it through the catalog and writing it back.
+
+        provcat ignores the keyword arguments that fsspec passes."""
         with self.catalog.open_file(self._strip_protocol(path1)) as src, \
                 self.catalog.open_file(self._strip_protocol(path2), "wb") as dst:
             shutil.copyfileobj(src, dst)
 
-    def mkdir(self, path, create_parents=True, **kw):
+    def mkdir(
+        self,
+        path: str,  # The URI of the folder
+        create_parents: bool = True,  # Ignored
+        **kw: Any,  # Ignored
+    ) -> None:  # Does nothing
+        """Do nothing: a folder exists when a file is in it.
+
+        provcat ignores create_parents and the keyword arguments that fsspec passes."""
         pass  # a folder exists when a file is in it
 
-    def makedirs(self, path, exist_ok=False):
+    def makedirs(
+        self,
+        path: str,  # The URI of the folder
+        exist_ok: bool = False,  # Ignored
+    ) -> None:  # Does nothing
+        """Do nothing: a folder exists when a file is in it."""
         pass
 
-    def ukey(self, path):
+    def ukey(
+        self,
+        path: str,  # A URI, logical or physical
+    ) -> str:  # The version that the store gives, or fsspec's own key when it gives none
+        """A key that changes when the file changes."""
         return self.info(path).get("version") or super().ukey(path)

@@ -1,5 +1,6 @@
-"""A live feed of a run, for a program that shows the run as it goes, such as
-a FastAPI app that sends it to a browser:
+"""A live feed of a run, for a program that shows the run as it goes.
+
+For example, a FastAPI app that sends it to a browser does this:
 
     live = start_run(RunFile.load("run.yaml"), catalog=Catalog.open())
     async for item in live.follow():
@@ -48,15 +49,22 @@ from provevi import LEVELS, EvidenceEvent, Sink, answer_of, payload_of, shown_at
 from .runner import RunOutcome, run_file
 from .spec import RunFile
 
+__all__ = ["LiveFeed", "LiveRun", "start_run"]
+
 QUEUE = 1000  # the items a viewer may fall behind by before it is dropped
 
 
 class LiveFeed(Sink):
-    """The items of one run, kept in order, and handed to each viewer. It is
-    an evidence sink, so it gets each event as it is written, from any
+    """The items of one run, kept in order, and handed to each viewer.
+
+    It is an evidence sink, so it gets each event as it is written, from any
     thread; each item goes to the event loop, so items keep their order."""
 
-    def __init__(self, loop: asyncio.AbstractEventLoop, level: str | None = None):
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,  # The event loop that the viewers follow on
+        level: str | None = None,  # The level shown, one of provevi's LEVELS; the run sets it from its policy as it starts
+    ):
         if level is not None and level not in LEVELS:
             raise ValueError(f"level must be one of {LEVELS} or None, not {level!r}")
         # The run sets level from its policy as it starts, and writer, the
@@ -70,9 +78,13 @@ class LiveFeed(Sink):
         self._streamed = False  # whether a piece of a reply came since the last model call
         self._viewers: list[asyncio.Queue] = []
 
-    def append(self, line: str) -> None:
-        """An evidence line, from the recorder, in any thread. A viewer must
-        never fail a run, so the feed keeps its own errors."""
+    def append(
+        self,
+        line: str,  # One evidence line, as the recorder writes it
+    ) -> None:  # Nothing
+        """Take an evidence line, from the recorder, in any thread.
+
+        A viewer must never fail a run, so the feed keeps its own errors."""
         try:
             self._event(line)
         except Exception:  # such as a closed event loop
@@ -98,13 +110,19 @@ class LiveFeed(Sink):
                 self.loop.call_soon_threadsafe(self._push, {"type": "text", _ANSWER: event.payload})
             self._streamed = False
 
-    def text(self, piece: str) -> None:
+    def text(
+        self,
+        piece: str,  # One piece of a streamed reply; an empty piece is dropped
+    ) -> None:  # Nothing
         """A piece of a streamed reply, which only the bodies level shows."""
         if self.level == "bodies" and piece:
             self._streamed = True
             self._send({"type": "text", "text": piece})
 
-    def end(self, item: dict) -> None:
+    def end(
+        self,
+        item: dict,  # The last item, {"type": "done", "status": ..., "run_id": ...}
+    ) -> None:  # Nothing
         """The last item, once the run is over."""
         self._send(item)
 
@@ -129,7 +147,10 @@ class LiveFeed(Sink):
             else:
                 queue.put_nowait(item)
 
-    async def follow(self, after: int = 0) -> AsyncIterator[dict]:
+    async def follow(
+        self,
+        after: int = 0,  # The number of the last item the viewer has; 0 starts at the first
+    ) -> AsyncIterator[dict]:  # Each item after it, up to the done item, or a dropped item for a viewer that fell behind
         """The items after number after, as they come, up to the last."""
         if not isinstance(after, int) or after < 0:
             raise ValueError(f"after must be a number of an item, 0 or more; got {after!r}")
@@ -209,27 +230,45 @@ class _Payloads:
 class LiveRun:
     """A run that has started, with its feed."""
 
-    def __init__(self, task: asyncio.Task, feed: LiveFeed):
+    def __init__(
+        self,
+        task: asyncio.Task,  # The task that runs the run file
+        feed: LiveFeed,  # The run's feed
+    ):
         self.task, self.feed = task, feed
 
-    def follow(self, after: int = 0) -> AsyncIterator[dict]:
+    def follow(
+        self,
+        after: int = 0,  # The number of the last item the viewer has; 0 starts at the first
+    ) -> AsyncIterator[dict]:  # Each item after it, as the feed gives it
         """The run's items after number after, as they come; see the module."""
         return self.feed.follow(after)
 
-    async def result(self) -> RunOutcome:
+    async def result(
+        self,
+    ) -> RunOutcome:  # The run's outcome; it raises what the run raised, such as RunSettingError or CancelledError
         """Wait for the run, and give its outcome, as run_file does."""
         return await self.task
 
-    def cancel(self) -> None:
-        """Cancel the run. A run that has opened ends with run_failed, unless
+    def cancel(
+        self,
+    ) -> None:  # Nothing
+        """Cancel the run.
+
+        A run that has opened ends with run_failed, unless
         it was being sealed, which ends as it was; result() then raises
         CancelledError. A run cancelled before it opened leaves no evidence."""
         self.task.cancel()
 
 
-def start_run(rf: RunFile, **kw: Any) -> LiveRun:
-    """Start a run file as a task in the running event loop, and give it with
-    its feed. The keyword arguments are those of run_file."""
+def start_run(
+    rf: RunFile,  # The run file, as RunFile.load returns it
+    **kw: Any,  # The keyword arguments of run_file, such as catalog; not feed, which start_run makes
+) -> LiveRun:  # The run, started, with its feed
+    """Start a run file as a task in the running event loop, with a live feed.
+
+    The keyword arguments, ``**kw``, are those of run_file, but not feed,
+    which start_run makes."""
     loop = asyncio.get_running_loop()
     feed = LiveFeed(loop)
     task = loop.create_task(run_file(rf, feed=feed, **kw))

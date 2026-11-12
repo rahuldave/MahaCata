@@ -46,6 +46,8 @@ from .checks import ENDINGS
 from .events import EvidenceEvent, canonical, now, sha256_bytes
 from .store import EvidenceStore, FileRunWriter, RunRecord, RunWriter
 
+__all__ = ["SCHEMA_VERSION", "SqliteRecord", "SqliteRunWriter", "SqliteStore"]
+
 #: The schema version that this provevi writes.
 SCHEMA_VERSION = 2
 
@@ -339,15 +341,19 @@ def _agent_rows(want: dict, run_id: str, event: EvidenceEvent) -> list[tuple[str
 
 
 class SqliteStore(EvidenceStore):
-    """The evidence of many runs in one SQLite file, with the files of each
-    run in its evidence folder as well. Two runs, in one process or in two,
-    can write the same file at once.
+    """The evidence of many runs in one SQLite file, and the files of each run in its evidence folder.
 
-    With create=False the store only reads: a missing file, a file that is not
-    provevi's, or one of another schema version raises ProveviError, and
-    nothing is written. Every SQLite error comes out as a ProveviError."""
+    Two runs, in one process or in two, can write the same file at once. A store opened to read raises
+    ProveviError for a missing file, a file that is not provevi's, or one of another schema version, and
+    writes nothing. Opening the file and reading it turn every SQLite error into a ProveviError; a write
+    can still raise sqlite3.Error."""
 
-    def __init__(self, path: str | Path, *, create: bool = True):
+    def __init__(
+        self,
+        path: str | Path,  # The SQLite file; `~` is the home folder, and a relative path is from the current folder
+        *,
+        create: bool = True,  # Make the file, or bring its schema up to date, to write runs; False only reads
+    ):
         self.path = Path(path).expanduser().resolve()
         self.create = create
         try:
@@ -394,41 +400,65 @@ class SqliteStore(EvidenceStore):
         except sqlite3.Error as e:
             raise ProveviError(f"cannot read the evidence file {self.path}: {e}") from e
 
-    def open_run(self, run_id: str, folder: Path) -> SqliteRunWriter:
+    def open_run(
+        self,
+        run_id: str,  # The new run's ID; it must not be in the file yet
+        folder: Path,  # The run's evidence folder, where the files of the file store go too
+    ) -> SqliteRunWriter:  # The writer of the run, to the file and the folder
+        """Open a new run in the file and in its evidence folder.
+
+        Raises ProveviError for a store opened to read, and EvidenceError for a run already in the file."""
         if not self.create:
             raise ProveviError(f"{self!r} was opened to read; open it with create=True to write runs")
         return SqliteRunWriter(self, run_id, folder)
 
-    def read_run(self, run_id: str, folder: Path | None = None) -> SqliteRecord:
-        """The run as the file holds it. folder is the evidence folder to read
-        the payloads from; without it, the place the file records is used."""
+    def read_run(
+        self,
+        run_id: str,  # The run's ID
+        folder: Path | None = None,  # The evidence folder to read the payloads from; `None` for the place the file records
+    ) -> SqliteRecord:  # The run as the file holds it
+        """Read a run back from the file. Raises RunNotFound when the file has no such run."""
         if not self._query("SELECT 1 FROM provevi_runs WHERE run_id = ?", (run_id,)):
             raise RunNotFound(f"no run {run_id!r} in {self.path}")
         return SqliteRecord(self, run_id, folder)
 
-    def list_runs(self) -> list[str]:
+    def list_runs(self) -> list[str]:  # The run IDs, sorted, so oldest first
+        """List the runs in the file."""
         return [r[0] for r in self._query("SELECT run_id FROM provevi_runs ORDER BY run_id")]
 
-    def run_folder(self, run_id: str) -> Path | None:
-        """The run folder that the file records. The check does not cover it,
-        so prove looks under the runs root first."""
+    def run_folder(
+        self,
+        run_id: str,  # The run's ID
+    ) -> Path | None:  # The folder; `None` when the file has no such run
+        """The run folder that the file records.
+
+        The check does not cover it, so prove looks under the runs root first."""
         rows = self._query("SELECT folder FROM provevi_runs WHERE run_id = ?", (run_id,))
         return Path(rows[0][0]).parent if rows else None
 
     # Queries across runs. Each returns plain values.
 
-    def runs_reading(self, uri: str) -> list[str]:
-        """The runs that staged uri as an input, by its URI or by a pinned
-        version of it (the URI followed by ``?``)."""
+    def runs_reading(
+        self,
+        uri: str,  # A logical URI, or a pinned version of it
+    ) -> list[str]:  # The run IDs, sorted
+        """List the runs that staged a URI as an input.
+
+        A run counts if it staged the URI or a pinned version of it, which is the URI followed by ``?``."""
         rows = self._query(
             "SELECT DISTINCT run_id FROM provevi_inputs WHERE uri = ? OR pinned = ? "
             "OR substr(uri, 1, length(?) + 1) = ? || '?' OR substr(pinned, 1, length(?) + 1) = ? || '?' "
             "ORDER BY run_id", (uri, uri, uri, uri, uri, uri))
         return [r[0] for r in rows]
 
-    def runs_of_experiment(self, experiment: str) -> list[str]:
-        """The runs that named an experiment, by its URI or its name, such as
-        acme/risk/dev/credit/q, or by a pinned URI, for the runs of that version."""
+    def runs_of_experiment(
+        self,
+        experiment: str,  # An experiment's URI or name, or a pinned URI for one version
+    ) -> list[str]:  # The run IDs, sorted
+        """List the runs that named an experiment.
+
+        Its URI or its name, such as acme/risk/dev/credit/q, gives the runs of every version; a pinned URI
+        gives the runs of that version."""
         name = experiment.removeprefix("experiment://")
         if "?" in name:
             rows = self._query("SELECT run_id FROM provevi_runs WHERE experiment_pin = ? ORDER BY run_id",
@@ -437,9 +467,12 @@ class SqliteStore(EvidenceStore):
             rows = self._query("SELECT run_id FROM provevi_runs WHERE experiment_id = ? ORDER BY run_id", (name,))
         return [r[0] for r in rows]
 
-    def runs_of_agent(self, agent: str, version: str | None = None) -> list[str]:
-        """The runs of an agent class, such as acme/demo/dev/revenue-agent, or
-        of one version of it, by its spec's SHA-256 or the start of it."""
+    def runs_of_agent(
+        self,
+        agent: str,  # An agent class, such as `acme/demo/dev/revenue-agent`
+        version: str | None = None,  # The SHA-256 of a version's spec, or the start of it; `None` for every version
+    ) -> list[str]:  # The run IDs, sorted
+        """List the runs of an agent class, or of one version of it."""
         if version:
             rows = self._query("SELECT run_id FROM provevi_runs WHERE agent_id = ? AND substr(spec_sha256, 1, ?) = ? "
                                "ORDER BY run_id", (agent, len(version), version))
@@ -447,9 +480,8 @@ class SqliteStore(EvidenceStore):
             rows = self._query("SELECT run_id FROM provevi_runs WHERE agent_id = ? ORDER BY run_id", (agent,))
         return [r[0] for r in rows]
 
-    def experiments(self) -> list[dict]:
-        """The experiments that runs named, each with its number of versions
-        and of runs."""
+    def experiments(self) -> list[dict]:  # `id`, `uri`, `first_run`, `created_at`, `versions` and `runs` of each, by ID
+        """List the experiments that runs named, with their numbers of versions and of runs."""
         rows = self._query(
             "SELECT e.id, e.uri, e.first_run, e.created_at, "
             "(SELECT count(*) FROM provevi_experiment_versions v WHERE v.experiment_id = e.id) AS versions, "
@@ -457,9 +489,11 @@ class SqliteStore(EvidenceStore):
             "FROM provevi_experiments e ORDER BY e.id")
         return [dict(r) for r in rows]
 
-    def experiment(self, experiment: str) -> dict | None:
-        """An experiment, by its URI or its name, with each version that runs
-        reported, oldest first, and the runs of each."""
+    def experiment(
+        self,
+        experiment: str,  # An experiment's URI or name; a selector is ignored
+    ) -> dict | None:  # `id`, `uri`, `first_run`, `created_at` and `versions`, each with `pin`, `sha256`, `first_run`, `created_at` and `runs`; `None` when no run named it
+        """Describe an experiment, with each version that runs reported, oldest first, and its runs."""
         name = experiment.split("?", 1)[0].removeprefix("experiment://")
         rows = self._query("SELECT id, uri, first_run, created_at FROM provevi_experiments WHERE id = ?", (name,))
         if not rows:
@@ -472,7 +506,7 @@ class SqliteStore(EvidenceStore):
             versions.append({**dict(v), "runs": runs})
         return {**dict(rows[0]), "versions": versions}
 
-    def agents(self) -> list[dict]:
+    def agents(self) -> list[dict]:  # `id`, `first_run`, `created_at`, `versions` and `runs` of each, by ID
         """The agent classes, each with its number of versions and of runs."""
         rows = self._query(
             "SELECT a.id, a.first_run, a.created_at, "
@@ -481,9 +515,11 @@ class SqliteStore(EvidenceStore):
             "FROM provevi_agents a ORDER BY a.id")
         return [dict(r) for r in rows]
 
-    def agent(self, agent: str) -> dict | None:
-        """An agent class, with each version, oldest first: its spec's
-        SHA-256, its settings without secrets, and its runs."""
+    def agent(
+        self,
+        agent: str,  # An agent class: org/domain/env/name
+    ) -> dict | None:  # Its row and `versions`, each with `spec_sha256`, `settings` without secrets, `first_run`, `created_at` and `runs`; `None` when there is none
+        """Describe an agent class, with each version, oldest first, and its runs."""
         rows = self._query("SELECT id, org, domain, env, name, first_run, created_at FROM provevi_agents "
                            "WHERE id = ?", (agent,))
         if not rows:
@@ -497,7 +533,10 @@ class SqliteStore(EvidenceStore):
                              "first_run": v["first_run"], "created_at": v["created_at"], "runs": runs})
         return {**dict(rows[0]), "versions": versions}
 
-    def run(self, run_id: str) -> dict | None:
+    def run(
+        self,
+        run_id: str,  # The run's ID
+    ) -> dict | None:  # The columns of the run's row and `params`; `None` when there is no such run
         """The run's row, and its settings as ``params``."""
         rows = self._query("SELECT run_id, agent_id, spec_sha256, experiment_id, experiment_pin, experiment_sha256, "
                            "org, domain, env, actor, status, started_at, ended_at, "
@@ -508,7 +547,10 @@ class SqliteStore(EvidenceStore):
         params = self._query("SELECT key, value FROM provevi_run_params WHERE run_id = ? ORDER BY key", (run_id,))
         return {**dict(rows[0]), "params": {k: json.loads(v) for k, v in params}}
 
-    def access(self, run_id: str) -> list[dict]:
+    def access(
+        self,
+        run_id: str,  # The run's ID
+    ) -> list[dict]:  # `seq`, `time`, `decision` (`granted` or `denied`), `uri`, `mode` and `reason` of each
         """The grants and refusals of a run, in the order they happened."""
         rows = self._query(
             "SELECT seq, time, 'granted' AS decision, uri, mode, reason FROM provevi_grants WHERE run_id = ? "
@@ -516,20 +558,29 @@ class SqliteStore(EvidenceStore):
             "ORDER BY seq", (run_id, run_id))
         return [dict(r) for r in rows]
 
-    def inputs(self, run_id: str) -> list[dict]:
+    def inputs(
+        self,
+        run_id: str,  # The run's ID
+    ) -> list[dict]:  # `seq`, `uri`, `pinned`, `sha256` and `agent_path` of each
+        """The inputs a run staged, in order."""
         rows = self._query("SELECT seq, uri, pinned, sha256, agent_path FROM provevi_inputs WHERE run_id = ? "
                            "ORDER BY seq", (run_id,))
         return [dict(r) for r in rows]
 
 
 class SqliteRunWriter(RunWriter):
-    """Writes one run to the file and to the run's evidence folder. An event
-    counts as written when both hold it: the row is committed only after the
-    line is in events.jsonl, and if the commit fails, the line is cut from
-    the file again. If the process dies between the two, the file holds one
-    more line than the rows, and the check against the store reports it."""
+    """Writes one run to the file and to the run's evidence folder.
 
-    def __init__(self, store: SqliteStore, run_id: str, folder: Path):
+    An event counts as written when both hold it: the row is committed only after the line is in events.jsonl,
+    and if the commit fails, the line is cut from the file again. If the process dies between the two, the
+    file holds one more line than the rows, and the check against the store reports it."""
+
+    def __init__(
+        self,
+        store: SqliteStore,  # The store to write to
+        run_id: str,  # The new run's ID; a run already in the file raises EvidenceError
+        folder: Path,  # The run's evidence folder
+    ):
         self.store = store
         self.run_id = run_id
         self.folder = Path(folder)
@@ -599,7 +650,13 @@ class SqliteRunWriter(RunWriter):
                 raise
             return result
 
-    def append(self, line: str) -> None:
+    def append(
+        self,
+        line: str,  # One event line, with no newline
+    ) -> None:  # Commits the rows after the line is in the file; ValueError or TypeError for a line that is no event
+        """Write an event's rows and its line in events.jsonl, both or neither.
+
+        Raises EvidenceError once the run is sealed."""
         event = EvidenceEvent.from_line(line)
         data = event.data
         statements = [(
@@ -636,10 +693,15 @@ class SqliteRunWriter(RunWriter):
                 for k, v in want["params"].items()]
         return out
 
-    def close(self) -> None:
+    def close(self) -> None:  # Flushes events.jsonl to disk and closes it
+        """Close events.jsonl."""
         self.files.close()
 
-    def put_payload(self, data: bytes | str) -> str:
+    def put_payload(
+        self,
+        data: bytes | str,  # The payload; a text is stored as UTF-8
+    ) -> str:  # The payload's SHA-256
+        """Store a payload once in the run folder's payloads/, and record its hash, size and place."""
         raw = data.encode() if isinstance(data, str) else data
         digest = sha256_bytes(raw)
         dest = self.folder / "payloads" / digest
@@ -653,15 +715,24 @@ class SqliteRunWriter(RunWriter):
                       (self.run_id, digest, len(raw), str(dest.resolve())))], then=write_file)
         return digest
 
-    def get_payload(self, digest: str) -> bytes:
+    def get_payload(
+        self,
+        digest: str,  # The payload's SHA-256
+    ) -> bytes:  # The payload, from the run folder
+        """Read a payload from the run folder's payloads/."""
         return self.files.get_payload(digest)
 
-    def payload_names(self) -> list[str]:
+    def payload_names(self) -> list[str]:  # The SHA-256 of each payload the file records, sorted
+        """The payloads of the run, as the file records them."""
         rows = self.store._query("SELECT sha256 FROM provevi_payloads WHERE run_id = ? ORDER BY sha256",
                                  (self.run_id,))
         return [r[0] for r in rows]
 
-    def seal(self, manifest: dict) -> None:
+    def seal(
+        self,
+        manifest: dict,  # The manifest the recorder made
+    ) -> None:  # Writes both, or neither, and closes the connection
+        """Write manifest.json and record the manifest in the run's row. No write comes after."""
         path = self.folder / "manifest.json"
 
         def write_files(undo):
@@ -680,13 +751,19 @@ class SqliteRunWriter(RunWriter):
         if conn is not None:
             conn.close()
 
-    def manifest(self) -> dict:
+    def manifest(self) -> dict:  # The manifest the file records
+        """The manifest recorded by seal. Raises EvidenceError before the seal."""
         rows = self.store._query("SELECT manifest FROM provevi_runs WHERE run_id = ?", (self.run_id,))
         if not rows or rows[0][0] is None:
             raise EvidenceError(f"the evidence of {self.run_id} is not sealed")
         return json.loads(rows[0][0])
 
-    def record_bundle(self, uri: str | None, pinned: str | None) -> None:
+    def record_bundle(
+        self,
+        uri: str | None,  # The URI the bundle was committed at; `None` when it was not committed
+        pinned: str | None,  # The URI pinned to the commit; `None` when it was not committed
+    ) -> None:  # Sets the run's `bundle_uri` and `pinned_bundle`
+        """Record where the run's bundle was committed, in the run's row."""
         conn = connect(self.store.path)
         try:
             conn.execute("UPDATE provevi_runs SET bundle_uri = ?, pinned_bundle = ? WHERE run_id = ?",
@@ -696,11 +773,17 @@ class SqliteRunWriter(RunWriter):
 
 
 class SqliteRecord(RunRecord):
-    """A run as the file holds it, for the checks. Besides the chain, it
-    checks every column that the events imply, so a changed column fails as
-    a changed line does. A file it cannot read raises EvidenceError."""
+    """A run as the file holds it, for the checks.
 
-    def __init__(self, store: SqliteStore, run_id: str, folder: Path | None = None):
+    Besides the chain, it checks every column that the events imply, so a changed column fails as a changed
+    line does. A file it cannot read raises EvidenceError."""
+
+    def __init__(
+        self,
+        store: SqliteStore,  # The store that holds the run
+        run_id: str,  # The run's ID
+        folder: Path | None = None,  # The evidence folder to read the payloads from; `None` for the place the file records
+    ):
         self.store = store
         self.run_id = run_id
         self.folder = Path(folder) if folder is not None else None
@@ -712,14 +795,16 @@ class SqliteRecord(RunRecord):
         except ProveviError as e:
             raise EvidenceError(f"cannot read {self.where}: {e.__cause__ or e}") from e
 
-    def lines(self) -> list[str]:
+    def lines(self) -> list[str]:  # The line of each event row, by seq
+        """The event lines, in order. Raises EvidenceError if they cannot be read."""
         rows = self._q("SELECT seq, line FROM provevi_events WHERE run_id = ? ORDER BY seq", (self.run_id,))
         for seq, line in rows:
             if not isinstance(line, str):
                 raise EvidenceError(f"row {seq} of {self.where}: the line is not text")
         return [r[1] for r in rows]
 
-    def manifest_bytes(self) -> bytes | None:
+    def manifest_bytes(self) -> bytes | None:  # The manifest the run's row holds, in UTF-8; `None` before the seal
+        """The manifest as the file holds it."""
         rows = self._q("SELECT manifest FROM provevi_runs WHERE run_id = ?", (self.run_id,))
         if not rows or rows[0][0] is None:
             return None
@@ -733,7 +818,11 @@ class SqliteRecord(RunRecord):
         rows = self._q("SELECT location FROM provevi_payloads WHERE run_id = ? AND sha256 = ?", (self.run_id, name))
         return Path(rows[0][0]) if rows and isinstance(rows[0][0], str) else None
 
-    def payload_digest(self, name: str) -> str | None:
+    def payload_digest(
+        self,
+        name: str,  # The payload's SHA-256, as an event names it
+    ) -> str | None:  # The SHA-256 of its file's bytes; `None` when the file does not record it or its file is missing
+        """Hash the payload file called name, if the file records the payload. May raise OSError."""
         if not self._q("SELECT 1 FROM provevi_payloads WHERE run_id = ? AND sha256 = ?", (self.run_id, name)):
             return None
         p = self._payload_path(name)
@@ -741,7 +830,7 @@ class SqliteRecord(RunRecord):
             return None
         return sha256_bytes(p.read_bytes())
 
-    def assessments(self) -> list[dict]:
+    def assessments(self) -> list[dict]:  # `id`, `target_kind`, `target_id`, `name`, `value`, `rationale`, `source`, `created_by` and `created_at` of each
         """The assessments of this run, and of its spans, in the order they were made."""
         rows = self._q(
             "SELECT a.id, a.target_kind, a.target_id, a.name, a.value, a.rationale, a.source, a.created_by, "
@@ -750,19 +839,23 @@ class SqliteRecord(RunRecord):
             "WHERE run_id = ? AND span_id IS NOT NULL)) ORDER BY a.created_at, a.id", (self.run_id, self.run_id))
         return [dict(r) for r in rows]
 
-    def payload_bytes(self, name: str) -> bytes | None:
+    def payload_bytes(
+        self,
+        name: str,  # The payload's SHA-256
+    ) -> bytes | None:  # Its file's bytes; `None` when the file does not record it or it is not a regular file
+        """Read the payload called name, if the file records it."""
         if not self._q("SELECT 1 FROM provevi_payloads WHERE run_id = ? AND sha256 = ?", (self.run_id, name)):
             return None
         p = self._payload_path(name)
         return p.read_bytes() if p is not None and p.is_file() else None
 
-    def payload_files(self) -> tuple[set[str], list[str]]:
+    def payload_files(self) -> tuple[set[str], list[str]]:  # The digests, and no problems
+        """The payloads the file records for the run."""
         rows = self._q("SELECT sha256 FROM provevi_payloads WHERE run_id = ?", (self.run_id,))
         return {str(r[0]) for r in rows}, []
 
-    def problems(self) -> list[str]:
-        """Rows whose columns do not match their line, and stored values that
-        differ from what the events imply."""
+    def problems(self) -> list[str]:  # One line each; empty when every row matches
+        """Find the rows that do not match their line, and the stored values that differ from what the events imply."""
         try:
             conn = connect(self.store.path, readonly=not self.store.create)
             try:

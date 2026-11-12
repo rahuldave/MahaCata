@@ -13,15 +13,22 @@ A program that shows a run as it goes, such as a web server, starts it with
 
 Every error that provrun raises on purpose is a ``ProvrunError``.
 """
-from .context import default_runs_root, find_run
+from .access import AccessDenied, Broker, Grant, StubBroker
+from .backends import Backend
+from .context import RunContext, current_run, default_runs_root, find_run
 from .errors import ProvrunError, RunFileError, RunNotFound, RunSettingError
-from .evidence import read_events
+from .evidence import EvidenceError, read_events
 from .live import LiveRun, start_run
+from .outputs import Artifact, Outputter
+from .resolve import ProvcatResolver, Resolver, Snapshot
 from .runner import RunOutcome, run_agent, run_file, run_file_sync
 from .spec import AgentSpec, InputSpec, RunFile, RunSettings
+from .stagers import InProcessStager, InputCheckError, Stager
 
 __all__ = [
-    "AgentSpec", "InputSpec", "LiveRun", "ProvrunError", "RunFile", "RunFileError", "RunNotFound", "RunOutcome",
-    "RunSettingError", "RunSettings", "default_runs_root", "find_run", "read_events", "run_agent", "run_file",
+    "AccessDenied", "AgentSpec", "Artifact", "Backend", "Broker", "EvidenceError", "Grant", "InProcessStager", "InputCheckError",
+    "InputSpec", "LiveRun", "Outputter", "ProvcatResolver", "ProvrunError", "Resolver", "RunContext", "RunFile",
+    "RunFileError", "RunNotFound", "RunOutcome", "RunSettingError", "RunSettings", "Snapshot", "Stager",
+    "StubBroker", "current_run", "default_runs_root", "find_run", "read_events", "run_agent", "run_file",
     "run_file_sync", "start_run",
 ]

@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 
 from .errors import UriError
 
+__all__ = []
+
 _SECONDS = re.compile(r"\d{9,11}")
 
 

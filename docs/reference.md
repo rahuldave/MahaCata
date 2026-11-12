@@ -52,6 +52,8 @@ Every command but `config` takes a URI, logical or physical. These options go be
 | `provc config show` | The configuration and its source. |
 | `provc config push --to etcd://...` | Copies the configuration into etcd. |
 
+`-m MSG` is short for `--message MSG`. `commit` needs it, and `merge` uses an empty message without it. `--meta KEY=VALUE` can be given more than once.
+
 ## Catalog URIs
 
 A URI has the form `scheme://first/part/part?at=kind:value`. The part after `?at=` is the selector, which picks a version.

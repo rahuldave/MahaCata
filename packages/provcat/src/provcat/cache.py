@@ -28,16 +28,15 @@ rewrite in place that keeps the size, the time and the inode, as
 ``flock``, such as a local disk. On a share without it, every write fails.
 
 Two names that differ only in case or in Unicode form land in one file on macOS
-and Windows. ``find_twins`` finds such names, and the stores refuse a folder
-that holds them.
+and Windows. The stores refuse a folder that holds such names.
 
 Every write goes to a temporary name under .provcat/tmp and then is renamed, so
 a reader never sees half a file.
 
 A fetch can rewrite a cached file in place when a branch moves, so a cached
-path is not safe to mount while something reads it. ``snapshot`` copies a file
-or a folder into a folder named by the SHA-256 of its content, and makes the
-copy read-only. Nothing in provcat writes to a snapshot again, so a mount of
+path is not safe to mount while something reads it. A snapshot, made by
+``Catalog.snapshot``, copies a file or a folder into a folder named by the
+SHA-256 of its content, and makes the copy read-only. Nothing in provcat writes to a snapshot again, so a mount of
 one never changes.
 """
 from __future__ import annotations
@@ -53,11 +52,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 
 from .errors import StoreError
 from .uri import _check_segment
+
+__all__ = ["LocalCache", "tree_digest"]
 
 META = ".provcat"
 
@@ -112,10 +113,23 @@ def _bytes_of(meta: dict | None) -> tuple | None:
 
 
 class LocalCache:
-    def __init__(self, root: str | Path | None = None):
+    """The local cache of fetched files and folders, their versions, the pinned refs and the snapshots.
+
+    A store driver calls it to find and to write what it fetches. Each key is a
+    list of path segments under the store's name."""
+
+    def __init__(
+        self,
+        root: str | Path | None = None,  # The cache folder; None takes PROVCAT_CACHE, then XDG_CACHE_HOME/provcat, then ~/.cache/provcat
+    ):
         self.root = Path(root) if root else default_root()
 
-    def path(self, store: str, key: Iterable[str]) -> Path:
+    def path(
+        self,
+        store: str,  # The store's name
+        key: Iterable[str],  # The path segments under the store
+    ) -> Path:  # Where the file or folder of the key lives in the cache; UriError for a bad segment
+        """Return the cache path of a key, whether or not anything is there."""
         return self.root.joinpath(_check_segment(store), *[_check_segment(k) for k in key])
 
     def _record(self, kind: str, store: str, key: Iterable[str]) -> Path:
@@ -186,11 +200,13 @@ class LocalCache:
 
     # files
 
-    def get(self, store: str, key: list[str], version: str | None) -> Path | None:
-        """Return the cached file if it is there, unchanged, and has this version.
-
-        A version of None accepts any cached version (offline mode).
-        """
+    def get(
+        self,
+        store: str,  # The store's name
+        key: list[str],  # The path segments under the store
+        version: str | None,  # The version wanted; None accepts any cached version, as offline mode does
+    ) -> Path | None:  # The cached file; None when it is missing, changed, or of another version
+        """Return the cached file if it is there, unchanged, and has this version."""
         p = self.path(store, key)
         record = self._record("meta", store, key)
         meta = self._read_json(record)
@@ -205,11 +221,17 @@ class LocalCache:
             return None
         return p
 
-    def put(self, store: str, key: list[str], fill: Callable[[Path], str | None], version: str | None = None) -> Path:
-        """Write a file with fill(tmp_path), then record its version.
+    def put(
+        self,
+        store: str,  # The store's name
+        key: list[str],  # The path segments under the store
+        fill: Callable[[Path], str | None],  # Writes the file at the temporary path it is given, and may return its version
+        version: str | None = None,  # The version to record, when fill returns none
+    ) -> Path:  # The cached file
+        """Write a file with fill, then record its version.
 
-        fill may return the version of what it wrote. That value wins over the
-        version argument, so the record always describes the bytes on disk.
+        The version that fill returns wins over the version argument, so the
+        record always describes the bytes on disk. With neither, StoreError.
         """
         p = self.path(store, key)
         got: dict = {}
@@ -239,7 +261,13 @@ class LocalCache:
 
     # whole folders
 
-    def folder_done(self, store: str, key: list[str], version: str | None) -> Path | None:
+    def folder_done(
+        self,
+        store: str,  # The store's name
+        key: list[str],  # The path segments of the folder
+        version: str | None,  # The version wanted; None accepts any
+    ) -> Path | None:  # The cached folder when it was fetched whole at that version; else None
+        """Find a folder that was fetched whole."""
         p = self.path(store, key)
         done = self._read_json(self._record("done", store, key))
         if not p.is_dir() or done is None:
@@ -248,7 +276,13 @@ class LocalCache:
             return None
         return p
 
-    def covered(self, store: str, key: list[str], version: str, min_len: int) -> Path | None:
+    def covered(
+        self,
+        store: str,  # The store's name
+        key: list[str],  # The path segments of the file or folder
+        version: str,  # The version the whole folder must have been fetched at
+        min_len: int,  # The shortest key prefix to look at, such as 1 to stop at the bucket
+    ) -> Path | None:  # The cached file or folder; None when no such folder covers it
         """Return the cached file or folder if a folder at or above key was fetched whole."""
         p = self.path(store, key)
         if not p.exists():
@@ -258,13 +292,29 @@ class LocalCache:
                 return p
         return None
 
-    def mark_folder(self, store: str, key: list[str], version: str) -> None:
+    def mark_folder(
+        self,
+        store: str,  # The store's name
+        key: list[str],  # The path segments of the folder
+        version: str,  # The version it was fetched at
+    ) -> None:  # Writes the record under .provcat/done
+        """Record that a folder was fetched whole at a version."""
         self._write_json(self._record("done", store, key), {"store": store, "key": key, "version": version})
 
-    def unmark_folder(self, store: str, key: list[str]) -> None:
+    def unmark_folder(
+        self,
+        store: str,  # The store's name
+        key: list[str],  # The path segments of the folder
+    ) -> None:  # Deletes the record, if there is one
+        """Forget that a folder was fetched whole."""
         self._record("done", store, key).unlink(missing_ok=True)
 
-    def prune(self, store: str, key: list[str], keep: set[tuple[str, ...]]) -> None:
+    def prune(
+        self,
+        store: str,  # The store's name
+        key: list[str],  # The path segments of the folder
+        keep: set[tuple[str, ...]],  # The paths under the folder, as tuples of segments, to keep
+    ) -> None:  # Deletes those files, their records, and the folders left empty
         """Delete cached files under key whose relative keys are not in keep."""
         base = self.path(store, key)
         if not base.is_dir():
@@ -278,7 +328,11 @@ class LocalCache:
                 f.rmdir()
 
     @contextlib.contextmanager
-    def lock(self, store: str, key: list[str]):
+    def lock(
+        self,
+        store: str,  # The store's name
+        key: list[str],  # The path segments to lock
+    ) -> Iterator[None]:  # A context manager that holds the lock while its block runs
         """Hold an exclusive lock for one key, across threads and processes."""
         lock = self.root / META / "locks" / f"{_digest(store, key)}.lock"
         lock.parent.mkdir(parents=True, exist_ok=True)
@@ -289,7 +343,13 @@ class LocalCache:
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
 
-    def install_folder(self, store: str, key: list[str], version: str, fill: Callable[[Path], None]) -> Path:
+    def install_folder(
+        self,
+        store: str,  # The store's name
+        key: list[str],  # The path segments of the folder
+        version: str,  # The version of the folder, recorded once it is in place
+        fill: Callable[[Path], None],  # Writes the folder's contents into the temporary folder it is given
+    ) -> Path:  # The cached folder
         """Build a folder with fill(tmp_dir), then move it into place whole.
 
         Installs of one key run one at a time. If another thread or process
@@ -334,15 +394,28 @@ class LocalCache:
 
     # refs
 
-    def get_ref(self, store: str, name: list[str]) -> str | None:
+    def get_ref(
+        self,
+        store: str,  # The store's name
+        name: list[str],  # The moving name, as segments, such as a repository, a branch and a time
+    ) -> str | None:  # The version it was pinned to; None when it was never pinned
+        """Read the version that a moving name was last pinned to, as offline mode does."""
         data = self._read_json(self._record("refs", store, name))
         return data.get("value") if data else None
 
-    def set_ref(self, store: str, name: list[str], value: str) -> None:
+    def set_ref(
+        self,
+        store: str,  # The store's name
+        name: list[str],  # The moving name, as segments
+        value: str,  # The fixed version it points at now
+    ) -> None:  # Writes the record under .provcat/refs
+        """Record the version that a moving name points at."""
         self._write_json(self._record("refs", store, name), {"store": store, "name": name, "value": value})
 
 
-def tree_digest(p: Path) -> str:
+def tree_digest(
+    p: Path,  # A file or a folder
+) -> str:  # The hex SHA-256; StoreError for a link or a special file
     """The SHA-256 of a file, or of a folder.
 
     A folder's digest covers every entry under it, folders included, so an

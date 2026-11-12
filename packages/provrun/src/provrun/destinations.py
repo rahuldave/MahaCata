@@ -1,5 +1,6 @@
-"""Where a run's spans go: its evidence, and the destinations that the
-operator's policy approves.
+"""Where a run's spans go: its evidence, and the destinations the policy approves.
+
+The policy is the operator's telemetry policy.
 
 A run's spans are provrun's own, one for the run and one for each step, and
 those of a library whose instrumentation the policy approves, such as
@@ -96,20 +97,25 @@ def _warn(message: str) -> None:
 
 @dataclass
 class Route:
-    """One place a run sends spans to: the policy's destination, the variable
-    that named the place, and the processor that sends to it."""
+    """One place a run sends spans to.
 
-    kind: str
-    variable: str
-    url: str  # where the variable points, without what can hold a secret
-    destination: Any = None  # the policy's Destination, or None
-    processor: Any = None  # a BatchSpanProcessor, or None when nothing is sent
-    sent: Any = None  # the exporter behind it, which counts what it sent and lost
-    handed: int = 0  # the spans handed to the processor
+    It holds the policy's destination, the variable that named the place, and
+    the processor that sends to it."""
+
+    kind: str  # "otlp", "logfire" or "mlflow"
+    variable: str  # The variable that named the place, such as OTEL_EXPORTER_OTLP_ENDPOINT
+    url: str  # Where the variable points, without what can hold a secret
+    destination: Any = None  # The policy's Destination, or None
+    processor: Any = None  # A BatchSpanProcessor, or None when nothing is sent
+    sent: Any = None  # The exporter behind it, which counts what it sent and lost
+    handed: int = 0  # The spans handed to the processor
     copying: bool = False  # MLflow's place, which gets a copy of the sealed run
-    note: str = ""
+    note: str = ""  # Why nothing is sent there, or how it is sent, in words
 
-    def record(self) -> dict:
+    def record(
+        self,
+    ) -> dict:  # The kind, variable, URL, destination, level received, whether it is sending, and the note
+        "Give what run_created records of this place."
         d = self.destination
         return {"kind": self.kind, "variable": self.variable, "url": self.url,
                 "destination": d.name if d is not None else None, "receives": d.receives if d is not None else None,
@@ -119,25 +125,30 @@ class Route:
 
 @dataclass(eq=False)
 class Routes:
-    """The places one run sends spans to, read from the variables as the run
-    starts, and the run's spans as they end."""
+    """The places one run sends spans to, and the run's spans as they end.
 
-    telemetry: Any  # the run's Telemetry
-    routes: list[Route] = field(default_factory=list)
-    redirects: list[str] = field(default_factory=list)
-    trace_id: int | None = None
-    refused: set[str] = field(default_factory=set)  # libraries whose spans were refused, each once
-    lock: Any = field(default_factory=threading.Lock)  # spans end in many threads
+    The places are read from the variables as the run starts."""
 
-    mlflow: Route | None = None  # the MLflow place, copied to after the seal
-    environ: Mapping[str, str] = field(default_factory=dict)  # the user's variables, for the copy
+    telemetry: Any  # The run's Telemetry
+    routes: list[Route] = field(default_factory=list)  # Each place the variables name, sending or not
+    redirects: list[str] = field(default_factory=list)  # The proxy variables that are set, by name, which the exporters ignore
+    trace_id: int | None = None  # The run's trace ID, once start has run
+    refused: set[str] = field(default_factory=set)  # Libraries whose spans were refused, each once
+    lock: Any = field(default_factory=threading.Lock)  # Spans end in many threads
+
+    mlflow: Route | None = None  # The MLflow place, copied to after the seal
+    environ: Mapping[str, str] = field(default_factory=dict)  # The user's variables, for the copy
 
     @classmethod
-    def read(cls, telemetry: Any, environ: Mapping[str, str], store: Any = None) -> Routes:
-        """The routes of a run under telemetry's policy, from environ, the
-        variables as the user set them. store is the run's evidence store,
-        None for the file store. A place that matches no destination is a
-        telemetry_blocked event."""
+    def read(
+        cls,
+        telemetry: Any,  # The run's Telemetry, whose policy approves each place
+        environ: Mapping[str, str],  # The variables as the user set them
+        store: Any = None,  # The run's evidence store; None is the file store
+    ) -> Routes:  # The run's routes
+        """Read where a run's spans may go, under its policy.
+
+        A place that matches no destination is a telemetry_blocked event."""
         r = cls(telemetry, redirects=sorted(k for k in REDIRECTS if environ.get(k)))
         r._otlp(environ)
         r._logfire(environ)
@@ -249,9 +260,15 @@ class Routes:
         self.environ = dict(environ)
         self.routes.append(route)
 
-    def copy(self, run_id: str, store: Any, folder: Any) -> dict | None:
-        """Copy the sealed run into the approved MLflow place, if any, and
-        say where it went. The copy runs in a process of its own, with the
+    def copy(
+        self,
+        run_id: str,  # The sealed run's ID
+        store: Any,  # The run's evidence store; None is the file store
+        folder: Any,  # The run's evidence folder
+    ) -> dict | None:  # Where it went and whether it was copied, with the error if not; None with no MLflow place
+        """Copy the sealed run into the approved MLflow place, if any.
+
+        The copy runs in a process of its own, with the
         user's variables, for COPY_SECONDS at most. A copy that fails gives a
         warning and a result with its error; it never raises."""
         if self.mlflow is None:
@@ -271,11 +288,16 @@ class Routes:
                                                       "trace_id", "spans")})
         return done
 
-    def record(self) -> dict:
-        """What run_created records: each place, and the redirecting variables set."""
+    def record(
+        self,
+    ) -> dict:  # "destinations", one record for each place, and "redirects"
+        """Give what run_created records: each place, and the redirecting variables set."""
         return {"destinations": [r.record() for r in self.routes], "redirects": list(self.redirects)}
 
-    def start(self, trace_id: str | None) -> None:
+    def start(
+        self,
+        trace_id: str | None,  # The run's trace ID in hex; None or empty takes nothing
+    ) -> None:  # Nothing
         """Take the spans of the run's trace from now on."""
         if not trace_id:
             return
@@ -283,7 +305,15 @@ class Routes:
         with _lock:
             _runs[self.trace_id] = self
 
-    def on_end(self, span: Any, own: bool) -> None:
+    def on_end(
+        self,
+        span: Any,  # A span of the run's trace that has ended
+        own: bool,  # Whether provrun made it; a library's span goes on only if the policy approves the library
+    ) -> None:  # Nothing
+        """Keep an approved library's span as evidence, and hand the span to each place that may get it.
+
+        A span of a library that the policy does not approve goes nowhere,
+        and the first one is written as telemetry_blocked."""
         policy = self.telemetry.policy
         allowed: set[str] = set()
         if not own:
@@ -334,9 +364,12 @@ class Routes:
         recorder.emit(SPAN, "telemetry", data=data, payload=_jsonable(payload))
         return True
 
-    def close(self) -> None:
-        """Stop taking the run's spans, and send what is left, to all places at
-        once, for FLUSH_MILLIS at most. A place that did not get every span
+    def close(
+        self,
+    ) -> None:  # Nothing
+        """Stop taking the run's spans, and send what is left to all places at once.
+
+        This takes FLUSH_MILLIS at most. A place that did not get every span
         gives a warning; the run's evidence is closed by then."""
         with _lock:
             if self.trace_id is not None and _runs.get(self.trace_id) is self:

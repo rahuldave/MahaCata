@@ -45,6 +45,8 @@ if TYPE_CHECKING:
     from .access import Broker
     from .resolve import Resolver
 
+__all__ = ["Bundle", "RunContext", "current_run", "find_run"]
+
 _CURRENT: contextvars.ContextVar[RunContext | None] = contextvars.ContextVar("provrun_run", default=None)
 
 
@@ -79,7 +81,12 @@ def new_run_id() -> str:
     return f"run-{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{secrets.token_hex(4)}"
 
 
-def find_run(run: str | Path, root: str | Path | None = None, *, ids_only: bool = False) -> Path:
+def find_run(
+    run: str | Path,  # A run ID under the root, or the path of a run folder
+    root: str | Path | None = None,  # The runs root; None is provevi's default runs root
+    *,
+    ids_only: bool = False,  # Take run as a run ID only, never as a path
+) -> Path:  # The run's folder
     """The folder of a run, as provevi.find_run finds it. Raises RunNotFound."""
     try:
         return provevi.find_run(run, root, ids_only=ids_only)
@@ -87,7 +94,11 @@ def find_run(run: str | Path, root: str | Path | None = None, *, ids_only: bool 
         raise RunNotFound(str(e)) from None
 
 
-def current_run() -> RunContext:
+def current_run() -> RunContext:  # The context of the run that is active here; RuntimeError when none is
+    """The run that is going on, for code deep inside a tool or a backend.
+
+    A run is active inside ``RunContext.active``, which an in-process backend
+    enters around the agent."""
     ctx = _CURRENT.get()
     if ctx is None:
         raise RuntimeError("no run is active; open a RunContext first")
@@ -98,52 +109,68 @@ def current_run() -> RunContext:
 class Bundle:
     """Where the bundle of a run went."""
 
-    folder: Path
-    uri: str | None = None  # the run URI, if the bundle was written through provcat
-    pinned: str | None = None  # the commit, if the store has commits
-    note: str = ""
+    folder: Path  # The run folder
+    uri: str | None = None  # The run URI, if the bundle was written through provcat
+    pinned: str | None = None  # The commit, if the store has commits
+    note: str = ""  # A note on the bundle, such as why it stayed in the run folder or was not pinned
 
 
 @dataclass
 class RunContext:
-    run_id: str
-    org: str
-    domain: str
-    env: str
-    actor: str
-    folder: Path
-    recorder: EvidenceRecorder
-    broker: Broker
-    resolver: Resolver
-    catalog: Catalog | None = None
-    bundle_scheme: str | None = None  # the provcat scheme for run URIs, for example "run"
-    status: str = "open"
-    trace: dict = field(default_factory=dict)  # the trace and span IDs of the run's root span
-    telemetry: Any = None  # the run's provrun.telemetry.Telemetry, when run_agent runs it
-    on_text: Any = None  # called with each piece of a streamed reply, as it comes
-    pieces: Any = None  # the pieces of the model request in hand, a provrun.backends.Pieces
-    _tokens: list = field(default_factory=list, repr=False)
+    """One run: its identity, its folder, its evidence recorder and the parts it uses.
 
-    def text(self, piece: str) -> None:
+    Every part of a run takes it. ``RunContext.open`` makes one."""
+
+    run_id: str  # The run's ID, such as run-20260101T000000Z-0a1b2c3d
+    org: str  # The org, the first part of the run URI
+    domain: str  # The domain, the second part
+    env: str  # The environment, the third part, such as dev or prod
+    actor: str  # Who runs it; each event records it
+    folder: Path  # The run folder, <runs root>/<run_id>
+    recorder: EvidenceRecorder  # Writes the run's evidence; every part calls its emit or step
+    broker: Broker  # Decides each input request
+    resolver: Resolver  # Makes each granted input's snapshot
+    catalog: Catalog | None = None  # The catalog that the bundle is written through
+    bundle_scheme: str | None = None  # The provcat scheme for run URIs, for example "run"
+    status: str = "open"  # "open", then "completed" or "failed" once finish has run
+    trace: dict = field(default_factory=dict)  # The trace and span IDs of the run's root span
+    telemetry: Any = None  # The run's provrun.telemetry.Telemetry, when run_agent runs it
+    on_text: Any = None  # Called with each piece of a streamed reply, as it comes
+    pieces: Any = None  # The pieces of the model request in hand, a provrun.backends.Pieces
+
+    def text(
+        self,
+        piece: str,  # One piece of a streamed reply; an empty piece is dropped
+    ) -> None:  # Nothing
         """Hand on a piece of a streamed reply, as it comes, to ``on_text``.
+
         The evidence does not record pieces: it records each whole response."""
         if self.on_text is not None and piece:
             self.on_text(piece)
 
     @classmethod
-    def open(cls, *, org: str, domain: str, env: str, actor: str, broker: Broker, resolver: Resolver,
-             catalog: Catalog | None = None, runs_root: Path | None = None, mode: str | None = None,
-             bundle_scheme: str | None = None, run_id: str | None = None,
-             data: dict | None = None, store: EvidenceStore | None = None,
-             trace: dict | None = None, sinks: list | None = None) -> RunContext:
-        """Make the run ID and the run folder, and write run_created. trace
-        holds the trace and span IDs of the run's root span, which run_created
-        and the event that ends the run record. The
-        evidence mode is lenient in dev and strict in every other environment,
-        unless mode says otherwise. The evidence goes through store, a
-        provevi store, by default the file store. A bad setting raises
-        RunSettingError before the folder is made. sinks get each evidence
-        line too, from run_created on, such as a live feed."""
+    def open(
+        cls,
+        *,
+        org: str,  # The org, one part of a URI
+        domain: str,  # The domain, one part of a URI
+        env: str,  # The environment, one part of a URI; dev makes the evidence mode lenient by default
+        actor: str,  # Who runs it
+        broker: Broker,  # Decides each input request
+        resolver: Resolver,  # Makes each granted input's snapshot
+        catalog: Catalog | None = None,  # The catalog that the bundle is written through
+        runs_root: Path | None = None,  # The folder that holds run folders; None is provevi's default runs root
+        mode: str | None = None,  # The evidence mode, "strict" or "lenient"; None is lenient in dev and strict elsewhere
+        bundle_scheme: str | None = None,  # A logical scheme to write the bundle through; None keeps it in the run folder
+        run_id: str | None = None,  # The run's ID; None makes a new one
+        data: dict | None = None,  # More data for run_created, such as the agent spec
+        store: EvidenceStore | None = None,  # The provevi store for the evidence; None is the file store
+        trace: dict | None = None,  # The trace and span IDs of the run's root span, which run_created and the run's last event record
+        sinks: list | None = None,  # More sinks that get each evidence line from run_created on, such as a live feed
+    ) -> RunContext:  # The open run, with run_created written
+        """Make the run ID and the run folder, and write run_created.
+
+        A bad setting raises RunSettingError before the folder is made."""
         for name, value in (("org", org), ("domain", domain), ("env", env)):
             check_segment(name, value)
         if mode is not None and mode not in MODES:
@@ -166,23 +193,35 @@ class RunContext:
 
     @property
     def run_uri(self) -> str:
+        "The run URI, <bundle_scheme or run>://<org>/<domain>/<env>/<run_id>."
         return f"{self.bundle_scheme or 'run'}://{self.org}/{self.domain}/{self.env}/{self.run_id}"
 
     @property
     def output_dir(self) -> Path:
+        "The run's output folder, <run folder>/output."
         return self.folder / "output"
 
     @contextlib.contextmanager
-    def active(self) -> Iterator[RunContext]:
+    def active(
+        self,
+    ) -> Iterator[RunContext]:  # This context, which current_run gives until the block ends
+        "Make this the run that current_run gives, inside a with block."
         token = _CURRENT.set(self)
         try:
             yield self
         finally:
             _CURRENT.reset(token)
 
-    def finish(self, error: BaseException | None = None) -> Bundle:
-        """Write run_completed or run_failed, close the evidence, and write the
-        bundle. A run can finish once."""
+    def finish(
+        self,
+        error: BaseException | None = None,  # The error that failed the run; None for a run that completed
+    ) -> Bundle:  # Where the bundle went
+        """Write run_completed or run_failed, close the evidence, and write the bundle.
+
+        A run can finish once: a second finish raises RuntimeError.
+        An EvidenceError from writing or closing the evidence is raised once
+        the bundle is written; in strict mode, a bundle that cannot be written
+        raises EvidenceError too."""
         if self.status != "open":
             raise RuntimeError(f"{self.run_id} has already finished")
         self.status = "failed" if error else "completed"

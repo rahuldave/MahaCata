@@ -30,6 +30,8 @@ from ..uri import Uri
 from . import register_driver
 from .objects import ObjectStore
 
+__all__ = []
+
 _DEFAULT_URL = "https://{account}.blob.core.windows.net"
 
 

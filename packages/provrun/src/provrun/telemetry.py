@@ -113,10 +113,14 @@ def _warn(message: str) -> None:
         pass
 
 
-def load_policy(policy: TelemetryPolicy | str | Path | None = None) -> TelemetryPolicy:
-    """The operator's policy: the one given, else the file that
-    ``PROVRUN_TELEMETRY_POLICY`` names, else the policy that approves nothing.
-    Raises RunSettingError if the file is bad."""
+def load_policy(
+    policy: TelemetryPolicy | str | Path | None = None,  # A policy, or the path of its file; None reads PROVRUN_TELEMETRY_POLICY
+) -> TelemetryPolicy:  # The operator's policy
+    """Find the operator's telemetry policy.
+
+    It is the policy given, else the file that ``PROVRUN_TELEMETRY_POLICY``
+    names, else the policy that approves nothing. Raises RunSettingError if
+    the file is bad."""
     if isinstance(policy, TelemetryPolicy):
         return policy
     path = policy if policy is not None else os.environ.get(POLICY_ENV) or None
@@ -151,11 +155,16 @@ def _without_secrets(value: str) -> str:
     return f"{u.scheme}://{host}{port}"
 
 
-def variables(environ: Mapping[str, str]) -> dict[str, str | None]:
-    """The telemetry variables set in environ, but for provrun's settings: a
-    variable that names a place, such as an endpoint or a URI, maps to its
-    value without credentials; every other one maps to None, so that only its
-    name is recorded."""
+def variables(
+    environ: Mapping[str, str],  # The environment variables, such as os.environ
+) -> dict[str, str | None]:  # Each telemetry variable, in name order, with what may be recorded of its value
+    """Say which telemetry variables are set, and where they point, never a credential.
+
+    The variables are those of FAMILIES, less provrun's SETTINGS. A variable
+    that names a place, such as an endpoint or a URI, maps to its value
+    without credentials; a protocol or service name maps to its value when
+    that is a plain name, else to "<not recorded>"; every
+    other one maps to None, so that only its name is recorded."""
     out = {}
     for key in sorted(environ):
         if not key.startswith(FAMILIES) or key in SETTINGS:
@@ -280,9 +289,11 @@ class _Providers:
 _providers: _Providers | None = None
 
 
-def providers() -> _Providers:
-    """provrun's providers, made and set as the global ones on the first call.
-    ``foreign`` names each global provider that someone else set first."""
+def providers() -> _Providers:  # The providers: tracer, meter and logger, and foreign, each global one someone else set first
+    """Give provrun's OpenTelemetry providers, made and set as the global ones on the first call.
+
+    The tracer provider takes no span processor but provrun's router, which
+    the first call adds."""
     global _providers
     with _lock:
         if _providers is None:
@@ -496,13 +507,17 @@ def _found() -> list[str]:
     return found
 
 
-def recheck(telemetry: Telemetry | None = None, *, fail: bool = True) -> list[str]:
-    """Turn off again what a library switched on during a run: MLflow, a
-    LiteLLM callback, a logger level. Then look for what cannot be turned
+def recheck(
+    telemetry: Telemetry | None = None,  # The telemetry of the run that calls, which fail checks
+    *,
+    fail: bool = True,  # Raise RunSettingError if telemetry is strict and has found a problem
+) -> list[str]:  # The problems found; empty outside a run
+    """Turn off again what a library switched on during a run.
+
+    That is MLflow, a LiteLLM callback or a logger level. Then look for what cannot be turned
     off, such as a configured Logfire. A backend calls it around each model
     call. Each problem goes to each open run once, as Telemetry.found says.
-    With fail, a strict telemetry that has a problem raises RunSettingError.
-    Returns the problems. Outside a run it does nothing."""
+    Outside a run it does nothing."""
     with _lock:
         if not _open:
             return []
@@ -595,10 +610,13 @@ def _restore_libraries() -> None:
     _saved_at_start.clear()
 
 
-def pydantic_ai_instrument(policy: TelemetryPolicy):
-    """The value for ``agent.instrument`` of an agent that provrun builds:
-    False, or, when the policy approves PydanticAI's telemetry, settings that
-    send its spans to provrun's providers. The policy may name PydanticAI as
+def pydantic_ai_instrument(
+    policy: TelemetryPolicy,  # The run's policy
+) -> Any:  # False, or PydanticAI's InstrumentationSettings on provrun's providers
+    """Give the value for ``agent.instrument`` of an agent that provrun builds.
+
+    It is False unless the policy approves PydanticAI's telemetry; then it is
+    settings that send its spans to provrun's providers. The policy may name PydanticAI as
     pydantic-ai or as pydantic-ai-slim. The spans hold prompts and replies only
     when every one of its destinations receives bodies. The value set on the agent
     wins over ``Agent.instrument_all``."""
@@ -613,13 +631,16 @@ def pydantic_ai_instrument(policy: TelemetryPolicy):
                                    include_content=all(d.receives == "bodies" for d in destinations))
 
 
-def pydantic_ai_model(model: Any, telemetry: Telemetry | None = None) -> Any:
-    """model without an InstrumentedModel around it, which would send spans
-    by its own settings. Records each one it takes off. Raises ValueError for
+def pydantic_ai_model(
+    model: Any,  # A PydanticAI model, or anything else, which comes back as it is
+    telemetry: Telemetry | None = None,  # The run whose model it is, which gets the events; None sends them to each open run
+) -> Any:  # The model, with each InstrumentedModel around it taken off
+    """Take the InstrumentedModel off a model, which would send spans by its own settings.
+
+    Each one taken off is written as telemetry_blocked. Raises ValueError for
     an InstrumentedModel inside another model, such as a FallbackModel:
     PydanticAI looks only at the outer model, so the inner one's spans would
-    go to its own provider, and provrun does not change the caller's model.
-    The events go to telemetry, the run whose model it is, else to each open run."""
+    go to its own provider, and provrun does not change the caller's model."""
     try:
         from pydantic_ai.models import Model
         from pydantic_ai.models.instrumented import InstrumentedModel
@@ -664,27 +685,33 @@ def _holds(model: Any, kind: type, base: type, seen: set[int] | None = None) -> 
 class Telemetry:
     """The telemetry control of one run: its policy, and what it found."""
 
-    policy: TelemetryPolicy
-    mode: str
-    variables: dict[str, str | None] = field(default_factory=dict)
-    overridden: dict[str, str] = field(default_factory=dict)
-    problems: list[str] = field(default_factory=list)
-    imported_before: list[str] = field(default_factory=list)
-    recorder: Any = None  # the run's EvidenceRecorder, once the run is open
-    pending: list[tuple[str, str | None, str]] = field(default_factory=list)  # blocked before it was open
-    seen: set[str] = field(default_factory=set)  # each problem, reported once
-    failed: list[str] = field(default_factory=list)  # in strict mode, problems found during the run
-    baseline: dict[str, tuple[Any, bool]] | None = None  # each function at the run's start
-    recorded: int | None = None  # how many problems run_created's record holds
-    ended: bool = False  # the end checks have run
-    checked: bool = False  # the start's check is past; a problem now fails or warns as it is found
-    routes: Any = None  # where the run's spans go, a destinations.Routes
+    policy: TelemetryPolicy  # The operator's policy, narrowed by the run file's telemetry section
+    mode: str  # The evidence mode, "strict" or "lenient"; strict fails the run on a problem
+    variables: dict[str, str | None] = field(default_factory=dict)  # The telemetry variables, as variables() records them
+    overridden: dict[str, str] = field(default_factory=dict)  # Each setting that the user had set otherwise, with the user's value
+    problems: list[str] = field(default_factory=list)  # The problems found before the run opened, which run_created records
+    imported_before: list[str] = field(default_factory=list)  # The libraries imported before the run set the environment
+    recorder: Any = None  # The run's EvidenceRecorder, once the run is open
+    pending: list[tuple[str, str | None, str]] = field(default_factory=list)  # Blocked before it was open
+    seen: set[str] = field(default_factory=set)  # Each problem, reported once
+    failed: list[str] = field(default_factory=list)  # In strict mode, problems found during the run
+    baseline: dict[str, tuple[Any, bool]] | None = None  # Each function at the run's start
+    recorded: int | None = None  # How many problems run_created's record holds
+    ended: bool = False  # The end checks have run
+    checked: bool = False  # The start's check is past; a problem now fails or warns as it is found
+    routes: Any = None  # Where the run's spans go, a destinations.Routes
 
     @classmethod
-    def prepare(cls, policy: TelemetryPolicy, section: Any, mode: str) -> Telemetry:
-        """Narrow policy by the run file's telemetry section, and check the
-        installed libraries. Raises RunSettingError if the section widens
-        the policy, or, in strict mode, on any problem."""
+    def prepare(
+        cls,
+        policy: TelemetryPolicy,  # The operator's policy
+        section: Any,  # The run file's telemetry section, or None
+        mode: str,  # The evidence mode, "strict" or "lenient"
+    ) -> Telemetry:  # The run's telemetry, with the problems the installed libraries give
+        """Narrow the policy by the run file's telemetry section, and check the installed libraries.
+
+        Raises RunSettingError if the section widens the policy. A problem
+        found here fails a strict run when ``applied`` starts."""
         try:
             policy = policy.narrow(section)
         except ProveviError as e:
@@ -698,11 +725,17 @@ class Telemetry:
         return t
 
     @contextmanager
-    def applied(self, store: Any = None, *, close: bool = True) -> Iterator[Telemetry]:
+    def applied(
+        self,
+        store: Any = None,  # The run's evidence store; None is the file store
+        *,
+        close: bool = True,  # Close routes at the end; the runner passes False and closes them in a thread
+    ) -> Iterator[Telemetry]:  # This telemetry, inside a with block
         """Set the environment and the providers for the length of the run.
-        store is the run's evidence store, None for the file store. With
-        close False, the caller closes ``routes`` itself, as the runner does
-        in a thread, because sending the last spans can take seconds."""
+
+        A strict run with a problem raises RunSettingError as it starts; a
+        lenient one warns. Sending the last spans as routes close can take
+        seconds."""
         try:
             _enter_environment(self)
             p = providers()
@@ -737,8 +770,10 @@ class Telemetry:
                 _warn(f"provrun: {path}: {detail}")
             self.pending.clear()
 
-    def record(self) -> dict:
-        """What run_created records: the policy, and what this run changed and found."""
+    def record(
+        self,
+    ) -> dict:  # The policy's digest and source, the variables, the overridden settings, the problems, imported_before and the routes
+        """Give what run_created records: the policy, and what this run changed and found."""
         with _lock:
             self.recorded = len(self.problems)
             problems = list(self.problems)
@@ -748,9 +783,13 @@ class Telemetry:
                 "imported_before": list(self.imported_before),
                 **(self.routes.record() if self.routes is not None else {"destinations": [], "redirects": []})}
 
-    def found(self, problem: str) -> None:
-        """A problem found during the run. It is written as a telemetry_problem
-        event; a strict run then fails at its next check, and a lenient one
+    def found(
+        self,
+        problem: str,  # What was found, in words
+    ) -> None:  # Nothing
+        """Take a problem found during the run.
+
+        It is written as a telemetry_problem event; a strict run then fails at its next check, and a lenient one
         warns. Each problem counts once. Before the start's check, it goes
         into run_created's problems, and that check fails or warns."""
         with _lock:
@@ -783,16 +822,21 @@ class Telemetry:
         if note is not None or (warn and self.mode != "strict"):
             _warn(f"provrun: telemetry: {problem}{note or ''}")
 
-    def fail_if_found(self) -> None:
+    def fail_if_found(
+        self,
+    ) -> None:  # Nothing
         """Raise RunSettingError if a strict run found a problem."""
         if self.failed:
             raise RunSettingError("telemetry: " + "; ".join(self.failed))
 
-    def end(self, *, fail: bool = True) -> None:
-        """The checks at the run's end: a last recheck, and the full scan,
-        which finds a function wrapped during the run. Each runs once. With
-        fail, a strict run with a problem raises RunSettingError; a run that
-        has failed already passes fail=False, to keep its own error."""
+    def end(
+        self,
+        *,
+        fail: bool = True,  # Raise RunSettingError if a strict run found a problem; a run that has failed passes False, to keep its own error
+    ) -> None:  # Nothing
+        """Run the checks at the run's end: a last recheck, and the full scan.
+
+        The scan finds a function wrapped during the run. Each check runs once."""
         if not self.ended:
             self.ended = True
             recheck(fail=False)
@@ -802,12 +846,16 @@ class Telemetry:
         if fail:
             self.fail_if_found()
 
-    def attach(self, recorder: Any, trace_id: str | None = None) -> None:
-        """Write the run's telemetry_blocked events to recorder from now on,
-        starting with those found before the run's evidence was open. A
-        problem found after run_created's record was taken is written as a
-        telemetry_problem event. The spans of trace_id, the run's trace, go
-        to the run's destinations from now on."""
+    def attach(
+        self,
+        recorder: Any,  # The run's EvidenceRecorder, now open
+        trace_id: str | None = None,  # The run's trace ID in hex, whose spans go to the run's destinations from now on
+    ) -> None:  # Nothing
+        """Write the run's telemetry events to its evidence from now on.
+
+        The telemetry_blocked events found before the evidence was open come
+        first. A problem found after run_created's record was taken is
+        written as a telemetry_problem event."""
         with _lock:
             self.recorder = recorder
             pending, self.pending = self.pending, []
@@ -819,9 +867,17 @@ class Telemetry:
         if self.routes is not None:
             self.routes.start(trace_id)
 
-    def blocked(self, path: str, *, library: str | None = None, detail: str = "") -> None:
-        """Write a telemetry_blocked event. Before the run's evidence is open,
-        the event waits for ``attach``; after it closes, it is a warning."""
+    def blocked(
+        self,
+        path: str,  # What was blocked, such as pydantic_ai.instrumented_model or destination
+        *,
+        library: str | None = None,  # The distribution that did it, when known
+        detail: str = "",  # What happened, in words
+    ) -> None:  # Nothing
+        """Write a telemetry_blocked event.
+
+        Before the run's evidence is open, the event waits for ``attach``;
+        after it closes, it is a warning."""
         with _lock:
             if self.recorder is None:
                 self.pending.append((path, library, detail))

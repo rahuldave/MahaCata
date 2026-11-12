@@ -19,6 +19,8 @@ from provevi.telemetry import load_yaml
 from .context import check_scheme, check_segment
 from .errors import RunFileError, RunSettingError
 
+__all__ = ["AgentSpec", "InputSpec", "RunFile", "RunSettings", "RunSpec", "StagedInput"]
+
 # A setting with one of these words in its name can carry a credential, for
 # example extra_headers with an API key. The spec goes into the evidence, so
 # such settings are refused; keys come from the environment of the provider.
@@ -27,23 +29,30 @@ _SECRET_SETTING = re.compile(r"key|secret|auth|header|password|credential|extra_
 
 @dataclass
 class InputSpec:
-    uri: str
-    name: str | None = None  # the name under /input; defaults to the last part of the URI
-    mode: str = "mounted_snapshot"
+    """One input of an agent: a catalog URI, staged for the agent under /input."""
+
+    uri: str  # The catalog URI of the input
+    name: str | None = None  # The name under /input; defaults to the last part of the URI
+    mode: str = "mounted_snapshot"  # The access mode the run asks the broker for; run_agent refuses pinned_read with RunSettingError, before the run folder is made
 
 
 @dataclass
 class AgentSpec:
-    name: str
-    backend: str  # "litellm" or "pydantic-ai"
-    model: str
-    prompt: str
-    instructions: str = ""
-    inputs: list[InputSpec] = field(default_factory=list)
-    tools: list[str] = field(default_factory=list)
-    settings: dict[str, Any] = field(default_factory=dict)  # model settings, for example temperature
-    limits: dict[str, Any] = field(default_factory=dict)  # for example request_limit, timeout
-    stream: bool = False  # ask for the reply in pieces; the evidence still records each whole response
+    """What an agent is: its backend, model, prompt, inputs and tools.
+
+    It says nothing of where the agent runs. A setting whose name can carry a
+    credential, such as api_key, raises ValueError."""
+
+    name: str  # The agent's name; the evidence and the access requests record it
+    backend: str  # "litellm" or "pydantic-ai", the name of a backend in the entry point group provrun.backends
+    model: str  # The model, as the backend names it, such as openai:gpt-4o for pydantic-ai
+    prompt: str  # The user prompt
+    instructions: str = ""  # The system instructions
+    inputs: list[InputSpec] = field(default_factory=list)  # The catalog inputs the agent reads
+    tools: list[str] = field(default_factory=list)  # The names of the tools it may call, such as grep_file
+    settings: dict[str, Any] = field(default_factory=dict)  # Model settings, for example temperature
+    limits: dict[str, Any] = field(default_factory=dict)  # For example request_limit, retries, timeout in seconds
+    stream: bool = False  # Ask for the reply in pieces; the evidence still records each whole response
 
     def __post_init__(self):
         refused = sorted(k for k in self.settings if _SECRET_SETTING.search(k))
@@ -52,8 +61,12 @@ class AgentSpec:
                              "the evidence; set the key in the environment of the provider instead")
 
     @classmethod
-    def from_dict(cls, d: dict) -> AgentSpec:
+    def from_dict(
+        cls,
+        d: dict,  # The agent section of a run file; an input is a URI or a mapping of InputSpec's fields
+    ) -> AgentSpec:  # The checked spec
         """Check the types of each key and the input URIs, and make the spec.
+
         Raises ValueError or TypeError."""
         d = dict(d)
         unknown = set(d) - set(cls.__dataclass_fields__)
@@ -74,7 +87,10 @@ class AgentSpec:
         d["inputs"] = [_input(i) for i in d.get("inputs", [])]
         return cls(**d)
 
-    def to_dict(self) -> dict:
+    def to_dict(
+        self,
+    ) -> dict:  # Every field, the inputs as mappings too
+        "The spec as plain values, as run_created records it."
         return asdict(self)
 
 
@@ -104,26 +120,32 @@ def _input(i) -> InputSpec:
 
 @dataclass(frozen=True)
 class StagedInput:
-    name: str
-    uri: str
-    pinned: str
-    digest: str
-    kind: str
-    host_path: Path  # where the backend reads it
-    agent_path: str  # where the agent sees it, for example /input/report.txt
+    """One input as a stager staged it for one run."""
+
+    name: str  # Its name under the input folder
+    uri: str  # The URI as asked for
+    pinned: str  # The physical URI at a fixed version, as the snapshot pinned it
+    digest: str  # The SHA-256 of the snapshot, which verify_inputs checks after the run
+    kind: str  # "file" or "folder"
+    host_path: Path  # Where the backend reads it
+    agent_path: str  # Where the agent sees it, for example /input/report.txt
 
 
 @dataclass
 class RunSpec:
-    run_id: str
-    inputs: list[StagedInput]
-    input_dir: Path
-    output_dir: Path
-    scratch_dir: Path
-    agent_input: str = "/input"
-    agent_output: str = "/output"
-    agent_scratch: str = "/scratch"
-    env: dict[str, str] = field(default_factory=dict)
+    """What a stager makes for one run, and a backend runs.
+
+    It holds the staged inputs, where the agent sees them, and where it writes."""
+
+    run_id: str  # The run's ID
+    inputs: list[StagedInput]  # The staged inputs
+    input_dir: Path  # The folder that holds the staged inputs, read-only
+    output_dir: Path  # The folder the agent writes its results to
+    scratch_dir: Path  # The agent's working folder, not part of the bundle
+    agent_input: str = "/input"  # Where the agent sees input_dir
+    agent_output: str = "/output"  # Where the agent sees output_dir
+    agent_scratch: str = "/scratch"  # Where the agent sees scratch_dir
+    env: dict[str, str] = field(default_factory=dict)  # Environment variables for the agent; no backend reads them yet
 
 
 def _read_run_file(path: Path) -> tuple[dict, AgentSpec, Any, str | None]:
@@ -168,21 +190,25 @@ def load_run_file(path: Path) -> tuple[dict, AgentSpec]:
 
 @dataclass(frozen=True)
 class RunSettings:
-    """The run section of a run file: who runs, where, and what else the stub
-    broker allows."""
+    """The run section of a run file: who runs, where, and what else the stub broker allows."""
 
-    org: str
-    domain: str
-    env: str
-    actor: str
-    allow: tuple[str, ...] = ()
-    bundle_scheme: str | None = None
-    store: str | None = None  # the evidence store, such as sqlite:///evidence.db; the file store if None
+    org: str  # The org, one part of the run URI
+    domain: str  # The domain, one part of the run URI
+    env: str  # The environment, one part of the run URI, such as dev or prod
+    actor: str  # Who runs it
+    allow: tuple[str, ...] = ()  # More URIs the stub broker allows, besides the agent's inputs
+    bundle_scheme: str | None = None  # A logical scheme to write the bundle through; None keeps it in the run folder
+    store: str | None = None  # The evidence store, such as sqlite:///evidence.db; the file store if None
 
     KEYS = ("org", "domain", "env", "actor", "allow", "bundle_scheme", "store")
 
     @classmethod
-    def from_dict(cls, d: dict, where: str = "the run section") -> RunSettings:
+    def from_dict(
+        cls,
+        d: dict,  # The run section of a run file
+        where: str = "the run section",  # What to call it in an error
+    ) -> RunSettings:  # The checked settings
+        "Check the run section and make the settings. Raises RunFileError."
         unknown = set(d) - set(cls.KEYS)
         if unknown:
             raise RunFileError(f"{where}: unknown keys {sorted(unknown)}")
@@ -214,15 +240,19 @@ class RunSettings:
 class RunFile:
     """A checked run file: its run settings and its agent spec."""
 
-    settings: RunSettings
-    agent: AgentSpec
-    telemetry: dict | None = None  # the telemetry section, which narrows the operator's policy
-    experiment: str | None = None  # the experiment the run belongs to, experiment://org/team/env/project/name
+    settings: RunSettings  # The run section
+    agent: AgentSpec  # The agent section
+    telemetry: dict | None = None  # The telemetry section, which narrows the operator's policy
+    experiment: str | None = None  # The experiment the run belongs to, experiment://org/team/env/project/name
 
     @classmethod
-    def load(cls, path: str | Path) -> RunFile:
-        """Read and check a run file. Raises RunFileError. The telemetry
-        section is checked against the policy, and the experiment is pinned,
+    def load(
+        cls,
+        path: str | Path,  # The run file, in YAML
+    ) -> RunFile:  # The checked run file
+        """Read and check a run file.
+
+        Raises RunFileError. The telemetry section is checked against the policy, and the experiment is pinned,
         when the run starts."""
         run, agent, telemetry, experiment = _read_run_file(Path(path))
         return cls(RunSettings.from_dict(run, f"{path}: the run section"), agent, telemetry, experiment)

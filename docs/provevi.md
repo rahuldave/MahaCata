@@ -471,7 +471,7 @@ A run that provrun cancelled ends with `run_failed`, whose error is `CancelledEr
 | `prove runs --experiment URI` | Lists the runs that named an experiment, or one pinned version of it. |
 | `prove runs --agent NAME` | Lists the runs of an agent class. |
 | `prove experiments` | Lists the experiments that runs named, with their numbers of versions and runs. |
-| `prove experiment show URI` | Prints each version of an experiment that runs reported, and its runs. With `--config`, it also prints the newest version in the catalog. |
+| `prove experiment show URI` | Prints each version of an experiment that runs reported, and its runs. With `--config`, and `--tenant` for a tenant's part of it, it also prints the newest version in the catalog. |
 | `prove agents` | Lists the agent classes, with their numbers of versions and runs. |
 | `prove agent show NAME` | Prints each version of an agent class, with its settings and its runs. |
 | `prove access RUN` | Prints the grants and refusals of a run. |

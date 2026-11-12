@@ -1,6 +1,8 @@
 """Errors raised by provevi. Every error that provevi raises on purpose is a
 ProveviError, so a program that calls provevi can catch them in one place."""
 
+__all__ = ["ProveviError", "EvidenceError", "RunNotFound", "CannotReadBack"]
+
 
 class ProveviError(Exception):
     """Base class for every provevi error."""
@@ -15,5 +17,6 @@ class RunNotFound(ProveviError, LookupError):
 
 
 class CannotReadBack(ProveviError):
-    """The store keeps no record of its own to read a run back from, so the
-    checks read the files in the run folder only."""
+    """The store keeps no record of its own to read a run back from.
+
+    The checks then read the files in the run folder only."""

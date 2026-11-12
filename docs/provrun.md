@@ -62,6 +62,42 @@ uv run provr run packages/provrun/examples/claude-agent.yaml
 
 To call another model, change `model` in the run file, and set the key of its provider, for example `OPENAI_API_KEY`. The evidence holds the prompts and the responses, but not the key. An agent spec refuses a setting that can carry a key, such as `api_key` or `extra_headers`, because the spec goes into the evidence.
 
+## The command `provr`
+
+| Command | What it does |
+|---|---|
+| `provr run RUNFILE` | Runs the agent in a run file, and prints the summary as JSON, with the run ID, the status and the run folder. |
+| `provr show RUN` | Prints the events of a run, one line for each, as `prove show` does. |
+| `provr verify RUN` | Checks the evidence, the outputs, the committed bundle and the experiment of a run. It calls the same code as `prove verify`. |
+
+These options go before the command name:
+
+| Option | Meaning |
+|---|---|
+| `--runs FOLDER` | The runs root. The default is `PROVRUN_RUNS`, or else `$XDG_DATA_HOME/provrun/runs`, or else `~/.local/share/provrun/runs`. |
+| `--store URI` | The evidence store, `file` or `sqlite:///path`. For `run`, it takes the place of the run file's `store`. `show` and `verify` read the run from it. |
+
+`provr run` also takes these options, after the run file:
+
+| Option | Meaning |
+|---|---|
+| `--config SOURCE` | The provcat configuration, a YAML file or `etcd://host:port/prefix`. The default is provcat's, which [the reference](reference.md#configuration) gives. |
+| `--tenant NAME` | The provcat tenant. |
+| `--mode strict` or `--mode lenient` | The evidence mode. The default is `lenient` in `dev` and `strict` in every other environment. [What the evidence holds](#what-the-evidence-holds) says what each mode does. |
+| `--bundle-scheme SCHEME` | The provcat scheme that holds run bundles, such as `run`. It takes the place of the run file's `bundle_scheme`. [The bundle](#the-bundle) says more. |
+| `--policy FILE` | The operator's telemetry policy file. The default is the file that `PROVRUN_TELEMETRY_POLICY` names, or else a policy that approves nothing. |
+| `--parent-run RUN_ID` | The run that started this one. It must be in the same evidence store, and `run_created` records it. |
+
+`provr verify` takes `--config`, `--tenant`, `--bundle URI` and `--require-bundle` after the run, as `prove verify` does. [provevi's page](provevi.md#the-command-prove) says what each one does.
+
+`RUN` is a run ID under the runs root, or the path of a run folder.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | The run completed, or the events were printed, or the run verifies. |
+| 1 | The run failed, or it does not verify. Also a run file, a run ID, a store or a configuration that provrun, provevi or provcat refuses. |
+| 2 | A run could not seal its evidence. Also a strict run that lost an event or could not write its bundle, and a `show` that cannot read the events. Also a command line that argparse rejects. |
+
 ## Use provrun from a program
 
 An orchestrator, or any other program, can do all that `provr run` and `provr show` do by calling provrun. `provr` only reads its arguments, calls these functions and prints. The library prints nothing, and it takes its catalog, runs root and settings as arguments.
@@ -116,7 +152,15 @@ A run checks its settings before it makes the run folder. Each of these raises `
 - an input whose mode is `pinned_read`;
 - a `parent_run` that is not a run ID, or that names no run in the run's evidence store.
 
-An error after that fails the run. The outcome holds the error, and the evidence records it. An experiment that the broker refuses fails the run in this way too.
+An error after that fails the run. The outcome holds the error, and the evidence records it. An experiment that the broker refuses fails the run in this way too. Three errors are raised instead, as the run ends:
+
+- `EvidenceError`, when the evidence cannot be sealed, in either mode. In the strict mode, also when an event or the bundle cannot be written.
+- `CancelledError`, for a cancel.
+- Any other exception that is not an `Exception`.
+
+An error while the run opens, after its folder is made, is raised too. An example is a store that cannot open the run. The folder is left behind, and there is no outcome.
+
+A cancel before the run opens leaves no run folder and no `run_failed`. The run opens after it sets up the telemetry, has the broker decide on the experiment, pins the experiment and checks the parent run. A later cancel, or another exception that is not an `Exception`, is raised once the run is sealed with `run_failed`. An exception class of a program's own is recorded as itself. A `KeyboardInterrupt` or `SystemExit` raised in the agent reaches the run as a cancel. So its `run_failed` records `CancelledError`, and the caller gets the `KeyboardInterrupt` or `SystemExit`.
 
 Every error that provrun raises on purpose is a `ProvrunError`, so a program can catch them in one place. An error from the system, such as a runs root that cannot be written, comes through as it is. The checks behind `provr verify` are in provevi's library, and [provevi's page](provevi.md) shows how a program calls them.
 

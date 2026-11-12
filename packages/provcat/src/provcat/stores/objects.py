@@ -48,7 +48,7 @@ safe while other programs write:
 new branch. The copy is file by file, so a branch that fails halfway is left
 half made.
 
-A driver with versions gives five more primitives:
+A driver with versions gives six more primitives:
 
 - ``_version_of(uri, bucket, key)``: the version ID of the current object.
 - ``_history(uri, bucket, prefix)``: every version under the prefix, deleted
@@ -87,6 +87,8 @@ from ..errors import NotFound, OfflineMiss, StoreError, UriError
 from ..uri import Selector, Uri
 from . import Entry, Store
 
+__all__ = ["ObjectStore"]
+
 Page = tuple[list[str], list[tuple[str, int, str]]]
 
 META = ".provcat"  # the folder at the top of a bucket that holds commits
@@ -109,27 +111,75 @@ def _in_meta(key: str) -> bool:
 
 
 class ObjectStore(Store):
+    """The base class of a driver for an object store, which keeps flat keys in buckets.
+
+    It gives stat, list, fetch, put and delete, with the cache, folder fetches
+    and offline mode, and on a bucket with versioning pin, commit and branch.
+    It takes the constructor of Store. A driver subclasses it, sets
+    ``driver``, and gives six primitives: ``locate``, ``_head``, ``_pages``,
+    ``_get``, ``_put`` and ``_delete``. For versions it gives more:
+    ``_version_of``, ``_history``, ``_head_version``, ``_get_version``,
+    ``_create`` and ``_copy``. The module's docstring says what each returns.
+    """
+
     page_size: int | None = None  # None leaves it to the server; tests set it small to force paging
-    refs_in_path = False  # the first folder is a branch; a commit or a version goes in ?at=
+    refs_in_path = False  # The first folder is a branch; a commit or a version goes in ?at=
 
     @abstractmethod
-    def locate(self, uri: Uri) -> tuple[str, str]: ...
+    def locate(
+        self,
+        uri: Uri,  # A physical URI of this store
+    ) -> tuple[str, str]:  # The bucket and the key, which is the URI's path joined by "/", empty for the bucket
+        """Find the bucket and the key that a URI names. A driver gives it; a URI it cannot name raises UriError."""
 
     @abstractmethod
-    def _head(self, uri: Uri, bucket: str, key: str) -> tuple[int, str]: ...
+    def _head(
+        self,
+        uri: Uri,  # The URI, for error messages
+        bucket: str,  # The bucket
+        key: str,  # The object's key
+    ) -> tuple[int, str]:  # The size in bytes and the version; NotFound when there is no such object
+        """Describe one object."""
 
     @abstractmethod
-    def _pages(self, uri: Uri, bucket: str, prefix: str, delimiter: bool,
-               limit: int | None = None) -> Iterator[Page]: ...
+    def _pages(
+        self,
+        uri: Uri,  # The URI, for error messages
+        bucket: str,  # The bucket
+        prefix: str,  # The prefix of the keys to list, "" or ending in "/"
+        delimiter: bool,  # Stop at the next "/" and give the folder prefixes, as one level of a listing
+        limit: int | None = None,  # The most keys in one page; None leaves it to the server
+    ) -> Iterator[Page]:  # Pages of (folder prefixes, objects as (key, size, version))
+        """List keys under a prefix, page by page."""
 
     @abstractmethod
-    def _get(self, uri: Uri, bucket: str, key: str, out: BinaryIO) -> str: ...
+    def _get(
+        self,
+        uri: Uri,  # The URI, for error messages
+        bucket: str,  # The bucket
+        key: str,  # The object's key
+        out: BinaryIO,  # An open file to write the bytes to
+    ) -> str:  # The version of the bytes written
+        """Download one object."""
 
     @abstractmethod
-    def _put(self, uri: Uri, bucket: str, key: str, src: Path) -> str: ...
+    def _put(
+        self,
+        uri: Uri,  # The URI, for error messages
+        bucket: str,  # The bucket
+        key: str,  # The object's key
+        src: Path,  # The local file to upload
+    ) -> str:  # The version of the bytes written
+        """Upload a local file as one object."""
 
     @abstractmethod
-    def _delete(self, uri: Uri, bucket: str, key: str) -> None: ...
+    def _delete(
+        self,
+        uri: Uri,  # The URI, for error messages
+        bucket: str,  # The bucket
+        key: str,  # The object's key
+    ) -> None:  # Nothing; NotFound when there is no such object
+        """Delete one object."""
 
     def _version_of(self, uri: Uri, bucket: str, key: str) -> str:
         raise StoreError(f"{uri}: store {self.name} ({self.driver}) keeps no versions")
@@ -182,7 +232,14 @@ class ObjectStore(Store):
         except UriError:
             return None  # a key that no URI can name, for example one with "//"
 
-    def stat(self, uri: Uri, cache: LocalCache) -> Entry:
+    def stat(
+        self,
+        uri: Uri,  # A physical URI of this store, with or without ?at=
+        cache: LocalCache,  # The cache, which holds the commits read
+    ) -> Entry:  # The file or the folder; NotFound when there is neither
+        """Describe one file or folder. A key with keys below it is a folder; a bucket always is.
+
+        Without ?at=, offline mode raises OfflineMiss."""
         if uri.selector is not None:
             return self._stat_at(uri, cache)
         self._online(uri)
@@ -202,7 +259,12 @@ class ObjectStore(Store):
             return Entry(uri, "folder")
         raise NotFound(f"{uri}: no object and no folder")
 
-    def list(self, uri: Uri, cache: LocalCache) -> list[Entry]:
+    def list(
+        self,
+        uri: Uri,  # A physical URI of a folder, with or without ?at=
+        cache: LocalCache,  # The cache, which holds the commits read
+    ) -> list[Entry]:  # The files and folders directly inside it; NotFound for a file or nothing
+        """List a folder, one level deep. Without ?at=, offline mode raises OfflineMiss."""
         if uri.selector is not None:
             return self._list_at(uri, cache)
         self._online(uri)
@@ -240,8 +302,11 @@ class ObjectStore(Store):
             raise NotFound(f"{uri}: is a file, not a folder")
         return entries
 
-    def walk(self, uri: Uri) -> list[Entry]:
-        """Every file below a folder, at any depth.
+    def walk(
+        self,
+        uri: Uri,  # A physical URI of a folder, without ?at=
+    ) -> list[Entry]:  # One Entry for each file, at any depth
+        """List every file below a folder, at any depth.
 
         Keys that end in "/" are folder markers and are left out. Any other key
         that no URI can name is an error, so a fetched folder is never short.
@@ -278,7 +343,14 @@ class ObjectStore(Store):
 
         return cache.put(self.name, self._key(entry.uri), fill)
 
-    def fetch(self, uri: Uri, cache: LocalCache) -> Path:
+    def fetch(
+        self,
+        uri: Uri,  # A physical URI of a file or a folder, with or without ?at=
+        cache: LocalCache,  # The cache to copy it into
+    ) -> Path:  # The file or folder in the cache
+        """Copy a file or a whole folder into the cache, or find it there current.
+
+        Offline, a URI without ?at= gives what the cache holds at any version, or raises OfflineMiss."""
         if uri.selector is not None:
             return self._fetch_at(uri, cache)
         key = self._key(uri)
@@ -318,7 +390,13 @@ class ObjectStore(Store):
             return any(f.startswith(prefix) for f in folders) or any(o[0].startswith(prefix) for o in objects)
         return False
 
-    def put(self, uri: Uri, src: Path, cache: LocalCache) -> Entry:
+    def put(
+        self,
+        uri: Uri,  # The physical URI of the object to write, without ?at=
+        src: Path,  # The local file to write
+        cache: LocalCache,  # The cache; a put does not use it
+    ) -> Entry:  # The file written, with its size and version
+        """Write a local file as one object. A bucket, a folder, or a key under .provcat is refused."""
         bucket, key = self._write_target(uri)
         if self._is_folder(uri, bucket, key):
             raise StoreError(f"{uri}: a folder; write to a name inside it")
@@ -326,7 +404,12 @@ class ObjectStore(Store):
         version = self._put(uri, bucket, key, Path(src))
         return Entry(uri, "file", size, version)
 
-    def delete(self, uri: Uri, cache: LocalCache) -> None:
+    def delete(
+        self,
+        uri: Uri,  # The physical URI of the object to delete, without ?at=
+        cache: LocalCache,  # The cache; a delete does not use it
+    ) -> None:  # Nothing; NotFound when there is no such object, StoreError for a folder
+        """Delete one object."""
         bucket, key = self._write_target(uri)
         try:
             self._delete(uri, bucket, key)
@@ -559,8 +642,15 @@ class ObjectStore(Store):
             break
         return None
 
-    def pin(self, uri: Uri, cache: LocalCache) -> Uri:
-        """A file pins to its version, and a folder to the newest commit that holds it."""
+    def pin(
+        self,
+        uri: Uri,  # A physical URI of a file or a folder
+        cache: LocalCache,  # The cache, which holds the commits read
+    ) -> Uri:  # The URI with ?at=version:ID for a file, or ?at=commit:ID for a folder; a URI with ?at= is checked and returned
+        """Pin a file to its version, and a folder to the newest commit that holds it.
+
+        A bucket without versioning raises StoreError for a file, and a folder
+        with no provcat commit raises StoreError."""
         if uri.selector is not None:
             self._stat_at(uri, cache)
             return uri
@@ -627,10 +717,17 @@ class ObjectStore(Store):
             except Exists:
                 return False
 
-    def commit(self, uri: Uri, message: str, metadata: dict[str, str] | None = None,
-               allow_empty: bool = False) -> Uri:
-        """Record the version of every file under a folder, and return the
-        folder pinned to the new commit."""
+    def commit(
+        self,
+        uri: Uri,  # The physical URI of a folder, without ?at=
+        message: str,  # The commit message; it must not be empty
+        metadata: dict[str, str] | None = None,  # Key-value pairs stored with the commit
+        allow_empty: bool = False,  # Commit even when no file changed since the last commit
+    ) -> Uri:  # The folder pinned to the new commit, with ?at=commit:ID
+        """Record the version of every file under a folder as a new provcat commit.
+
+        It needs versioning on the bucket. A folder with no files raises
+        StoreError, and so does one with no change, unless allow_empty."""
         if not message:
             raise UriError(f"{uri}: a commit needs a message")
         self._online(uri)
@@ -673,9 +770,15 @@ class ObjectStore(Store):
                 return uri.with_selector(Selector("commit", cid))
         raise StoreError(f"{uri}: other commits of this folder kept taking the next number; commit again")
 
-    def branch(self, uri: Uri, source: str) -> Uri:
-        """Make the branch that uri names by copying source: a branch, which is a
-        folder at the top of the bucket, or a commit ID."""
+    def branch(
+        self,
+        uri: Uri,  # The physical URI of the new branch: a folder at the top of the bucket, without ?at=
+        source: str,  # A branch, which is a folder at the top of the bucket, or a commit ID
+    ) -> Uri:  # uri itself
+        """Make a branch by copying another branch or a commit, file by file.
+
+        A branch that already exists raises StoreError. A copy that fails
+        halfway leaves the branch half made."""
         self._online(uri)
         if uri.selector is not None:
             raise UriError(f"{uri}: name the new branch without ?at=")

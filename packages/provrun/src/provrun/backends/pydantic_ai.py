@@ -37,9 +37,13 @@ from .. import otel, telemetry
 from . import InProcessBackend, Pieces, RunResult
 
 if TYPE_CHECKING:
+    from pydantic_ai.capabilities import AbstractCapability
+
     from ..context import RunContext
     from ..spec import AgentSpec, RunSpec
     from ..tools import ToolRegistry
+
+__all__ = ["PydanticAIBackend", "evidence_capability"]
 
 
 def _needs():
@@ -75,8 +79,12 @@ def _stream_handler(ctx: RunContext):
     return handle
 
 
-def evidence_capability(ctx: RunContext):
-    """The PydanticAI capability that writes provrun's evidence for one run."""
+def evidence_capability(
+    ctx: RunContext,  # The run whose recorder takes the evidence: model_called, tool_called and the rest the module lists
+) -> AbstractCapability:  # A capability to pass in an agent's capabilities; it needs provrun[pydantic-ai]
+    """Make the PydanticAI capability that writes provrun's evidence for one run.
+
+    Code other than the backend can pass it to its own agent, streamed or not."""
     from pydantic_ai import ApprovalRequired, CallDeferred, ModelRetry
     from pydantic_ai.capabilities import AbstractCapability
     from pydantic_ai.messages import (BaseToolCallPart, ModelMessagesTypeAdapter, NativeToolCallPart,
@@ -176,13 +184,32 @@ def evidence_capability(ctx: RunContext):
 
 
 class PydanticAIBackend(InProcessBackend):
+    """A PydanticAI agent with a filesystem sandbox over the run's folders.
+
+    The sandbox mounts the input, output and scratch folders. It needs
+    provrun[pydantic-ai]."""
+
     name = "pydantic-ai"
 
-    def __init__(self, model: Any = None, registry: ToolRegistry | None = None):
+    def __init__(
+        self,
+        model: Any = None,  # A PydanticAI Model to use instead of agent.model, for tests; None infers it from agent.model
+        registry: ToolRegistry | None = None,  # Where the agent's tools are found by name; None is a ToolRegistry of the entry points
+    ):
         self._model = model  # for tests: a PydanticAI Model to use instead of agent.model
         self._registry = registry
 
-    async def execute(self, ctx: RunContext, agent: AgentSpec, run: RunSpec) -> RunResult:
+    async def execute(
+        self,
+        ctx: RunContext,  # The run; its recorder takes the evidence the module lists
+        agent: AgentSpec,  # The agent to run; its tools are found in the registry
+        run: RunSpec,  # The staged inputs and the run's folders, mounted at /input, /output and /scratch
+    ) -> RunResult:  # The agent's output as text, and its token and request counts
+        """Run the agent in the sandbox, and import its message history as trace_imported.
+
+        It writes the output to response.txt in the output folder unless the
+        agent wrote that file. Raises ValueError for a tool that the registry
+        lacks or that is not in_process."""
         _needs()
         from pydantic_ai import Agent, UsageLimits
         from pydantic_ai.messages import ModelMessagesTypeAdapter

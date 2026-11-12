@@ -10,6 +10,8 @@ from .catalog import Catalog
 from .config import EtcdConfig, open_config
 from .errors import ProvcatError
 
+__all__ = ["main"]
+
 
 def _print(obj) -> None:
     print(json.dumps(obj, indent=2))
@@ -25,7 +27,10 @@ def _meta(items: list[str]) -> dict[str, str]:
     return meta
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,  # The arguments after the program name; None reads sys.argv
+) -> int:  # The exit status: 0 on success, 1 when provcat or the system raised an error. Bad arguments raise SystemExit(2), as argparse does
+    """Run the provc command: parse the arguments, run one command on the catalog, print the answer."""
     ap = argparse.ArgumentParser("provc", description="Resolve, fetch and write catalog URIs.")
     ap.add_argument("--config", help="a YAML path or etcd://host:port/prefix (default: PROVCAT_CONFIG, ./provcat.yaml)")
     ap.add_argument("--cache", help="the cache folder (default: PROVCAT_CACHE, ~/.cache/provcat)")

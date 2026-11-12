@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 
     from ..context import RunContext as ProvrunContext
 
+__all__ = ["RunDeps", "Tool", "ToolRegistry"]
+
 TOOL_MODES = ("in_process", "client_round_trip", "remote_mcp")
 
 
@@ -35,31 +37,49 @@ TOOL_MODES = ("in_process", "client_round_trip", "remote_mcp")
 class RunDeps:
     """What a tool gets through ``ctx.deps``: the sandbox and the run."""
 
-    sandbox: Sandbox
-    run: ProvrunContext
+    sandbox: Sandbox  # The agent's filesystem sandbox, over /input, /output and /scratch
+    run: ProvrunContext  # The provrun run context; a tool writes evidence through run.recorder
 
 
 @dataclass(frozen=True)
 class Tool:
-    name: str
-    fn: Callable[..., Any]
-    mode: str = "in_process"
+    """One tool: the name an agent spec gives it, its function and its execution mode."""
+
+    name: str  # The name in an agent spec's tools
+    fn: Callable[..., Any]  # The function, in the PydanticAI form
+    mode: str = "in_process"  # One of TOOL_MODES; only in_process runs now
 
 
 class ToolRegistry:
-    def __init__(self, folders: list[Path] | None = None):
+    """The tools that agents can call, by name."""
+
+    def __init__(
+        self,
+        folders: list[Path] | None = None,  # Tools folders to load as well as the entry points
+    ):
         self.tools: dict[str, Tool] = {}
         for ep in entry_points(group="provrun.tools"):
             self.add(Tool(ep.name, ep.load()))
         for folder in folders or []:
             self.load_folder(folder)
 
-    def add(self, tool: Tool) -> None:
+    def add(
+        self,
+        tool: Tool,  # The tool; one with the same name is replaced
+    ) -> None:  # Nothing
+        "Add one tool. Raises ValueError for a mode not in TOOL_MODES."
         if tool.mode not in TOOL_MODES:
             raise ValueError(f"tool {tool.name}: mode must be one of {TOOL_MODES}")
         self.tools[tool.name] = tool
 
-    def load_folder(self, folder: Path) -> None:
+    def load_folder(
+        self,
+        folder: Path,  # A folder of modules, each with a TOOLS list of functions or Tools
+    ) -> None:  # Nothing
+        """Import each module in folder, and add the tools in its TOOLS list.
+
+        A module whose name starts with _ is skipped. Raises ValueError for a
+        module with no TOOLS."""
         for path in sorted(folder.glob("*.py")):
             if path.name.startswith("_"):
                 continue
@@ -72,7 +92,11 @@ class ToolRegistry:
             for fn in listed:
                 self.add(fn if isinstance(fn, Tool) else Tool(fn.__name__, fn))
 
-    def get(self, names: list[str]) -> list[Tool]:
+    def get(
+        self,
+        names: list[str],  # The tool names, as an agent spec lists them
+    ) -> list[Tool]:  # The tools, in the order named
+        "Find tools by name. Raises ValueError for a name that is not here."
         missing = [n for n in names if n not in self.tools]
         if missing:
             raise ValueError(f"unknown tools {missing}; known: {', '.join(sorted(self.tools))}")

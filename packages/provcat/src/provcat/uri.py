@@ -19,6 +19,8 @@ from urllib.parse import quote, unquote
 
 from .errors import UriError
 
+__all__ = ["Selector", "Uri", "parse"]
+
 _SCHEME = re.compile(r"[a-z][a-z0-9+.-]*")
 _KIND = re.compile(r"[a-z]+")
 _SAFE = "-._~!$&'()*+,;=:@"
@@ -29,8 +31,8 @@ _SAFE_QUERY = _SAFE.replace("&", "") + "/"
 class Selector:
     """The ``?at=kind:value`` part of a URI, for example ``branch:main``."""
 
-    kind: str
-    value: str
+    kind: str  # The kind of version, such as branch, tag, commit, version, stage or ts
+    value: str  # The name or the value, such as main
 
     def __str__(self) -> str:
         return f"{self.kind}:{self.value}"
@@ -45,23 +47,34 @@ def parse_selector(text: str) -> Selector:
 
 @dataclass(frozen=True)
 class Uri:
-    scheme: str
-    authority: str
-    segments: tuple[str, ...] = ()
-    selector: Selector | None = None
+    """A parsed catalog URI, ``scheme://authority/seg/seg?at=kind:value``. ``str()`` writes it back."""
+
+    scheme: str  # A store's name for a physical URI, or a logical scheme
+    authority: str  # The first name after //, percent-decoded; it may be empty
+    segments: tuple[str, ...] = ()  # The path, one percent-decoded name each
+    selector: Selector | None = None  # The ?at= part, or None
 
     @property
     def path(self) -> str:
         """The segments joined with ``/``, without a leading slash."""
         return "/".join(self.segments)
 
-    def without_selector(self) -> Uri:
+    def without_selector(self) -> Uri:  # This URI with no ?at=
+        """Drop the selector."""
         return replace(self, selector=None)
 
-    def with_selector(self, selector: Selector | None) -> Uri:
+    def with_selector(
+        self,
+        selector: Selector | None,  # The new ?at= part; None drops it
+    ) -> Uri:  # This URI with the selector replaced
+        """Replace the selector."""
         return replace(self, selector=selector)
 
-    def child(self, name: str) -> Uri:
+    def child(
+        self,
+        name: str,  # One path segment; empty, ., .., a slash, a backslash or a NUL raises UriError
+    ) -> Uri:  # This URI with name added to the path
+        """The URI of a file or folder inside this one; the selector is kept."""
         return replace(self, segments=self.segments + (_check_segment(name),))
 
     def __str__(self) -> str:
@@ -79,7 +92,9 @@ def _check_segment(seg: str) -> str:
     return seg
 
 
-def parse(text: str | Uri) -> Uri:
+def parse(
+    text: str | Uri,  # The URI as text, or a Uri
+) -> Uri:  # The parsed URI; UriError when the text is not a valid catalog URI
     """Parse a URI string. A Uri passes through unchanged."""
     if isinstance(text, Uri):
         return text

@@ -28,6 +28,8 @@ from ..uri import Uri
 from . import register_driver
 from .objects import ObjectStore
 
+__all__ = []
+
 _CHUNK = 1 << 20
 _SINGLE = 64 << 20  # files up to this size go in one request
 

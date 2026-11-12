@@ -17,17 +17,30 @@ if TYPE_CHECKING:
     from .context import RunContext
     from .spec import RunSpec
 
+__all__ = ["Artifact", "Outputter"]
+
 
 @dataclass(frozen=True)
 class Artifact:
-    path: Path
-    uri: str
-    sha256: str
-    size: int
+    """One file that a run handed back in its output folder."""
+
+    path: Path  # Where the file is in the run folder
+    uri: str  # Its URI in the bundle, <run URI>/output/<path in the output folder>
+    sha256: str  # The SHA-256 of the file
+    size: int  # Its size in bytes
 
 
 class Outputter:
-    def collect(self, ctx: RunContext, run: RunSpec) -> list[Artifact]:
+    """Records each file that a run leaves in its output folder."""
+
+    def collect(
+        self,
+        ctx: RunContext,  # The run; its recorder takes one output_artifact_created for each file
+        run: RunSpec,  # The run spec, whose output folder is read
+    ) -> list[Artifact]:  # One artifact for each file, in path order
+        """Hash each file in the output folder and write its event.
+
+        Raises ValueError for a link or any other file that is not plain."""
         artifacts = []
         for f in sorted(run.output_dir.rglob("*")):
             if f.is_symlink() or not (f.is_file() or f.is_dir()):

@@ -33,6 +33,8 @@ if TYPE_CHECKING:
     from ..context import RunContext
     from ..spec import AgentSpec, RunSpec, StagedInput
 
+__all__ = ["LiteLLMBackend"]
+
 # Model settings that are passed on to litellm.acompletion.
 SETTINGS = frozenset({
     "temperature", "top_p", "max_tokens", "max_completion_tokens", "seed", "stop",
@@ -120,9 +122,16 @@ def guard_otel_span() -> None:
 
 
 class LiteLLMBackend(InProcessBackend):
+    """One model call through litellm.acompletion, with the inputs in the message.
+
+    It needs provrun[litellm]."""
+
     name = "litellm"
 
-    def __init__(self, completion=None):
+    def __init__(
+        self,
+        completion: Any = None,  # An async function like litellm.acompletion to call instead, for tests; None is LiteLLM's
+    ):
         self._completion = completion  # for tests: an async function like litellm.acompletion
 
     def _acompletion(self):
@@ -137,7 +146,16 @@ class LiteLLMBackend(InProcessBackend):
         litellm.suppress_debug_info = True
         return litellm.acompletion
 
-    async def execute(self, ctx: RunContext, agent: AgentSpec, run: RunSpec) -> RunResult:
+    async def execute(
+        self,
+        ctx: RunContext,  # The run; its recorder takes prompt_rendered and model_called
+        agent: AgentSpec,  # The agent to run
+        run: RunSpec,  # The staged inputs, each a file, and the output folder
+    ) -> RunResult:  # The reply's text and its token counts
+        """Call the model once with the inputs in the message, and write the reply to response.txt.
+
+        The call is streamed if the spec asks. Raises ValueError for a tool, a
+        model setting not in SETTINGS, or a folder input."""
         if agent.tools:
             raise ValueError("the litellm backend has no tools; use the pydantic-ai backend")
         unknown = set(agent.settings) - SETTINGS

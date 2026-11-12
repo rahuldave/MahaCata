@@ -56,12 +56,16 @@ MODES = ("strict", "lenient")
 
 
 class EvidenceError(ProvrunError, provevi.EvidenceError):
-    """Evidence could not be written or does not verify. It is also a
-    provevi EvidenceError, which is what provevi's checks raise."""
+    """Evidence could not be written or does not verify.
+
+    It is also a provevi EvidenceError, which is what provevi's checks raise."""
 
 
-def read_events(folder: Path) -> list[EvidenceEvent]:
-    """The events of an evidence folder, as provevi.read_events reads them.
+def read_events(
+    folder: Path,  # An evidence folder, such as <run folder>/evidence
+) -> list[EvidenceEvent]:  # Its events, in order
+    """Read the events of an evidence folder, as provevi.read_events does.
+
     Raises provrun's EvidenceError at a line that is not an event."""
     try:
         return provevi.read_events(folder)
@@ -70,10 +74,16 @@ def read_events(folder: Path) -> list[EvidenceEvent]:
 
 
 class Step:
-    """What a component fills in while a step runs; ``EvidenceRecorder.step``
-    writes it as one event when the step ends."""
+    """What a component fills in while a step runs, to be written as one event.
 
-    def __init__(self, refs: tuple[str, ...], data: dict, payload: Any):
+    ``EvidenceRecorder.step`` yields it, and writes it when the step ends."""
+
+    def __init__(
+        self,
+        refs: tuple[str, ...],  # The URIs and paths the event is about; kept as a list a step can add to
+        data: dict,  # The event's data, copied; a step can add to it
+        payload: Any,  # The event's payload, stored apart; a step can set it
+    ):
         self.refs = list(refs)
         self.data = dict(data)
         self.payload = payload
@@ -93,10 +103,17 @@ def _stamp(data: dict, started: str, span) -> None:
 class EvidenceRecorder:
     """Writes the evidence of one run. Thread-safe; one recorder per run."""
 
-    def __init__(self, run_id: str, actor: str, folder: Path, *, mode: str = "strict",
-                 sinks: list[Sink] | None = None,
-                 redact: Callable[[dict], dict] | None = None,
-                 store: EvidenceStore | None = None):
+    def __init__(
+        self,
+        run_id: str,  # The run's ID, which each event records
+        actor: str,  # Who runs it, which each event records
+        folder: Path,  # The run's evidence folder
+        *,
+        mode: str = "strict",  # "strict", where a failed write raises EvidenceError, or "lenient", where it warns
+        sinks: list[Sink] | None = None,  # More sinks that get each line after the store, such as a live feed
+        redact: Callable[[dict], dict] | None = None,  # Changes each event's data before it is written; None keeps it
+        store: EvidenceStore | None = None,  # The provevi store that holds the evidence; None is the file store
+    ):
         if mode not in MODES:
             raise ValueError(f"evidence mode must be one of {MODES}, not {mode!r}")
         self.run_id = run_id
@@ -126,10 +143,20 @@ class EvidenceRecorder:
             raise EvidenceError(message)
         warnings.warn(f"evidence of {self.run_id}: {message}", stacklevel=3)
 
-    def emit(self, type: str, component: str, *, refs: tuple[str, ...] | list[str] = (),
-             data: dict | None = None, payload: bytes | str | dict | list | None = None,
-             confidence: str = "observed") -> EvidenceEvent | None:
-        """Write one event. A payload is stored apart and the event keeps its hash."""
+    def emit(
+        self,
+        type: str,  # The event type, one of EVENT_TYPES; another raises ValueError
+        component: str,  # The part that writes it, such as the class's name
+        *,
+        refs: tuple[str, ...] | list[str] = (),  # The URIs and paths the event is about
+        data: dict | None = None,  # The event's data
+        payload: bytes | str | dict | list | None = None,  # A large body, stored apart; a dict or list is stored as canonical JSON
+        confidence: str = "observed",  # How provrun knows it, one of CONFIDENCE, such as "parsed" for a provider's account
+    ) -> EvidenceEvent | None:  # The event written; None when a lenient write failed
+        """Write one event. A payload is stored apart and the event keeps its hash.
+
+        A write that fails raises EvidenceError in strict mode and warns in
+        lenient mode; an event after close raises EvidenceError."""
         if type not in EVENT_TYPES:
             raise ValueError(f"unknown evidence event type {type!r}")
         if confidence not in CONFIDENCE:
@@ -168,9 +195,17 @@ class EvidenceRecorder:
             return event
 
     @contextlib.contextmanager
-    def step(self, type: str, component: str, *, refs: tuple[str, ...] | list[str] = (),
-             data: dict | None = None, payload: Any = None) -> Iterator[Step]:
+    def step(
+        self,
+        type: str,  # The event type to write when the step ends, one of EVENT_TYPES
+        component: str,  # The part that runs the step
+        *,
+        refs: tuple[str, ...] | list[str] = (),  # The URIs and paths the event is about
+        data: dict | None = None,  # The event's first data; the step can add to it
+        payload: Any = None,  # The event's first payload; the step can set it
+    ) -> Iterator[Step]:  # The step to fill in, inside a with block
         """Run a step in an OpenTelemetry span, and write its event when it ends.
+
         If the step raises, the event is ``step_failed`` with the error. The
         event's data holds ``started_at``, the time the step began, in the
         format of the event's time, and the span's IDs when a span records.
@@ -189,8 +224,13 @@ class EvidenceRecorder:
             _stamp(s.data, started, span)
             self.emit(type, component, refs=s.refs, data=s.data, payload=s.payload)
 
-    def close(self) -> dict:
-        """Write the manifest and close the sinks. Returns the manifest."""
+    def close(
+        self,
+    ) -> dict:  # The manifest: run ID, event count, last hash, payloads, and whether the evidence is complete
+        """Write the manifest and close the sinks; a second close gives the manifest again.
+
+        Raises EvidenceError when the evidence cannot be sealed, and in strict
+        mode when a problem was found."""
         with self._lock:
             if self.closed:
                 return self.writer.manifest()

@@ -84,6 +84,8 @@ from ..timestamps import parse_ts
 from ..uri import Selector, Uri
 from . import Entry, Store, register_driver
 
+__all__ = []
+
 _SHA = re.compile(r"[0-9a-f]{40}")
 _REF_KINDS = ("branch", "tag", "commit")
 _PAGE = 100

@@ -35,19 +35,29 @@ from ..cache import LocalCache
 from ..errors import ConfigError, StoreError
 from ..uri import Uri
 
+__all__ = ["DRIVERS", "Entry", "Store", "register_driver"]
+
 
 @dataclass(frozen=True)
 class Entry:
-    uri: Uri
-    kind: str  # "file" or "folder"
-    size: int | None = None
-    version: str | None = None  # a value that changes when the content changes
+    """One file or folder in a store, as stat, list and put describe it."""
 
-    def as_dict(self) -> dict:
+    uri: Uri  # The physical URI of the file or folder
+    kind: str  # "file" or "folder"
+    size: int | None = None  # The size in bytes; None for a folder, or when the store does not say
+    version: str | None = None  # A value that changes when the content changes
+
+    def as_dict(self) -> dict:  # The four fields, with the URI as text, ready for JSON
+        """The entry as a plain dict, as provc prints it."""
         return {"uri": str(self.uri), "kind": self.kind, "size": self.size, "version": self.version}
 
 
 class Store(ABC):
+    """The interface of a store driver: read, and maybe write, the physical URIs of one kind of storage.
+
+    A subclass sets ``driver``, the name that ``driver:`` in the configuration
+    picks, and is registered with ``register_driver``."""
+
     driver: str = ""
     # True when fetch reads a branch at the version that pin gives. The
     # catalog then pins first, so the hooks at pin see each version read.
@@ -58,7 +68,13 @@ class Store(ABC):
     # {ref} (see provcat.resolver).
     refs_in_path: bool = True
 
-    def __init__(self, name: str, options: dict | None = None, *, offline: bool = False):
+    def __init__(
+        self,
+        name: str,  # The store's name in the configuration, which is also the scheme of its URIs
+        options: dict | None = None,  # The store's options from the configuration, without driver; each is checked against option_types
+        *,
+        offline: bool = False,  # Work from the cache alone; a driver raises OfflineMiss for what the cache does not hold
+    ):
         self.name = name
         self.options = dict(options or {})
         self.offline = offline
@@ -74,38 +90,77 @@ class Store(ABC):
             if not ok:
                 raise ConfigError(f"stores.{name}.{key} must be a {_TYPE_NAMES.get(want, want)}")
 
-    def option_types(self) -> dict[str, type | tuple]:
+    def option_types(self) -> dict[str, type | tuple]:  # Each option's name and its type, or a tuple of types
         """The options this driver takes, and the type of each."""
         return {}
 
-    def pin(self, uri: Uri, cache: LocalCache) -> Uri:
+    def pin(
+        self,
+        uri: Uri,  # A physical URI in this store
+        cache: LocalCache,  # The cache, which records what a moving name pointed at
+    ) -> Uri:  # The URI with any moving name replaced by a fixed version
+        """Replace a moving name, such as a branch, with a fixed version. A store without versions returns uri."""
         return uri
 
     @abstractmethod
-    def stat(self, uri: Uri, cache: LocalCache) -> Entry: ...
+    def stat(
+        self,
+        uri: Uri,  # A physical URI in this store
+        cache: LocalCache,  # The cache, which offline mode reads
+    ) -> Entry:  # The file or the folder at uri; NotFound when there is none
+        """Describe one file or folder."""
 
     @abstractmethod
-    def list(self, uri: Uri, cache: LocalCache) -> list[Entry]: ...
+    def list(
+        self,
+        uri: Uri,  # A physical URI of a folder in this store
+        cache: LocalCache,  # The cache, which offline mode reads
+    ) -> list[Entry]:  # The files and folders directly inside it
+        """List a folder, one level deep."""
 
     @abstractmethod
-    def fetch(self, uri: Uri, cache: LocalCache) -> Path: ...
+    def fetch(
+        self,
+        uri: Uri,  # A physical URI in this store
+        cache: LocalCache,  # The cache, where a remote store copies the file or folder
+    ) -> Path:  # A local path that holds the file or folder
+        """Return a local path that holds a file or folder: a copy in the cache, or the file itself for a local store."""
 
-    def read(self, uri: Uri, cache: LocalCache) -> bytes:
+    def read(
+        self,
+        uri: Uri,  # A physical URI of a file in this store
+        cache: LocalCache,  # The cache, as for fetch
+    ) -> bytes:  # The bytes of the file
+        """Fetch a file and return its bytes."""
         return self.fetch(uri, cache).read_bytes()
 
-    def put(self, uri: Uri, src: Path, cache: LocalCache) -> Entry:
+    def put(
+        self,
+        uri: Uri,  # The physical URI to write
+        src: Path,  # The local file to write
+        cache: LocalCache,  # The cache
+    ) -> Entry:  # The file written
+        """Write a local file at uri. A store that cannot be written, as this base, raises StoreError."""
         raise StoreError(f"{uri}: store {self.name} ({self.driver}) cannot be written")
 
-    def delete(self, uri: Uri, cache: LocalCache) -> None:
+    def delete(
+        self,
+        uri: Uri,  # The physical URI of the file to delete
+        cache: LocalCache,  # The cache
+    ) -> None:  # Nothing
+        """Delete the object at uri. A store that cannot be written, as this base, raises StoreError."""
         raise StoreError(f"{uri}: store {self.name} ({self.driver}) cannot be written")
 
 
 _TYPE_NAMES = {str: "string", bool: "true or false", list: "list of strings", (int, float): "number"}
 
-DRIVERS: dict[str, type[Store]] = {}
+DRIVERS: dict[str, type[Store]] = {}  # Each driver class under its name, as register_driver adds them
 
 
-def register_driver(cls: type[Store]) -> type[Store]:
+def register_driver(
+    cls: type[Store],  # A Store subclass; its driver attribute is the name it registers under
+) -> type[Store]:  # The same class, so this works as a class decorator
+    """Make a driver class available to the configuration under its ``driver`` name. A later class with the same name replaces it."""
     DRIVERS[cls.driver] = cls
     return cls
 

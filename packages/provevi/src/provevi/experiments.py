@@ -20,12 +20,17 @@ agent, and records the pin and the file's hash in ``run_created``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
 from .errors import ProveviError
 from .events import sha256_bytes
+
+if TYPE_CHECKING:
+    from provcat import Catalog
+
+__all__ = ["KINDS", "Experiment", "PinnedExperiment", "read_experiment", "write_experiment"]
 
 #: The kinds of experiment.
 KINDS = ("agent-eval", "ml")
@@ -38,12 +43,14 @@ _KEYS = ("kind", "description", "inputs", "metrics")
 
 @dataclass(frozen=True)
 class Experiment:
-    """What every run of an experiment shares: its kind, a description, the
-    inputs that each run reads, such as an eval set, and its metrics."""
-    kind: str
-    description: str
-    inputs: tuple[str, ...] = field(default=())
-    metrics: tuple[str, ...] = field(default=())
+    """What every run of an experiment shares.
+
+    Raises ProveviError for a kind, a description, inputs or metrics that are not valid, and TypeError for inputs
+    or metrics that are not a list or a tuple of texts and cannot be looped over."""
+    kind: str  # One of `KINDS`: `agent-eval` or `ml`
+    description: str  # The question the experiment asks; not empty
+    inputs: tuple[str, ...] = field(default=())  # The logical URIs that each run reads, such as an eval set
+    metrics: tuple[str, ...] = field(default=())  # The names of the metrics each run reports, such as `accuracy`
 
     def __post_init__(self):
         if self.kind not in KINDS:
@@ -56,18 +63,24 @@ class Experiment:
         object.__setattr__(self, "inputs", tuple(self.inputs))
         object.__setattr__(self, "metrics", tuple(self.metrics))
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:  # `kind`, `description`, `inputs` and `metrics`, with lists for the tuples
+        """The experiment as the mapping its file holds."""
         return {"kind": self.kind, "description": self.description, "inputs": list(self.inputs),
                 "metrics": list(self.metrics)}
 
-    def to_bytes(self) -> bytes:
+    def to_bytes(self) -> bytes:  # The YAML, in UTF-8
         """The file, as YAML with its keys in a fixed order."""
         return yaml.safe_dump(self.to_dict(), sort_keys=False, allow_unicode=True).encode()
 
     @classmethod
-    def from_bytes(cls, raw: bytes, where: str = "the experiment") -> Experiment:
-        """The experiment in a file. Raises ProveviError for a file that is
-        not an experiment, or has a key it does not know."""
+    def from_bytes(
+        cls,
+        raw: bytes,  # The bytes of an `experiment.yaml`
+        where: str = "the experiment",  # What to call the file in an error, such as its pinned URI
+    ) -> Experiment:  # The experiment the file holds
+        """Read the experiment in a file.
+
+        Raises ProveviError for a file that is not an experiment, or has a key it does not know."""
         try:
             data = yaml.safe_load(raw.decode("utf-8"))
         except (UnicodeDecodeError, yaml.YAMLError) as e:
@@ -91,12 +104,11 @@ class Experiment:
 
 @dataclass(frozen=True)
 class PinnedExperiment:
-    """An experiment as one version holds it: its URI, the URI pinned to that
-    version, and the SHA-256 of its file there."""
-    uri: str
-    pin: str
-    sha256: str
-    experiment: Experiment
+    """An experiment as one version holds it."""
+    uri: str  # The experiment's URI, with no selector
+    pin: str  # The URI pinned to the version, with `?at=commit:`
+    sha256: str  # The SHA-256 of `experiment.yaml` at that version
+    experiment: Experiment  # The experiment that file holds
 
 
 def _folder(uri: str) -> str:
@@ -110,11 +122,16 @@ def _folder(uri: str) -> str:
     return base
 
 
-def write_experiment(catalog, uri: str, experiment: Experiment, message: str) -> PinnedExperiment:
-    """Write the experiment's file in its folder at uri, commit the folder
-    with message, and return the new version. The catalog's hooks see the
-    write and the commit. Raises ProveviError, and provcat's errors, as for
-    a store with no commits."""
+def write_experiment(
+    catalog: Catalog,  # The catalog to write through
+    uri: str,  # The experiment's folder, such as `experiment://acme/risk/dev/credit/q`, with no `?at=`
+    experiment: Experiment,  # The experiment to write
+    message: str,  # The commit message
+) -> PinnedExperiment:  # The new version, as `read_experiment` reads it
+    """Write an experiment's file in its folder, and commit the folder.
+
+    The catalog's hooks see the write and the commit. Raises ProveviError, and provcat's errors, as for a
+    store with no commits."""
     base = _folder(uri)
     if "?" in uri:
         raise ProveviError(f"{uri}: write an experiment at its URI, with no ?at=")
@@ -124,10 +141,14 @@ def write_experiment(catalog, uri: str, experiment: Experiment, message: str) ->
     return read_experiment(catalog, base)
 
 
-def read_experiment(catalog, uri: str) -> PinnedExperiment:
-    """The experiment at uri, pinned: its newest version, or the version
-    that uri's ``?at=`` names. Raises ProveviError for a store whose pin
-    names no version, as a file store's does."""
+def read_experiment(
+    catalog: Catalog,  # The catalog to read through
+    uri: str,  # The experiment's folder, with `?at=` to name a version
+) -> PinnedExperiment:  # The experiment, its pin and its file's hash
+    """Read an experiment at a pinned version.
+
+    The version is the newest, or the one that the URI's ``?at=`` names. Raises ProveviError for a store whose
+    pin names no version, as a file store's does."""
     base = _folder(uri)
     pinned = str(catalog.pin(uri))
     if "?at=commit:" not in pinned:

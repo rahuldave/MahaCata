@@ -51,6 +51,13 @@ from packaging.version import InvalidVersion, Version
 from .errors import ProveviError
 from .events import sha256_bytes
 
+__all__ = [
+    "BLOCKED", "LEVELS", "MLFLOW_DATABASES", "MODEL_KEYS", "PROBLEM", "RUN_MODEL_KEYS", "Destination", "Library",
+    "TelemetryPolicy", "attributes_for", "blocked_data", "distribution_of", "load_yaml", "normal_endpoint",
+    "otlp_traces_target", "plain_attribute", "plain_experiment", "plain_name", "plain_span_name", "span_libraries",
+    "split_body",
+]
+
 #: The levels of what a destination receives, from least to most.
 LEVELS = ("names", "usage", "bodies")
 #: The kinds of destination that provrun can send spans to. A ``live``
@@ -132,23 +139,28 @@ def level_of(key: Any, value: Any = None) -> str:
     return "bodies"
 
 
-def attributes_for(attributes: Mapping[str, Any], level: str) -> dict[str, Any]:
-    """The attributes that a destination at level receives. Span events, such
-    as an exception with its message, are bodies, and this function does not
-    see them."""
+def attributes_for(
+    attributes: Mapping[str, Any],  # A span's attributes
+    level: str,  # The destination's level, one of `LEVELS`
+) -> dict[str, Any]:  # The attributes it receives at that level
+    """Cut a span's attributes to those that a destination at a level receives.
+
+    Span events, such as an exception with its message, are bodies, and this function does not see them.
+    Raises ProveviError for a level that is not one."""
     if level not in LEVELS:
         raise ProveviError(f"{level!r} is not a level; use one of {', '.join(LEVELS)}")
     top = LEVELS.index(level)
     return {k: v for k, v in attributes.items() if LEVELS.index(level_of(k, v)) <= top}
 
 
-def distribution_of(module: str) -> str | None:
-    """The distribution that installed module, the name pip knows it by, such
-    as opentelemetry-sdk for opentelemetry.sdk.trace, to name a library in a
-    report. When it cannot tell, it guesses: a module that no distribution
-    installed gives its own top name, as a program may name its own. An empty
-    name gives None. To decide what the policy approves, use
-    ``span_libraries``, which does not guess."""
+def distribution_of(
+    module: str,  # A module's dotted name, such as `opentelemetry.sdk.trace`
+) -> str | None:  # The distribution's name, as pip knows it, such as `opentelemetry-sdk`, or a guess; `None` for an empty name
+    """Find the distribution that installed a module, to name a library in a report.
+
+    When it cannot tell, it guesses: a module that no distribution installed gives its own top name, as a
+    program may name its own. To decide what the policy approves, use ``span_libraries``, which does not
+    guess."""
     top = module.split(".")[0]
     if not top:
         return None
@@ -202,16 +214,17 @@ def _shipped() -> Mapping[str, list[str]] | None:
 
 
 @functools.lru_cache(maxsize=1024)  # a library may make many scope names
-def span_libraries(scope: str) -> tuple[str, ...]:
-    """The names that the policy may know the library of a span by, from the
-    span's scope name, such as pydantic_ai. It gives the scope name only if
-    a distribution of that name is installed and the name has no dot, and
-    the distribution whose files hold the scope's module. It does not
-    guess: a scope whose module no installed distribution holds, or any
-    scope when the installed packages cannot be read, gives no name, so the
-    policy approves none of its spans. A process reads the installed
-    packages once, and does not see a change to them after that; ``span_libraries.cache_clear()`` and the same call on
-    ``_shipped`` and ``_files`` make it read them again."""
+def span_libraries(
+    scope: str,  # A span's instrumentation scope name, such as `pydantic_ai`
+) -> tuple[str, ...]:  # The library names, as canonical distribution names; empty when none can be shown
+    """Find the names that the policy may know a span's library by.
+
+    It gives the scope name only if a distribution of that name is installed and the name has no dot, and the
+    distribution whose files hold the scope's module. It does not guess: a scope whose module no installed
+    distribution holds, or any scope when the installed packages cannot be read, gives no name, so the policy
+    approves none of its spans. A process reads the installed packages once, and does not see a change to them
+    after that; ``span_libraries.cache_clear()`` and the same call on ``_shipped`` and ``_files`` make it read
+    them again."""
     if not isinstance(scope, str) or not scope:
         return ()
     module = scope.replace("-", "_")
@@ -278,23 +291,25 @@ _KEY = re.compile(r"(^|[^A-Za-z0-9])(sk-[A-Za-z0-9_-]{16,}|[srp]k_(live|test)_[A
 _SPAN_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,200}( [A-Za-z0-9_.:-]{1,200})?")
 
 
-def plain_name(value: Any, *, declared: Collection[str] = ()) -> bool:
-    """True if value is a name, as the levels say, that holds no URL, no user
-    and password, no setting such as ``token=x``, no path from ``/``, no
-    path that looks like one of a machine's files, such as
-    ``home/someone/.ssh/id_rsa`` or ``x/key.pem``, no part before a ``/``
-    that is a URL's scheme, a host or an email, such as ``https:/host/x`` or
-    ``x/host.com/a``, and no more than one
-    ``/``, and none that starts
-    like a common API key, such as ``sk-`` or ``ghp_``. A
-    secret or a path can pass the levels' test of a name, so a place below
-    bodies should get only plain names. A name such as ``ns:model@tag`` looks
-    like ``user:password@host``, so it is not plain. A number and a yes or no
-    are plain, as they are names; an empty list is not.
+def plain_name(
+    value: Any,  # A value from a span or an event: a text, a whole number, a yes or no, or a list of texts
+    *,
+    declared: Collection[str] = (),  # Texts that may have more than one `/`, such as a model's name; not one text
+) -> bool:  # Whether a place below bodies may get the value
+    """Tell whether a value is a plain name, which a place below bodies may get.
 
-    ``org/model`` is plain, and ``tmp/a/b`` is not. A model name such as
-    ``openrouter/meta-llama/llama-3-70b`` has two ``/`` too, so a text in
-    declared may have more. It must pass every other test."""
+    A plain name is a name, as the levels say, that holds no URL, no user and password, no setting such as
+    ``token=x``, no path from ``/``, no path that looks like one of a machine's files, such as
+    ``home/someone/.ssh/id_rsa`` or ``x/key.pem``, no part before a ``/`` that is a URL's scheme, a host or an
+    email, such as ``https:/host/x`` or ``x/host.com/a``, and no more than one ``/``, and none that starts
+    like a common API key, such as ``sk-`` or ``ghp_``. A secret or a path can pass the levels' test of a
+    name, so a place below bodies should get only plain names. A name such as ``ns:model@tag`` looks like
+    ``user:password@host``, so it is not plain. A whole number and a yes or no are plain, as they are names; a
+    number with a fraction is not, nor is an empty list.
+
+    ``org/model`` is plain, and ``tmp/a/b`` is not. A model name such as ``openrouter/meta-llama/llama-3-70b``
+    has two ``/`` too, so a text in declared may have more. It must pass every other test. Raises TypeError
+    when declared is one text."""
     if isinstance(declared, str):
         raise TypeError("declared must be a list of texts, not one text")
     if not _is_name(value) or (isinstance(value, (list, tuple)) and not value):
@@ -315,12 +330,17 @@ MODEL_KEYS = frozenset({"gen_ai.request.model", "gen_ai.response.model", "mlflow
 RUN_MODEL_KEYS = MODEL_KEYS | {"model", "answered_by"}
 
 
-def plain_attribute(key: str, value: Any, *, model_keys: Collection[str] = MODEL_KEYS) -> bool:
-    """True if value is a plain name for key. A model's name, under one of
-    model_keys, may have more than one ``/``, as
-    ``openrouter/meta-llama/llama-3-70b`` or a Vertex model's path has, and so
-    may each name in a list of them. Any other value is a plain name as
-    plain_name says. Pass RUN_MODEL_KEYS for provrun's own events."""
+def plain_attribute(
+    key: str,  # The attribute's or the data's key
+    value: Any,  # Its value
+    *,
+    model_keys: Collection[str] = MODEL_KEYS,  # The keys whose value is a model's name; RUN_MODEL_KEYS for provrun's own events
+) -> bool:  # Whether a place below bodies may get the value
+    """Tell whether a value is a plain name for its key.
+
+    A model's name, under one of model_keys, may have more than one ``/``, as
+    ``openrouter/meta-llama/llama-3-70b`` or a Vertex model's path has, and so may each name in a list of
+    them. Any other value is a plain name as plain_name says."""
     declared: list[str] = []
     if key in model_keys:
         if isinstance(value, str):
@@ -336,12 +356,14 @@ _EXPERIMENT = re.compile(r"experiment://([A-Za-z0-9_][A-Za-z0-9_.-]{0,199}/){0,1
                          r"(\?at=commit:[0-9a-f]{7,128})?")
 
 
-def plain_experiment(value: Any) -> bool:
-    """True if value is an experiment's URI or pin that a place below bodies
-    may get, such as ``experiment://acme/risk/dev/credit/q?at=commit:7311e8...``.
-    Its path, and each part of it, is a plain name, though the path may have
-    more than one ``/``, and the pin names a commit. A URI with a branch, a
-    host or any other setting is not plain."""
+def plain_experiment(
+    value: Any,  # An experiment's URI or pin, from an event's data
+) -> bool:  # Whether a place below bodies may get the value
+    """Tell whether an experiment's URI or pin is one that a place below bodies may get.
+
+    One such is ``experiment://acme/risk/dev/credit/q?at=commit:7311e8...``. Its path, and each part of it, is
+    a plain name, though the path may have more than one ``/``, and the pin names a commit. A URI with a
+    branch, a host or any other setting is not plain."""
     if not isinstance(value, str) or _EXPERIMENT.fullmatch(value) is None:
         return False
     path = value[len("experiment://"):].split("?", 1)[0]
@@ -350,26 +372,35 @@ def plain_experiment(value: Any) -> bool:
             and all(plain_name(p) for p in path.split("/")))
 
 
-def plain_span_name(name: Any) -> bool:
-    """True if name is a span name that a place below bodies may get: one or
-    two words of name characters, such as ``chat gpt-4o``, each a plain name."""
+def plain_span_name(
+    name: Any,  # A span's name
+) -> bool:  # Whether a place below bodies may get the name
+    """Tell whether a span's name is one that a place below bodies may get.
+
+    It must be one or two words of name characters, such as ``chat gpt-4o``, each a plain name."""
     return (isinstance(name, str) and _SPAN_NAME.fullmatch(name) is not None
             and all(plain_name(w) for w in name.split(" ")))
 
 
-def split_body(attributes: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """The attributes in two parts: those an event may keep, which are names
-    and usage, and the bodies, which the evidence keeps as a payload."""
+def split_body(
+    attributes: Mapping[str, Any],  # A span's attributes
+) -> tuple[dict[str, Any], dict[str, Any]]:  # The names and usage, then the bodies
+    """Split a span's attributes into what an event may keep and the bodies.
+
+    An event keeps the names and the usage; the evidence keeps the bodies as a payload."""
     kept, body = {}, {}
     for k, v in attributes.items():
         (body if level_of(k, v) == "bodies" else kept)[k] = v
     return kept, body
 
 
-def blocked_data(path: str, *, library: str | None = None, detail: str = "") -> dict:
-    """The data of a ``telemetry_blocked`` event. path names what was blocked,
-    such as ``litellm.callbacks`` or ``network``; library is the distribution
-    that tried it, when known."""
+def blocked_data(
+    path: str,  # What was blocked, such as `litellm.callbacks` or `network`; not empty
+    *,
+    library: str | None = None,  # The distribution that tried it, when known; it is stored in its canonical form
+    detail: str = "",  # More about the attempt
+) -> dict:  # `path`, `detail`, and `library` when it is given
+    """The data of a ``telemetry_blocked`` event. Raises ProveviError for an empty path."""
     if not isinstance(path, str) or not path:
         raise ProveviError("a blocked attempt needs a path, such as litellm.callbacks")
     data: dict = {"path": path, "detail": str(detail)}
@@ -380,16 +411,20 @@ def blocked_data(path: str, *, library: str | None = None, detail: str = "") -> 
 
 @dataclass(frozen=True)
 class Library:
-    """A library whose telemetry the policy approves: the versions that were
-    tested, and the destinations its instrumentation may feed."""
+    """A library whose telemetry the policy approves."""
 
-    name: str
-    versions: str
-    telemetry: tuple[str, ...] = ()
+    name: str  # The distribution's canonical name, such as `pydantic-ai`
+    versions: str  # The tested versions, as a specifier such as `>=2.64,<2.65`
+    telemetry: tuple[str, ...] = ()  # The names of the destinations its instrumentation may feed
 
-    def allows_version(self, version: str) -> bool:
-        """True if version is one that the policy names. A local build, such
-        as 2.64.0+patched, passes only if the specifier names it."""
+    def allows_version(
+        self,
+        version: str,  # An installed version, such as `2.64.0`
+    ) -> bool:  # Whether `versions` names it
+        """Tell whether the policy names a version of the library.
+
+        A local build, such as 2.64.0+patched, passes only if the specifier names it. A version that is not
+        one gives False."""
         try:
             v = Version(version)
         except InvalidVersion:
@@ -403,32 +438,37 @@ class Library:
 class Destination:
     """A place outside the evidence that spans may go to, and what it receives."""
 
-    name: str
-    kind: str
-    receives: str
-    endpoint: str | None = None
+    name: str  # The destination's name in the policy
+    kind: str  # `logfire`, `otlp`, `mlflow` or `live`
+    receives: str  # Its level, one of `LEVELS`
+    endpoint: str | None = None  # The URL it sends to; `None` for a live viewer, or an mlflow copy in the store's own file
 
 
 @dataclass(frozen=True)
 class TelemetryPolicy:
-    """What a run may record or send besides its evidence. A library or a
-    destination that the policy does not name gets nothing. Each destination's
-    endpoint must be on a host that ``hosts`` names."""
+    """What a run may record or send besides its evidence.
 
-    libraries: Mapping[str, Library] = field(default_factory=dict)
-    destinations: Mapping[str, Destination] = field(default_factory=dict)
-    hosts: tuple[str, ...] = ()
-    source: str = "<none>"
+    A library or a destination that the policy does not name gets nothing. Each destination's endpoint must be
+    on a host that ``hosts`` names."""
+
+    libraries: Mapping[str, Library] = field(default_factory=dict)  # The approved libraries, by canonical name
+    destinations: Mapping[str, Destination] = field(default_factory=dict)  # The destinations, by name
+    hosts: tuple[str, ...] = ()  # The hosts that destinations may send to; a leading dot names each host under a domain
+    source: str = "<none>"  # Where the policy came from, such as its file's path, for messages
 
     @classmethod
-    def deny_all(cls) -> TelemetryPolicy:
+    def deny_all(cls) -> TelemetryPolicy:  # A policy with no libraries, destinations or hosts
         """The policy that approves nothing, for a run with no policy file."""
         return cls(source="<deny all>")
 
     @classmethod
-    def load(cls, path: str | Path) -> TelemetryPolicy:
-        """Read a policy file, in YAML or JSON. Raises ProveviError, with every
-        problem the file has."""
+    def load(
+        cls,
+        path: str | Path,  # The policy file; `~` is the home folder
+    ) -> TelemetryPolicy:  # The policy, with the path as its source
+        """Read a policy file, in YAML or JSON.
+
+        Raises ProveviError, with every problem the file has."""
         import yaml
 
         path = Path(path).expanduser()
@@ -439,7 +479,11 @@ class TelemetryPolicy:
         return cls.from_dict(doc, source=str(path))
 
     @classmethod
-    def from_dict(cls, doc: Any, source: str = "<dict>") -> TelemetryPolicy:
+    def from_dict(
+        cls,
+        doc: Any,  # The parsed policy document: a mapping with `version`, `libraries`, `destinations` and `hosts`
+        source: str = "<dict>",  # Where the document came from, for messages
+    ) -> TelemetryPolicy:  # The policy
         """A policy from a parsed document. Raises ProveviError, with every problem."""
         problems: list[str] = []
         if not isinstance(doc, dict):
@@ -459,7 +503,7 @@ class TelemetryPolicy:
             raise ProveviError(f"{source}: " + "; ".join(problems))
         return cls(libraries, destinations, hosts, source)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict:  # `version`, `libraries` and `destinations` in name order, and `hosts` in the order given
         """The policy as a document that from_dict reads back."""
         return {
             "version": POLICY_VERSION,
@@ -471,34 +515,49 @@ class TelemetryPolicy:
             "hosts": list(self.hosts),
         }
 
-    def digest(self) -> str:
-        """The SHA-256 of the policy's canonical JSON, for a run to record
-        which policy it ran under."""
+    def digest(self) -> str:  # 64 lowercase hex digits
+        """The SHA-256 of the policy's canonical JSON, for a run to record which policy it ran under."""
         return sha256_bytes(json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":")).encode())
 
-    def library(self, name: str) -> Library | None:
+    def library(
+        self,
+        name: str,  # A distribution's name, in any form pip accepts, such as `pydantic_ai`
+    ) -> Library | None:  # The library; `None` when the policy does not approve it
+        """The approved library of that name."""
         return self.libraries.get(canonicalize_name(name))
 
-    def destinations_for(self, library: str) -> list[Destination]:
+    def destinations_for(
+        self,
+        library: str,  # A distribution's name
+    ) -> list[Destination]:  # The destinations; empty for a library the policy does not approve
         """The destinations that the library's instrumentation may feed."""
         lib = self.library(library)
         return [] if lib is None else [self.destinations[d] for d in lib.telemetry]
 
-    def live_level(self) -> str | None:
-        """The level that a viewer of the live feed of a run receives, or None
-        if the policy names no live viewer, so a run shows nothing live."""
+    def live_level(self) -> str | None:  # One of `LEVELS`, or `None`
+        """The level that a viewer of a run's live feed receives.
+
+        None if the policy names no live viewer, so a run shows nothing live."""
         return next((d.receives for d in self.destinations.values() if d.kind == "live"), None)
 
-    def allows_host(self, host: str) -> bool:
-        """True if hosts names host. An entry with a leading dot names each
-        host under that domain, but not the domain itself."""
+    def allows_host(
+        self,
+        host: str,  # A host name; case and a trailing dot are ignored
+    ) -> bool:  # Whether the host may be sent to
+        """Tell whether the policy's hosts name a host.
+
+        An entry with a leading dot names each host under that domain, but not the domain itself."""
         return _allowed(host, self.hosts)
 
-    def match_destination(self, kind: str, url: str | None) -> Destination | None:
-        """The destination of this kind whose endpoint is url, or None. Both
-        are made regular first by ``normal_endpoint``. An mlflow destination
-        with no endpoint, the copy in the store's own file, matches url None.
-        A url that cannot be made regular matches nothing."""
+    def match_destination(
+        self,
+        kind: str,  # The destination's kind, such as `otlp` or `mlflow`
+        url: str | None,  # The address a telemetry variable names; `None` for the store's own file
+    ) -> Destination | None:  # The destination; `None` when none matches
+        """Find the destination of a kind whose endpoint is a URL.
+
+        Both are made regular first by ``normal_endpoint``. An mlflow destination with no endpoint, the copy
+        in the store's own file, matches url None. A url that cannot be made regular matches nothing."""
         if url is None:
             return next((d for d in self.destinations.values() if d.kind == kind and d.endpoint is None), None)
         try:
@@ -510,10 +569,11 @@ class TelemetryPolicy:
                 return d
         return None
 
-    def check_installed(self, versions: Mapping[str, str] | None = None) -> list[str]:
-        """A problem for each approved library that is installed at a version
-        the policy does not name. versions maps a distribution to its version;
-        by default, the versions installed in this Python."""
+    def check_installed(
+        self,
+        versions: Mapping[str, str] | None = None,  # Each distribution's version; `None` for the versions installed in this Python
+    ) -> list[str]:  # One problem each; empty when every approved library is at a version the policy names, or is not installed
+        """Find each approved library that is installed at a version the policy does not name."""
         problems = []
         for name, lib in sorted(self.libraries.items()):
             if versions is not None:
@@ -527,10 +587,15 @@ class TelemetryPolicy:
                 problems.append(f"{name} {found} is installed, but the policy approves {lib.versions}")
         return problems
 
-    def narrow(self, section: Any, source: str = "the run file") -> TelemetryPolicy:
-        """The policy narrowed by a run file's telemetry section. A key that the
-        section leaves out keeps the policy's value. Raises ProveviError if the
-        section would widen the policy in any way."""
+    def narrow(
+        self,
+        section: Any,  # A run file's parsed `telemetry` section, with `libraries`, `destinations` and `hosts`; `None` keeps the policy
+        source: str = "the run file",  # Where the section came from, for messages and the new source
+    ) -> TelemetryPolicy:  # The narrowed policy
+        """Narrow the policy by a run file's telemetry section.
+
+        A key that the section leaves out keeps the policy's value. Raises ProveviError if the section would
+        widen the policy in any way."""
         if section is None:
             return self
         if not isinstance(section, dict):
@@ -640,9 +705,12 @@ def _no_duplicates(loader, node, deep=False):
     return loader.construct_mapping(node, deep=deep)
 
 
-def load_yaml(text: str) -> Any:
-    """Parse YAML safely, and refuse a key that a mapping names twice, which
-    plain YAML loaders allow, keeping the last value."""
+def load_yaml(
+    text: str,  # A YAML or JSON document
+) -> Any:  # The parsed document
+    """Parse YAML safely, and refuse a key that a mapping names twice.
+
+    Plain YAML loaders allow such a key, and keep the last value."""
     import yaml
 
     class StrictLoader(yaml.SafeLoader):
@@ -792,23 +860,22 @@ def _safe_query(scheme: str, query: str) -> bool:
     return True
 
 
-def normal_endpoint(url: str) -> str:
-    """url in one regular form, so that two ways of writing one address are
-    equal. The scheme and the host are lowercased, and the default port is
-    added. A trailing / is dropped, except from a sqlite path. So are a
-    database driver such as +psycopg, the user and password of a database
-    URL, and the allowed settings of its query but sslmode, which stays, so
-    that a policy can ask for TLS. A sqlite URL keeps only its path.
+def normal_endpoint(
+    url: str,  # An http, https or database URL, such as a destination's endpoint
+) -> str:  # The URL in its regular form, such as `https://host:443/path`
+    """Write a URL in one regular form, so that two ways of writing one address are equal.
 
-    Raises ProveviError for anything that two URL parsers could read as two
-    different places: a backslash, a space, a control character or a #; a
-    host that is not ASCII, because two standards of international names
-    read some hosts differently; a user in an http or https URL; a % in the
-    host; a port of 0 or an empty port; a path with . or .. segments or //;
-    a query, which can name another server, as ?host= does, except the
-    settings in _SAFE_QUERY, such as sslmode=require; a host list; a
-    relative sqlite path; an mssql URL with no port or no database, which
-    ODBC can read as the name of a data source. Also for a URL that is not
+    The scheme and the host are lowercased, and the default port is added. A trailing / is dropped, except
+    from a sqlite path. So are a database driver such as +psycopg, the user and password of a database URL,
+    and the allowed settings of its query but sslmode, which stays, so that a policy can ask for TLS. A sqlite
+    URL keeps only its path.
+
+    Raises ProveviError for anything that two URL parsers could read as two different places: a backslash, a
+    space, a control character or a #; a host that is not ASCII, because two standards of international names
+    read some hosts differently; a user in an http or https URL; a % in the host; a port of 0 or an empty
+    port; a path with . or .. segments or //; a query, which can name another server, as ?host= does, except
+    the settings in _SAFE_QUERY, such as sslmode=require; a host list; a relative sqlite path; an mssql URL
+    with no port or no database, which ODBC can read as the name of a data source. Also for a URL that is not
     http, https or a database."""
     if not isinstance(url, str) or _BAD_CHARS.search(url):
         raise ProveviError(f"{url!r}: an endpoint has no backslash, space, control character or #")
@@ -876,23 +943,21 @@ def _endpoint_problem(name: str, kind: str, endpoint: str, hosts: tuple[str, ...
     return None
 
 
-def otlp_traces_target(environ: Mapping[str, str]) -> tuple[str, str] | None:
-    """The protocol and the address to which provrun's OTLP exporter sends
-    traces, from the variables in environ, as the OpenTelemetry specification
-    gives them. None if neither endpoint variable is set, and then provrun
-    makes no OTLP exporter.
+def otlp_traces_target(
+    environ: Mapping[str, str],  # The environment variables, such as `os.environ`
+) -> tuple[str, str] | None:  # The protocol and the address; `None` when neither endpoint variable is set
+    """Find the protocol and the address to which provrun's OTLP exporter sends traces.
 
-    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT wins, and is used as it is. Otherwise
-    OTEL_EXPORTER_OTLP_ENDPOINT is used, with /v1/traces added over HTTP but
-    not over gRPC. A variable that is set but empty counts as not set. The
-    protocol comes from OTEL_EXPORTER_OTLP_TRACES_PROTOCOL, then
-    OTEL_EXPORTER_OTLP_PROTOCOL, then OTEL_TRACES_EXPORTER (otlp_proto_grpc
-    or otlp_proto_http), and is http/protobuf, the specification's default,
-    otherwise. provrun must make the exporter of that protocol. A gRPC
-    endpoint written as host:port gets https://, or http:// when
-    OTEL_EXPORTER_OTLP_TRACES_INSECURE or OTEL_EXPORTER_OTLP_INSECURE is true.
-    Raises ProveviError for a protocol that is not grpc, http/protobuf or
-    http/json."""
+    It reads the variables in environ as the OpenTelemetry specification gives them. With neither endpoint
+    variable set, provrun makes no OTLP exporter.
+
+    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT wins, and is used as it is. Otherwise OTEL_EXPORTER_OTLP_ENDPOINT is
+    used, with /v1/traces added over HTTP but not over gRPC. A variable that is set but empty counts as not
+    set. The protocol comes from OTEL_EXPORTER_OTLP_TRACES_PROTOCOL, then OTEL_EXPORTER_OTLP_PROTOCOL, then
+    OTEL_TRACES_EXPORTER (otlp_proto_grpc or otlp_proto_http), and is http/protobuf, the specification's
+    default, otherwise. provrun must make the exporter of that protocol. A gRPC endpoint written as host:port
+    gets https://, or http:// when OTEL_EXPORTER_OTLP_TRACES_INSECURE or OTEL_EXPORTER_OTLP_INSECURE is true.
+    Raises ProveviError for a protocol that is not grpc, http/protobuf or http/json."""
     protocol = (environ.get("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL") or environ.get("OTEL_EXPORTER_OTLP_PROTOCOL")
                 or {"otlp_proto_grpc": "grpc", "otlp_proto_http": "http/protobuf"}.get(
                     (environ.get("OTEL_TRACES_EXPORTER") or "").strip().lower(), "http/protobuf"))

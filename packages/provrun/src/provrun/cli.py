@@ -23,6 +23,8 @@ from provevi.cli import add_verify_arguments, verify_command
 from .context import default_runs_root
 from .errors import ProvrunError
 
+__all__ = ["main"]
+
 
 def cmd_run(args) -> int:
     from provcat import Catalog
@@ -48,7 +50,10 @@ def cmd_verify(args) -> int:
     return verify_command(args, "provr")
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,  # The arguments after provr; None reads them from the command line
+) -> int:  # The exit code: 0 on success; 1 for a failed run, a run that does not verify, or a provrun, provevi or provcat error; 2 for an evidence error. Bad arguments raise SystemExit(2), from argparse
+    "Run provr: parse the arguments and run the command."
     ap = argparse.ArgumentParser(prog="provr", description=__doc__.splitlines()[0])
     ap.add_argument("--runs", type=Path, default=default_runs_root(), help="the runs root")
     ap.add_argument("--store", help="the evidence store: file or sqlite:///path. For run, it takes the place of "

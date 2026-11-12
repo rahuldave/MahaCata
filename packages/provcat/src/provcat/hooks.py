@@ -53,6 +53,8 @@ import yaml
 from .errors import ConfigError, ProvcatError
 from .uri import Uri
 
+__all__ = ["AccessDenied", "Context", "Request", "Hooks", "Proxy", "load", "log", "logical_only"]
+
 #: The lifecycle spots. A spot can run inside another: fetch inside open or snapshot, put inside close.
 SPOTS = ("session", "resolve", "pin", "stat", "list", "fetch", "snapshot",
          "open", "read_block", "close", "put", "delete", "commit", "branch", "merge")
@@ -66,29 +68,26 @@ class AccessDenied(ProvcatError):
 
 @dataclass(frozen=True)
 class Context:
-    """Who uses the catalog. The principal is the user of the process, or the
-    name that a caller passes as principal=."""
+    """Who uses the catalog: the app, the principal and the tenant."""
 
-    app: str | None
-    principal: str
-    tenant: str | None
+    app: str | None  # The app whose hooks run: "default" for the default section of a hooks file; None with no app and no hooks file
+    principal: str  # Who uses the catalog: a caller's principal=, or the user of the process
+    tenant: str | None  # The tenant of the catalog; None for the admin
 
 
 @dataclass(frozen=True)
 class Request:
     """One operation at one spot.
 
-    ``logical`` is the logical URI that started the operation, or None for a
-    physical URI. ``physical`` is None at ``resolve`` and ``session``, because
-    no lookup has run. ``args`` holds the rest: the message of a commit, the
+    ``args`` holds the rest of the request: the message of a commit, the
     source of a branch, ``event`` ("open" or "close") at ``session``, ``mode``
     at ``open`` and ``close``, ``offset`` and ``length`` at ``read_block``, and
     the merged ``ranges`` read at ``close``."""
 
-    spot: str
-    logical: Uri | None = None
-    physical: Uri | None = None
-    args: dict[str, Any] = field(default_factory=dict)
+    spot: str  # The lifecycle spot, such as resolve, pin or fetch
+    logical: Uri | None = None  # The logical URI that started the operation; None for a physical URI
+    physical: Uri | None = None  # The physical URI; None at resolve and session, before any lookup
+    args: dict[str, Any] = field(default_factory=dict)  # The rest of the request, which differs by spot
 
 
 Hook = Callable[[Context, Request, Callable[[Request], Any]], Any]
@@ -106,13 +105,15 @@ def same(a: Any, b: Any) -> bool:
 class Hooks:
     """The hook chain of each spot for one app.
 
-    ``chains`` maps a spot to a list of hooks. The hooks under ``"*"`` run at
-    every spot, before the hooks of the spot, as in the proxy configuration::
+    The hooks under ``"*"`` run at every spot, before the hooks of the spot, as in the proxy configuration::
 
         Hooks({"*": [record], "fetch": [only_logical]})
     """
 
-    def __init__(self, chains: Mapping[str, list[Hook]] | None = None):
+    def __init__(
+        self,
+        chains: Mapping[str, list[Hook]] | None = None,  # Each spot, or "*", to its list of hooks; ConfigError for an unknown spot or a hook listed twice
+    ):
         if chains is not None and not isinstance(chains, Mapping):
             raise ConfigError(f"hooks must be a mapping of spot to hooks, not {type(chains).__name__}")
         chains = dict(chains or {})
@@ -130,20 +131,30 @@ class Hooks:
                 raise ConfigError(f"hooks: a hook would run twice at {spot}")
             self.chains[spot] = tuple(both)
 
-    def then(self, other: Hooks) -> Hooks:
-        """These hooks, and then other's, at each spot. A hook in both runs
-        twice, which a gate or a recorder allows."""
+    def then(
+        self,
+        other: Hooks,  # The hooks to run after these
+    ) -> Hooks:  # New hooks that run these, and then other's, at each spot
+        """Join two sets of hooks, these first. A hook in both runs twice, which a gate or a recorder allows."""
         both = Hooks()
         both.chains = {spot: (*self.chains[spot], *other.chains[spot]) for spot in SPOTS}
         return both
 
-    def same_as(self, other: Hooks) -> bool:
-        """Whether other runs the same hooks at each spot, in the same order."""
+    def same_as(
+        self,
+        other: Hooks,  # The hooks to compare with
+    ) -> bool:  # Whether other runs the same hooks at each spot, in the same order
+        """Compare two sets of hooks, hook by hook; a hook's own __eq__ is not asked."""
         return all(len(self.chains[s]) == len(other.chains[s])
                    and all(map(same, self.chains[s], other.chains[s])) for s in SPOTS)
 
-    def run(self, ctx: Context, req: Request, work: Callable[[Request], Any]) -> Any:
-        """Run the chain of req.spot around work."""
+    def run(
+        self,
+        ctx: Context,  # Who uses the catalog, passed to each hook
+        req: Request,  # The request; its spot picks the chain
+        work: Callable[[Request], Any],  # The catalog's own work, called with the request that the last hook passes on
+    ) -> Any:  # What work returns, as the hooks pass it back
+        """Run the chain of the request's spot around work. A hook that changes the spot raises ProvcatError."""
         chain = self.chains[req.spot]
 
         def call(i: int, r: Request) -> Any:
@@ -160,9 +171,9 @@ class Hooks:
 class Proxy:
     """The part of the proxy configuration that one app gets."""
 
-    app: str | None
-    cache_root: str | None
-    hooks: Hooks
+    app: str | None  # The app's name; None when there was no app and no file
+    cache_root: str | None  # The app's cache folder from the file, with ~ expanded; None for none
+    hooks: Hooks  # The app's hooks
 
 
 def _registered() -> dict[str, Any]:
@@ -194,11 +205,15 @@ def _section(path: Path, app: str, data: Any) -> dict:
     return sec
 
 
-def load(app: str | None, path: str | Path | None = None) -> Proxy:
-    """The hooks and the cache root of app, from the proxy configuration at
-    path, PROVCAT_HOOKS or ~/.config/provcat/hooks.yaml. With no app and no
-    file there are no hooks. A named app with no file or no section is an
-    error, so a missing file never turns a gate off quietly."""
+def load(
+    app: str | None,  # The app to load; None loads the default section
+    path: str | Path | None = None,  # The hooks file; None takes PROVCAT_HOOKS, then ~/.config/provcat/hooks.yaml
+) -> Proxy:  # The app's name, cache root and hooks
+    """Load one app's hooks and cache root from the proxy configuration, a hooks file.
+
+    With no app and no file there are no hooks. A named app with no file or
+    no section is a ConfigError, so a missing file never turns a gate off
+    quietly."""
     named = path or os.environ.get("PROVCAT_HOOKS")
     file = Path(named or DEFAULT_FILE).expanduser()
     if not file.is_file():
@@ -354,7 +369,11 @@ def context(app: str | None, tenant: str | None, principal: str | None = None) -
 
 # Hooks that come with provcat
 
-def log(ctx: Context, req: Request, next: Callable[[Request], Any]) -> Any:
+def log(
+    ctx: Context,  # Who uses the catalog
+    req: Request,  # The request at this spot
+    next: Callable[[Request], Any],  # The rest of the chain and the work
+) -> Any:  # What next returns, unchanged
     """A recorder: one JSON line on stderr for each request, after it ends."""
     line = {"app": ctx.app, "spot": req.spot,
             "logical": str(req.logical) if req.logical else None,
@@ -372,10 +391,15 @@ def log(ctx: Context, req: Request, next: Callable[[Request], Any]) -> Any:
     return out
 
 
-def logical_only(ctx: Context, req: Request, next: Callable[[Request], Any]) -> Any:
-    """A gate: refuse a physical URI, so the app reads and writes through the
-    names of its configuration. It holds back code that cooperates; code that
-    writes its own configuration can name any place."""
+def logical_only(
+    ctx: Context,  # Who uses the catalog
+    req: Request,  # The request at this spot
+    next: Callable[[Request], Any],  # The rest of the chain and the work
+) -> Any:  # What next returns; AccessDenied for a physical URI
+    """A gate: refuse a physical URI, so the app reads and writes through the names of its configuration.
+
+    It holds back code that cooperates; code that writes its own
+    configuration can name any place. The session spot always passes."""
     if req.spot != "session" and req.logical is None:
         raise AccessDenied(f"{req.physical}: app {ctx.app or 'default'} reads and writes "
                            f"only logical URIs")
