@@ -16,6 +16,11 @@ from typing import TYPE_CHECKING
 from .errors import EvidenceError
 from .events import EvidenceEvent, sha256_bytes
 
+__all__ = [
+    "ENDINGS", "RunCheck", "bundle_pin", "read_events", "verify", "verify_against", "verify_bundle",
+    "verify_experiment", "verify_outputs", "verify_run", "verify_store_copy",
+]
+
 if TYPE_CHECKING:
     from provcat import Catalog
 
@@ -43,9 +48,12 @@ def _lines(folder: Path) -> list[str]:
     return lines
 
 
-def read_events(folder: Path) -> list[EvidenceEvent]:
-    """The events of an evidence folder. Raises EvidenceError if events.jsonl
-    cannot be read, or at a line that is not an event."""
+def read_events(
+    folder: Path,  # A run's evidence folder, which holds `events.jsonl`
+) -> list[EvidenceEvent]:  # Its events, in the order of the lines
+    """Read the events of an evidence folder.
+
+    Raises EvidenceError if events.jsonl cannot be read, or at a line that is not an event."""
     events = []
     for n, line in enumerate(_lines(folder)):
         try:
@@ -86,18 +94,20 @@ def _digest(path: Path) -> str | None:
         return None
 
 
-def verify(folder: Path | RunRecord, run_id: str | None = None) -> list[str]:
-    """Check the chain, the sequence, the payloads and the manifest of one
-    evidence folder, or of a run that a store reads back, and that it is the whole record of one run: run_created
-    first, one ending event last, as many events as the manifest says, the
-    payloads that the manifest lists, and the run ID given, if one is. Returns
-    the problems found; an empty list means it verifies. A malformed folder
-    gives problems, never an exception.
+def verify(
+    folder: Path | RunRecord,  # An evidence folder, or a run that a store reads back
+    run_id: str | None = None,  # The run the events must be of; `None` to accept any one run
+) -> list[str]:  # The problems found; empty when it verifies
+    """Check that a run's evidence is consistent and whole.
 
-    The check proves that the folder is consistent. Someone who can write the
-    folder can still write a consistent false record. To rule that out,
-    compare the folder with the bundle committed in the store, which
-    ``verify_against`` does."""
+    It checks the chain, the sequence, the payloads and the manifest, and that the evidence is the whole
+    record of one run: run_created first, one ending event last, as many events as the manifest says, the
+    payloads that the manifest lists, and the run ID given, if one is. A malformed folder gives problems,
+    never an exception.
+
+    The check proves that the folder is consistent. Someone who can write the folder can still write a
+    consistent false record. To rule that out, compare the folder with the bundle committed in the store,
+    which ``verify_against`` does."""
     from .store import FolderRecord, RunRecord
 
     record = folder if isinstance(folder, RunRecord) else FolderRecord(Path(folder))
@@ -188,9 +198,14 @@ def verify(folder: Path | RunRecord, run_id: str | None = None) -> list[str]:
     return problems
 
 
-def verify_against(folder: Path, events: bytes, manifest: bytes) -> list[str]:
-    """Compare the local evidence with the events and the manifest read from
-    the committed bundle. A difference means that one of them was changed."""
+def verify_against(
+    folder: Path,  # The local evidence folder
+    events: bytes,  # The bytes of `events.jsonl` in the committed bundle
+    manifest: bytes,  # The bytes of `manifest.json` in the committed bundle
+) -> list[str]:  # A problem for each of the two files that differs; empty when both are the same
+    """Compare the local evidence with the committed bundle.
+
+    A difference means that one of them was changed."""
     problems = []
     for name, committed in (("events.jsonl", events), ("manifest.json", manifest)):
         try:
@@ -202,10 +217,13 @@ def verify_against(folder: Path, events: bytes, manifest: bytes) -> list[str]:
     return problems
 
 
-def verify_outputs(run_folder: Path) -> list[str]:
-    """The files in output/ must be exactly the recorded outputs, with their
-    bytes. Each must be a regular file, recorded once. An output event names
-    its file by its reference, ``<run URI>/output/<path>``."""
+def verify_outputs(
+    run_folder: Path,  # The run folder, which holds `evidence/` and `output/`
+) -> list[str]:  # The problems found; empty when the outputs match the evidence
+    """Check that the files in output/ are exactly the recorded outputs.
+
+    Each must have its recorded bytes, be a regular file, and be recorded once. An output event names its file
+    by its reference, ``<run URI>/output/<path>``."""
     problems = []
     try:
         events = read_events(run_folder / "evidence")
@@ -242,12 +260,15 @@ def verify_outputs(run_folder: Path) -> list[str]:
     return problems
 
 
-def bundle_pin(run_folder: Path, given: str | None = None) -> str | None:
-    """The commit to compare with: given, if there is one, else the one that
-    bundle.json names. bundle.json is in the run folder, so whoever can change
-    the folder can remove it or point it elsewhere; a commit given from outside
-    the folder does not have that weakness. Raises EvidenceError if bundle.json
-    cannot be read."""
+def bundle_pin(
+    run_folder: Path,  # The run folder, which may hold `bundle.json`
+    given: str | None = None,  # The pinned URI of the bundle, given from outside the folder
+) -> str | None:  # The pinned URI to compare with; `None` when neither names one
+    """Find the pinned bundle to compare a run with.
+
+    It is the one given, if there is one, else the one that bundle.json names. bundle.json is in the run
+    folder, so whoever can change the folder can remove it or point it elsewhere; a commit given from outside
+    the folder does not have that weakness. Raises EvidenceError if bundle.json cannot be read."""
     if given:
         return given
     record = run_folder / "bundle.json"
@@ -265,12 +286,17 @@ def bundle_pin(run_folder: Path, given: str | None = None) -> str | None:
     return pinned
 
 
-def verify_bundle(run_folder: Path, pinned: str | None, catalog: Catalog | Callable[[], Catalog] | None, *,
-                  require: bool = False) -> list[str]:
-    """Compare the evidence with the bundle committed at pinned, read through
-    catalog. catalog may be a function that opens one, so that no catalog is
-    opened when there is no bundle to read. A bad URI, a catalog that does not
-    open and a bundle that cannot be read each give a problem."""
+def verify_bundle(
+    run_folder: Path,  # The run folder, whose `evidence/` is compared
+    pinned: str | None,  # The pinned URI of the committed bundle, with `?at=`; `None` when there is none
+    catalog: Catalog | Callable[[], Catalog] | None,  # The catalog to read the bundle through, or a function that opens one, called only when there is a bundle to read
+    *,
+    require: bool = False,  # Give a problem when there is no bundle to compare with
+) -> list[str]:  # The problems found; empty when the evidence matches the bundle, or when there is none and none is required
+    """Compare a run's evidence with its committed bundle, read through the catalog.
+
+    A bad URI, an unpinned URI, a missing catalog, a catalog that does not open and a bundle that cannot be
+    read each give a problem."""
     if not pinned:
         return ["no committed bundle to compare with, and a bundle is required"] if require else []
     from provcat import ProvcatError, parse
@@ -301,8 +327,8 @@ def verify_bundle(run_folder: Path, pinned: str | None, catalog: Catalog | Calla
 class RunCheck:
     """The result of ``verify_run``."""
 
-    run_id: str
-    problems: list[str] = field(default_factory=list)
+    run_id: str  # The run checked: the name of its folder
+    problems: list[str] = field(default_factory=list)  # The problems found; empty when the run verifies
     pinned: str | None = None  # the committed bundle compared with, if any
     experiment: str | None = None  # the pinned experiment checked, if the run names one
 
@@ -310,14 +336,20 @@ class RunCheck:
     def ok(self) -> bool:
         return not self.problems
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict:  # `run_id`, `ok`, `problems`, `pinned` and `experiment`
+        """The result as a dict that JSON can hold, with ``ok`` beside the fields."""
         return {"run_id": self.run_id, "ok": self.ok, "problems": self.problems, "pinned": self.pinned,
                 "experiment": self.experiment}
 
 
-def verify_store_copy(run_folder: Path, store: EvidenceStore) -> list[str]:
-    """Check the run as the store holds it, and that the files in the run's
-    evidence folder, which are its bundle, are the same as the store's."""
+def verify_store_copy(
+    run_folder: Path,  # The run folder; its name is the run ID
+    store: EvidenceStore,  # The store that holds the run
+) -> list[str]:  # The problems found: those of the store's copy start `in the store:`, and the others name what differs; empty for a store that cannot read runs back
+    """Check a run as the store holds it, against its run folder.
+
+    The store's copy must verify, and the files in the run's evidence folder, which are its bundle, must be
+    the same as the store's. For a store that records the bundle, the record must match bundle.json."""
     from .errors import CannotReadBack, ProveviError
 
     run_id = Path(run_folder).name
@@ -358,17 +390,20 @@ def verify_store_copy(run_folder: Path, store: EvidenceStore) -> list[str]:
     return problems
 
 
-def verify_run(run_folder: Path, *, catalog: Catalog | Callable[[], Catalog] | None = None,
-               bundle: str | None = None, require_bundle: bool = False,
-               store: EvidenceStore | None = None) -> RunCheck:
-    """Check a run as ``prove verify`` does: its evidence, then its outputs,
-    then its committed bundle, then the version of the experiment that it
-    names, read at its pin, whose hash must match the run's. With a store
-    that keeps its own record, such as
-    a SqliteStore, the run as the store holds it is checked too, and must
-    match the folder. A malformed run gives problems, never an
-    exception. bundle is the pinned URI of the bundle, taken
-    from outside the run folder; without it, the one in bundle.json is used."""
+def verify_run(
+    run_folder: Path,  # The run folder; its name is the run ID
+    *,
+    catalog: Catalog | Callable[[], Catalog] | None = None,  # The catalog to read the bundle and the experiment through, or a function that opens one, called once when it succeeds, and called again by the next check after it fails
+    bundle: str | None = None,  # The pinned URI of the bundle, taken from outside the run folder; `None` to use the one in bundle.json
+    require_bundle: bool = False,  # Give a problem when there is no bundle to compare with
+    store: EvidenceStore | None = None,  # The store the run was written through; a store other than a FileStore is checked too
+) -> RunCheck:  # The run ID, the problems found, and the bundle and experiment checked
+    """Check a run as ``prove verify`` does.
+
+    It checks the evidence, then the outputs, then the committed bundle, then the version of the experiment
+    that the run names, read at its pin, whose hash must match the run's. With a store that keeps its own
+    record, such as a SqliteStore, the run as the store holds it is checked too, and must match the folder. A
+    malformed run gives problems, never an exception."""
     run_folder = Path(run_folder)
     check = RunCheck(run_folder.name)
     check.problems = verify(run_folder / "evidence", run_id=run_folder.name)
@@ -408,10 +443,13 @@ def _once(open_catalog: Callable[[], Catalog]) -> Callable[[], Catalog]:
     return get
 
 
-def verify_experiment(run_folder: Path, catalog: Catalog | Callable[[], Catalog] | None) -> list[str]:
-    """Problems with the experiment that a run names in run_created: its
-    pin must read through catalog, and the file there must have the hash
-    the run recorded. Nothing for a run that names no experiment."""
+def verify_experiment(
+    run_folder: Path,  # The run folder, whose run_created event names the experiment
+    catalog: Catalog | Callable[[], Catalog] | None,  # The catalog to read the experiment through, or a function that opens one
+) -> list[str]:  # The problems found; empty when the experiment matches, or the run names none
+    """Check the experiment that a run names in run_created.
+
+    Its pin must read through the catalog, and the file there must have the hash that the run recorded."""
     from .experiments import experiment_problems
 
     created = read_events(Path(run_folder) / "evidence")[0].data

@@ -39,6 +39,8 @@ from .events import EvidenceEvent
 from .store import EvidenceStore, RunRecord
 from .telemetry import LEVELS, RUN_MODEL_KEYS, attributes_for, plain_attribute, plain_experiment, plain_name, plain_span_name
 
+__all__ = ["answer_of", "payload_of", "replay", "shown_at"]
+
 # A library's span, whose data holds its own attributes.
 _SPAN = "span_recorded"
 
@@ -89,10 +91,15 @@ def _shown_data(event: EvidenceEvent, level: str) -> dict:
     return data
 
 
-def shown_at(event: EvidenceEvent, level: str | None, record: RunRecord | None = None) -> dict | None:
-    """The ``event`` item that a viewer at level sees of event, or None if
-    level is None, as for a policy with no live viewer. At ``bodies`` the
-    item holds the event's refs, and its payload if record can read it."""
+def shown_at(
+    event: EvidenceEvent,  # The evidence event
+    level: str | None,  # The viewer's level, one of `LEVELS`; `None` when the policy has no live viewer
+    record: RunRecord | None = None,  # The run, to read the event's payload from at `bodies`
+) -> dict | None:  # The `event` item, without its `n`; `None` when level is `None`
+    """Cut an event to the ``event`` item that a viewer at a level sees.
+
+    At ``bodies`` the item holds the event's refs, and its payload if record can read it. Raises ProveviError
+    for a level that is not one."""
     if level is None:
         return None
     if level not in LEVELS:
@@ -112,10 +119,13 @@ def shown_at(event: EvidenceEvent, level: str | None, record: RunRecord | None =
     return item
 
 
-def payload_of(record: RunRecord, digest: str) -> Any:
-    """The payload that digest names in record: its JSON if it is JSON, else
-    its text, with any bytes that are not UTF-8 replaced, or None if record
-    does not hold it. It cuts nothing by level, as shown_at and replay do."""
+def payload_of(
+    record: RunRecord,  # The run that holds the payload
+    digest: str,  # The payload's SHA-256, as an event's `payload` names it
+) -> Any:  # Its JSON if it is JSON, else its text, with bytes that are not UTF-8 replaced; `None` when record does not hold it
+    """Read a payload of a run.
+
+    It cuts nothing by level, unlike shown_at and replay."""
     raw = record.payload_bytes(digest)
     if raw is None:
         return None
@@ -125,9 +135,12 @@ def payload_of(record: RunRecord, digest: str) -> Any:
         return raw.decode("utf-8", errors="replace")
 
 
-def answer_of(payload: Any) -> str | None:
-    """The text of a model call's answer, from its payload: a text from
-    LiteLLM, or PydanticAI's messages, whose text parts are joined. A stream
+def answer_of(
+    payload: Any,  # A model call's payload, as `payload_of` reads it
+) -> str | None:  # The answer's text; `None` when the payload holds none
+    """Find the text of a model call's answer in its payload.
+
+    The payload holds a text from LiteLLM, or PydanticAI's messages, whose text parts are joined. A stream
     that failed part way keeps the text so far as ``partial_response``."""
     if not isinstance(payload, dict):
         return None
@@ -143,14 +156,18 @@ def answer_of(payload: Any) -> str | None:
     return None
 
 
-def replay(store: EvidenceStore, run_id: str, level: str, *, folder: Path | None = None) -> Iterator[dict]:
-    """The feed of a run that has ended, at level, from its evidence: an
-    ``event`` item for each event, a ``text`` item at ``bodies`` after each
-    model call and after a stream that failed part way, and a ``done`` item.
-    folder is the run's evidence folder, which the file store finds by itself
-    if it is left out. Raises
-    ProveviError, before the first item, if the run does not verify, as a
-    run that has not ended does not."""
+def replay(
+    store: EvidenceStore,  # The store that holds the run
+    run_id: str,  # The run's ID
+    level: str,  # The viewer's level, one of `LEVELS`
+    *,
+    folder: Path | None = None,  # The run's evidence folder; the file store finds it by itself when it is left out
+) -> Iterator[dict]:  # The feed's items, each with its `n` from 1
+    """Give the feed of a run that has ended, from its evidence.
+
+    The feed has an ``event`` item for each event, a ``text`` item at ``bodies`` after each model call and
+    after a stream that failed part way, and a ``done`` item. Raises ProveviError, before the first item, if
+    the run does not verify, as a run that has not ended does not."""
     if level not in LEVELS:
         raise ProveviError(f"{level!r} is not a level; use one of {', '.join(LEVELS)}")
     record = store.read_run(run_id, folder)

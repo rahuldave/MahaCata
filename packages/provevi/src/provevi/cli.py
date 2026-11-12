@@ -19,6 +19,8 @@ from .events import EvidenceEvent
 from .runs import default_runs_root, find_run
 from .store import EvidenceStore, FileStore, open_store
 
+__all__ = ["main", "add_verify_arguments", "verify_command", "cmd_show"]
+
 
 def store_of(args) -> EvidenceStore:
     """The store that --store names, opened to read, or the file store under --runs."""
@@ -118,7 +120,12 @@ def cmd_access(args) -> int:
     return 0
 
 
-def cmd_show(args) -> int:
+def cmd_show(
+    args: argparse.Namespace,  # The parsed arguments: `run`, `runs` and `store`
+) -> int:  # The exit code: 0
+    """Print the events of a run, one line each, as ``prove show`` and ``provr show`` do.
+
+    The events come from the store when it holds the run, else from the run folder."""
     for e in _events(args):
         refs = " ".join(e.refs)
         data = json.dumps(e.data, ensure_ascii=False, default=str)
@@ -218,9 +225,15 @@ def cmd_ui(args) -> int:
     return subprocess.call(command, env=env)
 
 
-def verify_command(args, prog: str, folder: Path | None = None) -> int:
-    """The verify command of prove, and of provr, which calls it with the
-    run folder it found."""
+def verify_command(
+    args: argparse.Namespace,  # The parsed arguments that `add_verify_arguments` adds, with `runs` and `store`
+    prog: str,  # The program's name, which starts each problem printed to stderr
+    folder: Path | None = None,  # The run folder, when the caller found it already; `None` to find `args.run`
+) -> int:  # The exit code: 0 when the run verifies, 1 when it does not
+    """Run the verify command of prove and of provr.
+
+    It checks the run with ``verify_run``, prints each problem to stderr, and prints a summary when the run
+    verifies."""
     store = store_of(args)
     folder = folder if folder is not None else run_folder(args, store)
 
@@ -240,7 +253,10 @@ def verify_command(args, prog: str, folder: Path | None = None) -> int:
     return 0 if check.ok else 1
 
 
-def add_verify_arguments(v: argparse.ArgumentParser) -> None:
+def add_verify_arguments(
+    v: argparse.ArgumentParser,  # The parser of a verify command
+) -> None:  # Adds the arguments to v
+    """Add the arguments of the verify command: the run, --config, --tenant, --bundle and --require-bundle."""
     v.add_argument("run", help="a run ID under the runs root, or the path of a run folder")
     v.add_argument("--config", help="the provcat configuration, to read the committed bundle and the experiment")
     v.add_argument("--tenant", help="the provcat tenant")
@@ -250,7 +266,10 @@ def add_verify_arguments(v: argparse.ArgumentParser) -> None:
                    help="fail if there is no committed bundle to compare with")
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,  # The arguments, without the program's name; `None` for `sys.argv`
+) -> int:  # The command's exit code: 0 when it succeeds; 1 when verify finds problems, when policy finds problems such as an unapproved version, or for a provevi or provcat error; 2 for an EvidenceError; ui gives MLflow's exit code. Bad arguments raise SystemExit with 2, from argparse
+    """Run the prove command line."""
     ap = argparse.ArgumentParser(prog="prove", description=__doc__.splitlines()[0])
     ap.add_argument("--runs", type=Path, default=default_runs_root(), help="the runs root")
     ap.add_argument("--store", help="the evidence store: file (the default) or sqlite:///path")

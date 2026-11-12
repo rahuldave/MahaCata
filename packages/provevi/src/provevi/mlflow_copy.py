@@ -63,6 +63,8 @@ from .store import EvidenceStore, FileStore
 from .telemetry import RUN_MODEL_KEYS, TelemetryPolicy, attributes_for, normal_endpoint, plain_attribute, plain_name, \
     plain_span_name, span_libraries
 
+__all__ = ["MlflowCopy", "copy_run", "refuse_redirects", "tracking_target", "ui_command"]
+
 #: The MLflow minor release that the copy is tested against.
 MLFLOW_TESTED = "3.17"
 #: The MLflow run tag that holds provrun's run ID.
@@ -107,25 +109,28 @@ _MYSQL = ("MYSQL_HOST", "MYSQL_TCP_PORT", "MYSQL_UNIX_PORT", "MYSQL_PWD")
 
 @dataclass(frozen=True)
 class MlflowCopy:
-    """Where a run was copied. tracking_uri holds no user or password."""
-    run_id: str
-    destination: str
-    level: str
-    tracking_uri: str
-    experiment_id: str
-    mlflow_run_id: str
-    trace_id: str | None
-    spans: int
-    assessments: int = 0
-    replaced: list[str] = field(default_factory=list)
+    """Where a run was copied in MLflow, and what the copy holds."""
+    run_id: str  # provrun's run ID
+    destination: str  # The name of the policy's mlflow destination that approved the copy
+    level: str  # The destination's level, which says what the copy holds
+    tracking_uri: str  # Where the copy went, with no user or password
+    experiment_id: str  # MLflow's ID of the experiment the copy is in
+    mlflow_run_id: str  # MLflow's ID of the run it made
+    trace_id: str | None  # MLflow's ID of the run's trace; `None` when it wrote none
+    spans: int  # The number of spans in the trace
+    assessments: int = 0  # The number of assessments copied onto the trace
+    replaced: list[str] = field(default_factory=list)  # MLflow's IDs of the earlier copies of the run, now deleted, or marked deleted on a tracking server
 
 
-def tracking_target(policy: TelemetryPolicy, store: EvidenceStore,
-                    environ: Mapping[str, str] | None = None) -> tuple[str, str, str]:
-    """The destination's name, its level and the tracking URI for a copy,
-    from MLFLOW_TRACKING_URI in environ. Raises ProveviError when the policy
-    approves no mlflow destination for it, or when the variable is unset and
-    the store has no file of its own."""
+def tracking_target(
+    policy: TelemetryPolicy,  # The telemetry policy, whose mlflow destination must match
+    store: EvidenceStore,  # The store, whose own file takes the copy when MLFLOW_TRACKING_URI is unset
+    environ: Mapping[str, str] | None = None,  # The environment to read MLFLOW_TRACKING_URI from; `None` for `os.environ`
+) -> tuple[str, str, str]:  # The destination's name, its level and the tracking URI
+    """Find where a copy of a run goes, and at what level, from MLFLOW_TRACKING_URI.
+
+    Raises ProveviError when the policy approves no mlflow destination for it, or when the variable is unset
+    and the store has no file of its own."""
     environ = os.environ if environ is None else environ
     url = environ.get("MLFLOW_TRACKING_URI") or None
     dest = policy.match_destination("mlflow", url)
@@ -141,13 +146,19 @@ def tracking_target(policy: TelemetryPolicy, store: EvidenceStore,
     return dest.name, dest.receives, url
 
 
-def copy_run(store: EvidenceStore, run_id: str, policy: TelemetryPolicy, *,
-             environ: Mapping[str, str] | None = None, folder: Path | None = None) -> MlflowCopy:
-    """Copy one sealed run into MLflow, at the place and the level that the
-    policy approves for MLFLOW_TRACKING_URI. folder is the run's evidence
-    folder, which the file store needs. Raises ProveviError if the run does
-    not verify, if the policy approves no place, or if MLflow cannot write
-    there."""
+def copy_run(
+    store: EvidenceStore,  # The store that holds the run
+    run_id: str,  # The run's ID
+    policy: TelemetryPolicy,  # The telemetry policy, which approves the place and gives the level
+    *,
+    environ: Mapping[str, str] | None = None,  # The environment to read MLFLOW_TRACKING_URI from; `None` for `os.environ`. The redirect variables are always read from `os.environ`
+    folder: Path | None = None,  # The run's evidence folder, which the file store needs
+) -> MlflowCopy:  # Where the copy went and what it holds
+    """Copy one sealed run into MLflow.
+
+    The copy goes to the place, and at the level, that the policy approves for MLFLOW_TRACKING_URI. A copy
+    made before is deleted first. Raises ProveviError if the run does not verify, if the policy approves no
+    place, or if MLflow cannot write there."""
     if not isinstance(run_id, str) or not _RUN_ID.fullmatch(run_id):
         raise ProveviError(f"{run_id!r} is not a run ID that MLflow can be searched for")
     record = store.read_run(run_id, folder)
@@ -208,11 +219,15 @@ def _shown_error(e: Exception, url: str) -> str:
     return text.replace(password, "<password>") if password else text
 
 
-def refuse_redirects(url: str, environ: Mapping[str, str] | None = None) -> None:
-    """Raise ProveviError if a variable in environ, by default os.environ,
-    would send a copy to url somewhere else, or change which servers it
-    trusts. provrun calls it as a run starts, so that the run records a
-    copy that would be refused."""
+def refuse_redirects(
+    url: str,  # The tracking URI the copy goes to
+    environ: Mapping[str, str] | None = None,  # The environment to check; `None` for `os.environ`
+) -> None:  # Returns when no variable redirects the copy; ProveviError naming them otherwise
+    """Refuse a copy that a variable would send somewhere else.
+
+    Raises ProveviError if a variable in environ, such as a proxy, would send a copy to url somewhere else, or
+    change which servers it trusts. provrun calls it as a run starts, so that the run records a copy that
+    would be refused."""
     env = os.environ if environ is None else environ
     scheme = url.split(":", 1)[0].lower().split("+", 1)[0]
     if scheme in ("http", "https"):
@@ -716,9 +731,13 @@ def _proto(trace: str, span: str, parent: str | None, name: str, start: int, end
 
 
 
-def ui_command(path: Path, port: int) -> tuple[list[str], dict[str, str]]:
-    """The command that serves MLflow's viewer on the store's file at path,
-    on 127.0.0.1 only, and its environment. The file stays in WAL mode."""
+def ui_command(
+    path: Path,  # The store's SQLite file
+    port: int,  # The port on 127.0.0.1
+) -> tuple[list[str], dict[str, str]]:  # The command, and its environment: this process's, without its MLflow and OpenTelemetry variables, plus provevi's MLflow settings, which turn off MLflow's telemetry
+    """Make the command that serves MLflow's viewer on the store's file, on 127.0.0.1 only.
+
+    It puts the file in WAL mode, where it stays."""
     path = Path(path)
     _wal(path)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("MLFLOW_", "OTEL_"))}

@@ -17,8 +17,11 @@ from pathlib import Path
 
 from .errors import RunNotFound
 
+__all__ = ["default_runs_root", "find_run", "list_runs"]
 
-def default_runs_root() -> Path:
+
+def default_runs_root() -> Path:  # PROVRUN_RUNS, or `$XDG_DATA_HOME/provrun/runs`, or `~/.local/share/provrun/runs`
+    """The folder that holds the runs, from the environment; it need not exist."""
     env = os.environ.get("PROVRUN_RUNS")
     if env:
         return Path(env)
@@ -26,12 +29,15 @@ def default_runs_root() -> Path:
     return (Path(xdg) if xdg else Path.home() / ".local" / "share") / "provrun" / "runs"
 
 
-def find_run(run: str | Path, root: str | Path | None = None, *, ids_only: bool = False) -> Path:
-    """The folder of a run, as an absolute path. run is a run ID under root
-    (the default runs root when None), or else a path to a run folder. With
-    ids_only, run must be a run ID, so a name from a user cannot reach
-    another folder. A run ID that names a link under root is refused.
-    Raises RunNotFound."""
+def find_run(
+    run: str | Path,  # A run ID under root, or else a path to a run folder
+    root: str | Path | None = None,  # The runs root; `None` for the default runs root
+    *,
+    ids_only: bool = False,  # Accept a run ID only, so a name from a user cannot reach another folder
+) -> Path:  # The run's folder, as an absolute path
+    """Find the folder of a run.
+
+    A run ID that names a link under root is refused. Raises RunNotFound."""
     text = str(run)
     root = Path(root) if root is not None else default_runs_root()
     if text and text not in (".", "..") and not re.search(r"[/\\]", text):
@@ -48,9 +54,12 @@ def find_run(run: str | Path, root: str | Path | None = None, *, ids_only: bool 
     raise RunNotFound(f"no run {text!r} under {root}")
 
 
-def list_runs(root: str | Path | None = None) -> list[str]:
-    """The run IDs under root, oldest first. A run ID starts with its UTC time.
-    Links are left out, as find_run refuses them."""
+def list_runs(
+    root: str | Path | None = None,  # The runs root; `None` for the default runs root
+) -> list[str]:  # The run IDs; empty when root is no folder
+    """List the run IDs under a runs root, oldest first.
+
+    A run ID starts with its UTC time. Links are left out, as find_run refuses them."""
     root = Path(root) if root is not None else default_runs_root()
     if not root.is_dir():
         return []
