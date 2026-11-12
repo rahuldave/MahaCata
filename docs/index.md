@@ -2,7 +2,15 @@
 title: MahaCata
 ---
 
-MahaCata holds three Python packages that work together.
+MahaCata runs AI agents on your data, and keeps a record of each run that you can check later.
+
+An agent's answer is only as good as what you know about how it got it. You need to know which data it read, and which version of that data. You also need the prompt, the model and each tool that it called. The data changes after the run, and so do the prompt and the model. So a month later, nobody can say for sure what the agent saw.
+
+MahaCata answers that in three ways. First, code names its data by a name that stays the same when the data moves, and MahaCata pins the version that each run reads. Second, it runs the agent in a folder of its own, where the inputs are read-only. Third, it records each step of the run as an event, and each event holds the hash of the one before it. A later change to the record breaks that chain, so a check finds it.
+
+When the run file names a store for runs, MahaCata commits the record and the agent's answers there together, under the name of the run. A reviewer can then ask which runs read a file, and which version each one saw. They can also check that no one has changed an answer or the record since.
+
+MahaCata is three Python packages that work together.
 
 - **provcat** resolves catalog URIs. A catalog URI names a dataset, a model, a prompt or some code in words that stay the same when the storage changes. provcat turns it into the URI of a store, such as S3, lakeFS, GitHub or Hugging Face, or into a pinned version. It reads the object, or fetches it into a local cache and returns the path. A local file needs no cache. It writes to every store except GitHub and Hugging Face. It commits in lakeFS and in versioned buckets, branches in lakeFS and in any bucket, and merges in lakeFS. It makes read-only snapshots of pinned versions.
 - **provrun** runs agents and model calls on data that provcat resolves. It asks a broker for each input, stages provcat's read-only snapshots of them and runs the agent. It records the evidence of the run as a chain of hashed events.

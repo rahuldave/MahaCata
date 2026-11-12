@@ -2,9 +2,9 @@
 title: What MahaCata does
 ---
 
-MahaCata follows one file from a store, into a run of an agent, and into the evidence of that run. Three packages share the work. provcat names and fetches the file, provrun runs the agent on it, and provevi keeps the evidence of the run and checks it.
+MahaCata follows one file from a store, into a run of an agent, and into the evidence of that run. It follows the agent's answer too, from the run folder back into a store. Three packages share the work. provcat names and fetches the file, and writes the answer back. provrun runs the agent on it, and provevi keeps the evidence of the run and checks it.
 
-This page shows one example from each package. Each one comes from [the provrun tour](provrun-tour.md), which runs the whole path on your own machine. Each package also has its own page of features and its own tour, listed at the end.
+This page tells the story of one piece of work first. Then it draws the path of the input and the path of the output, and shows one example from each package. Each one comes from [the provrun tour](provrun-tour.md), which runs the whole path on your own machine. Each package also has its own page of features and its own tour, listed at the end.
 
 ## Terms
 
@@ -20,7 +20,25 @@ This page shows one example from each package. Each one comes from [the provrun 
 | telemetry policy | The operator's file that says which libraries may record a run, which hosts it may reach, and where data from it may go. |
 | destination | A place outside the evidence that data may go to, such as an OpenTelemetry collector or MLflow. |
 
-## The path of one file
+## One piece of work
+
+An analyst keeps a company's annual report in a bucket. They want an agent to answer one question about it. The question is "What was revenue in 2025?"
+
+The analyst puts the report in the bucket with provcat, under the logical URI `data://acme/demo/dev/reports/report.txt`, and commits it. Then they write a run file. It names the agent, the model, the question and that one input. It also names `run` as the scheme for the bundle, so provcat will commit the run to a store when it ends.
+
+They start the run with `provr run`. provrun asks the broker whether the run may read the report, and the broker says yes. provcat pins the version that the bucket holds now, and makes a read-only snapshot of it. provrun stages that snapshot in a new run folder and runs the agent. The agent answers that revenue was 42 million, and its answer lands in `output/response.txt`. provrun records each of these steps as an event.
+
+At the end, provrun seals the evidence, and provcat commits the evidence and the answer to the bucket for runs, in one commit.
+
+Weeks later, the finance team restates the figure. The analyst puts the new report under the same logical URI and runs the same run file again. The run file did not change, but this run pins the new version, so the agent reads the restated figure. The first run's evidence still names the old version and its SHA-256, and the bucket still holds those bytes.
+
+Then a reviewer asks where the figure of 42 million came from. They ask provevi which runs read the report, and get both runs. The evidence of the first run names the version it read. The reviewer gives that pinned URI to a new run, and the agent sees the report exactly as it was before the restatement.
+
+Last, the reviewer checks each run with `prove verify`. Someone had edited the second run's answer in its run folder. The check says `output response.txt was changed`.
+
+Each step of this story has a step in [the provrun tour](provrun-tour.md), which you can run on your own machine. The sections below draw the path, and then show the commands.
+
+## The path of one input
 
 provrun drives every step, and calls provcat for the steps that touch a store. The picture below is a short form of [the tour's picture](provrun-tour.md#the-path-of-one-input).
 
@@ -40,6 +58,27 @@ runs/<run ID>/input/report.txt                     the agent reads its input her
   v
 the evidence of the run                            provevi keeps it, queries it and checks it
 ```
+
+## The path of the output
+
+The agent writes its answers in the output folder of the run. provrun hashes each file there, and commits the files with the evidence. The run's URI is `run://<org>/<domain>/<env>/<run ID>`, and each output has a URI under it.
+
+```text
+runs/<run ID>/output/response.txt                  the agent writes its answer here
+  | provrun hashes each file in output/, and records output_artifact_created
+  |   with the SHA-256 of the file and its URI under the run
+  | provrun records run_completed, and seals the evidence
+  v
+run://acme/demo/dev/<run ID>/output/response.txt   the logical URI of the answer
+  | provcat writes evidence/ and output/ under the run's URI, and commits both in one commit
+  v
+local-s3://runs/main/acme/demo/dev/<run ID>?at=commit:C   the pinned URI that provr run prints as pinned
+  | prove verify hashes the output again, and compares the evidence with that commit
+  v
+a check that the answer is the one the agent wrote
+```
+
+The run file must set `bundle_scheme` for the commit to happen. Without it, the outputs and the evidence stay in the run folder, and `prove verify` can check only that folder. The input folder and the scratch folder are not part of the bundle. The evidence names each input by its pinned URI and its SHA-256 instead.
 
 provrun depends on provevi and provcat, and provevi depends on provcat. provcat depends on neither, so it works alone.
 
