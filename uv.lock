@@ -2106,9 +2106,9 @@ dev = [
     { name = "moto", extras = ["server"], specifier = ">=5.2.4" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pytest", specifier = ">=9.1.1" },
-    { name = "smalldocs", specifier = ">=0.5.4" },
+    { name = "smalldocs", specifier = ">=0.5.6" },
 ]
-docs = [{ name = "smalldocs", specifier = ">=0.5.4" }]
+docs = [{ name = "smalldocs", specifier = ">=0.5.6" }]
 system = [
     { name = "azure-mgmt-resource", specifier = ">=26.0.0" },
     { name = "azure-mgmt-storage", specifier = ">=25.3.0" },
@@ -4247,7 +4247,7 @@ wheels = [
 
 [[package]]
 name = "smalldocs"
-version = "0.5.4"
+version = "0.5.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastcore" },
@@ -4256,9 +4256,9 @@ dependencies = [
     { name = "pygments" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5e/5e/06db4ac785457536c213408ea0d3833ffd6db595542fb3713214ed472019/smalldocs-0.5.4.tar.gz", hash = "sha256:4588b88572036232b49663abeee78e11ceae9aeee69264cc1c44baf7be54c51d", size = 2854603, upload-time = "2026-10-22T19:00:14.539Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a0/41/edd618cc81e170135b95a5e5b487cff6d0d3bec1374b7c1032cb44976e39/smalldocs-0.5.6.tar.gz", hash = "sha256:352ebfb585870efa2564817c03b2907563a2d26bda51f5873c5b6480526c9045", size = 2863802, upload-time = "2026-11-12T04:28:45.389Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/57/e0/8daab46faf48cdd83d13a49790986068cbaec3f5402d318d2976c86056d2/smalldocs-0.5.4-py3-none-any.whl", hash = "sha256:9d857ecbf5184551f161cf046aded10387b19cacbe3034fd9afbea70be61b1ae", size = 1340917, upload-time = "2026-10-22T19:00:11.94Z" },
+    { url = "https://files.pythonhosted.org/packages/45/9f/ffba65c5c5cd4521f0c25fc55a81af262ac6ed4a5d5c9da53c377986316c/smalldocs-0.5.6-py3-none-any.whl", hash = "sha256:5998fb802b7600429c451923f5e5000e2e33bb06f63a0f3a91660ed9a535b7ba", size = 1342052, upload-time = "2026-11-12T04:28:42.887Z" },
 ]
 
 [[package]]

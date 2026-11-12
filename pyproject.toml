@@ -41,10 +41,10 @@ dev = [
     "moto[server]>=5.2.4",
     "psycopg[binary]>=3.2",
     "pytest>=9.1.1",
-    "smalldocs>=0.5.4",  # the tour's tests read heading IDs as the site makes them
+    "smalldocs>=0.5.6",  # the tour's tests read heading IDs as the site makes them
 ]
 docs = [
-    "smalldocs>=0.5.4",
+    "smalldocs>=0.5.6",
 ]
 system = [
     "azure-mgmt-resource>=26.0.0",
