@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 import smalldocs.api as api
-from fastcore.docments import docments  # smalldocs depends on fastcore
 
 PACKAGES = ["provcat", "provrun", "provevi"]
 
@@ -87,21 +86,8 @@ def test_the_package_exports_only_names_its_modules_export(package):
     assert not unlisted, f"in {package}.__all__ but not in its module's __all__: {unlisted}"
 
 
-def real_gaps(sym):
-    """gaps_of, less a `**kw` whose comment is there and whose docstring says what it takes.
-
-    smalldocs asks fastcore for docments without `args_kwargs=True`, so it never reads the
-    comment beside `**kw`, and the page shows the row bare. The docstring, which the page
-    does show, must then name the keyword arguments."""
-    said = docments(sym, full=True, args_kwargs=True)
-    star = {n for n, d in said.items() if getattr(d, "kind", None) == inspect.Parameter.VAR_KEYWORD and d.docment}
-    told = "keyword argument" in api.doc(sym).lower()
-    return [g for g in api.gaps_of(sym)
-            if not (told and any(g.endswith(f"({n}): no docment") for n in star))]
-
-
 @pytest.mark.parametrize("package", PACKAGES)
 def test_each_exported_name_is_typed_and_documented(package):
     gaps = [g for m in modules(package) if not api.doc(m) for g in [f"{m.__name__}: no module docstring"]]
-    gaps += [g for m in modules(package) for sym in exported(m) for g in real_gaps(sym)]
+    gaps += [g for m in modules(package) for sym in exported(m) for g in api.gaps_of(sym)]
     assert not gaps, f"{len(gaps)} gaps:\n" + "\n".join(gaps)
