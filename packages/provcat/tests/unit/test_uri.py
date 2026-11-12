@@ -64,3 +64,10 @@ def test_selector_with_ampersand_round_trips():
 def test_child_refuses_traversal():
     with pytest.raises(UriError):
         Uri("s3", "b").child("..")
+
+
+@pytest.mark.parametrize("name", ["", ".", "..", "a/b", "a\\b", "a\0b"])
+def test_child_refuses_each_bad_segment(name):
+    # The Uri.child docment lists these.
+    with pytest.raises(UriError):
+        Uri("s3", "b").child(name)

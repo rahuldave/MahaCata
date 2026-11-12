@@ -105,6 +105,8 @@ from .errors import ResolveError, UriError
 from .timestamps import parse_ts
 from .uri import _SAFE, Selector, Uri, parse, parse_selector
 
+__all__ = ["Resolution", "Resolver", "TemplateResolver"]
+
 _NAME = re.compile(r"[a-z_][a-z0-9_]*")
 _REF_KINDS = ("branch", "tag", "commit")
 _STORE_VALUE = re.compile(r"[a-z0-9]+")
@@ -112,18 +114,30 @@ _STORE_VALUE = re.compile(r"[a-z0-9]+")
 
 @dataclass(frozen=True)
 class Resolution:
-    logical: Uri
-    physical: Uri
-    via: tuple[str, ...] = field(default=())  # the steps taken, for people to read
-    ts_branch: str | None = None  # the branch of a ts: that the physical URI has no place for
+    """The answer of a lookup: the URI asked for, the physical URI it names, and how."""
+
+    logical: Uri  # The URI asked for; for a physical URI, the URI itself
+    physical: Uri  # The physical URI, whose scheme names a store
+    via: tuple[str, ...] = field(default=())  # The steps taken, for people to read
+    ts_branch: str | None = None  # The branch of a ts: that the physical URI has no place for
 
 
 class Resolver(ABC):
-    @abstractmethod
-    def handles(self, scheme: str) -> bool: ...
+    """The interface of a resolver, which turns logical URIs into physical ones."""
 
     @abstractmethod
-    def resolve(self, uri: Uri) -> Resolution: ...
+    def handles(
+        self,
+        scheme: str,  # A URI scheme
+    ) -> bool:  # Whether scheme is a logical scheme of this resolver
+        """Tell whether this resolver resolves the URIs of a scheme."""
+
+    @abstractmethod
+    def resolve(
+        self,
+        uri: Uri,  # A logical URI of a scheme that this resolver handles
+    ) -> Resolution:  # The physical URI and the steps taken; ResolveError when the URI does not fit
+        """Turn a logical URI into a physical one."""
 
 
 def _uses_ref(target: str) -> bool:
@@ -331,12 +345,16 @@ def _entry(key: object, raw: object, specs: dict[str, SchemeSpec]) -> EntrySpec:
 
 
 class TemplateResolver(Resolver):
-    def __init__(self, schemes: dict | None = None, stages: dict | None = None, tenant: str | None = None,
-                 entries: dict | None = None, refs_in_path: Callable[[str], bool | None] | None = None):
-        """``refs_in_path`` takes a store name, and gives False for a bucket,
-        which keeps only branches in its path, True for a store such as
-        lakeFS, and None for a name it does not know. Without it, every store
-        is taken to keep refs in its path."""
+    """The default resolver: fills the target template of a scheme, or of an entry, from the parts of the URI."""
+
+    def __init__(
+        self,
+        schemes: dict | None = None,  # The schemes section: each logical scheme's parts, target and rules
+        stages: dict | None = None,  # The stages section: for each logical URI, stage names and their selectors
+        tenant: str | None = None,  # The tenant of the catalog; a scheme with tenant: refuses another tenant's URIs. None serves every tenant
+        entries: dict | None = None,  # The entries section: targets for one logical name or a prefix
+        refs_in_path: Callable[[str], bool | None] | None = None,  # Given a store name: False for a bucket, which keeps only branches in its path, True for a store such as lakeFS, None for a name it does not know. None takes every store to keep refs in its path
+    ):
         self.tenant = tenant
         self.refs_in_path = refs_in_path
         self.specs = {n: SchemeSpec.from_config(n, s) for n, s in (schemes or {}).items()}
@@ -364,7 +382,11 @@ class TemplateResolver(Resolver):
                 raise ResolveError(f"stages.{key} must be a mapping of stage name to selector")
             self.stages[canon] = pointers
 
-    def handles(self, scheme: str) -> bool:
+    def handles(
+        self,
+        scheme: str,  # A URI scheme
+    ) -> bool:  # Whether the schemes section names it
+        """Tell whether scheme is one of the configured logical schemes."""
         return scheme in self.specs
 
     def _bucket(self, store: str) -> bool:
@@ -385,8 +407,11 @@ class TemplateResolver(Resolver):
             raise ResolveError(f"stage {name!r} for {key} points at another stage")
         return sel
 
-    def serves(self, uri: Uri) -> bool:
-        """False for a URI that names another tenant, which this resolver refuses."""
+    def serves(
+        self,
+        uri: Uri,  # A logical URI
+    ) -> bool:  # False when it names another tenant than this resolver's
+        """Tell whether this resolver serves a URI; it refuses one of another tenant."""
         spec = self.specs.get(uri.scheme)
         if self.tenant is None or spec is None or not spec.tenant:
             return True
@@ -401,7 +426,11 @@ class TemplateResolver(Resolver):
                 return entry
         return None
 
-    def resolve(self, uri: Uri) -> Resolution:
+    def resolve(
+        self,
+        uri: Uri,  # A logical URI of a configured scheme
+    ) -> Resolution:  # The physical URI from the entry or the template, and the steps taken; ResolveError when the URI does not fit
+        """Resolve a URI through the entry with the longest matching key, or else the template of its scheme. A stage: selector becomes the selector it points at."""
         spec = self.specs.get(uri.scheme)
         if spec is None:
             raise ResolveError(f"no logical scheme {uri.scheme!r} in the configuration")

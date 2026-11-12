@@ -60,6 +60,8 @@ from ..uri import Selector, Uri
 from . import Entry, Store, register_driver
 from .github import _split_ts
 
+__all__ = []
+
 _SHA = re.compile(r"[0-9a-f]{40}")
 _SHORT_SHA = re.compile(r"[0-9a-f]{7,40}")
 _KINDS = {"models": "model", "datasets": "dataset", "spaces": "space"}

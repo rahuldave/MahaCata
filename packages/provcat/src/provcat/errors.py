@@ -1,5 +1,9 @@
 """Errors raised by provcat. Every error is a ProvcatError."""
 
+__all__ = [
+    "ProvcatError", "UriError", "ConfigError", "ResolveError", "StoreError", "NotFound", "OfflineMiss",
+]
+
 
 class ProvcatError(Exception):
     """Base class for every provcat error."""

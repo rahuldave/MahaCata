@@ -13,8 +13,8 @@ A configuration is a dict with up to seven sections:
 - ``admin``: ``{stores: ..., stages: ..., entries: ..., cache: ...}``, the part that only the
   admin sees, such as a store with keys that read every tenant's data.
 
-``view(cfg, tenant)`` gives the configuration that one tenant sees: the shared
-sections and that tenant's part. With no tenant it gives the admin's view, the
+The view of one tenant, which ``ConfigSource.load(tenant)`` gives, is the shared
+sections and that tenant's part. With no tenant it is the admin's view, the
 shared sections, the admin part and every tenant's part. A tenant may name only its own
 stores, stages and entries, so that no tenant can take over another's. Each scheme that
 names its tenant part, with ``tenant: org``, says whose a URI is.
@@ -48,6 +48,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 
 from .errors import ConfigError
+
+__all__ = ["View", "ConfigSource", "EmptyConfig", "YamlConfig", "EtcdConfig", "open_config"]
 
 SECTIONS = ("stores", "schemes", "stages", "entries", "cache", "tenants", "admin")
 TENANT_SECTIONS = ("stores", "stages", "entries", "cache")
@@ -137,10 +139,13 @@ def _check_part(cfg: dict, name: str, part: dict, where: str) -> None:
 
 
 class View(dict):
-    """A configuration cut down to one view. ``tenant`` says whose: None is
-    the admin's."""
+    """A configuration dict cut down to one view, with a ``tenant`` attribute that says whose."""
 
-    def __init__(self, cfg: dict, tenant: str | None):
+    def __init__(
+        self,
+        cfg: dict,  # The sections of the view
+        tenant: str | None,  # The tenant whose view it is; None for the admin's
+    ):
         super().__init__(cfg)
         self.tenant = tenant
 
@@ -200,43 +205,67 @@ def _interpolate(cfg: dict, where: str) -> dict:
 
 
 class ConfigSource(ABC):
-    location: str
+    """Where a configuration comes from: the interface of a configuration source.
+
+    A source gives the configuration as written, ``raw()``, or as one tenant
+    sees it, ``load()``."""
+
+    location: str  # Where the configuration lives, as error messages name it: a path or an etcd:// URL
 
     @abstractmethod
-    def raw(self) -> dict:
+    def raw(self) -> dict:  # The configuration as written, with every ${...} left in
         """Return the whole configuration as written."""
 
-    def raw_for(self, tenant: str | None) -> dict:
-        """The configuration as written, with at least the shared sections
-        and the tenant's part. A source may leave out other tenants."""
+    def raw_for(
+        self,
+        tenant: str | None,  # The tenant to read for; None for the admin, who reads everything
+    ) -> dict:  # The configuration as written, with the shared sections and the tenant's part
+        """Read the configuration as written, for one tenant. A source may leave out other tenants."""
         return self.raw()
 
-    def load(self, tenant: str | None = None) -> View:
-        """The configuration that the tenant sees, with ${...} values filled
-        in. With no tenant, the admin's view of every tenant. The view is cut
-        first, so a ${...} in another tenant's part is never read, and a
-        tenant's part cannot reach into another part."""
+    def load(
+        self,
+        tenant: str | None = None,  # The tenant whose view to load; None for the admin's view
+    ) -> View:  # The tenant's view, with every ${...} filled in
+        """Load the configuration that a tenant sees, with its ${...} values filled in.
+
+        The admin's view holds every tenant's part. The view is cut first, so
+        a ${...} in another tenant's part is never read, and a tenant's part
+        cannot reach into another part."""
         tenant = tenant or None
         cut = view(self.raw_for(tenant), tenant, self.location)
         return View(check(_interpolate(dict(cut), self.location), self.location), tenant)
 
-    def save(self, cfg: dict) -> None:
+    def save(
+        self,
+        cfg: dict,  # The whole configuration, as written
+    ) -> None:  # Replaces the stored configuration
+        """Replace the stored configuration. A source that cannot be written, as this one, raises ConfigError."""
         raise ConfigError(f"{self.location} is read-only")
 
 
 class EmptyConfig(ConfigSource):
+    """No configuration: the catalog has only the default stores."""
+
     location = "(built-in defaults)"
 
-    def raw(self) -> dict:
+    def raw(self) -> dict:  # An empty configuration
+        """Return an empty configuration."""
         return {}
 
 
 class YamlConfig(ConfigSource):
-    def __init__(self, path: str | Path):
+    """Configuration in a YAML file, read with PyYAML. It cannot be saved."""
+
+    def __init__(
+        self,
+        path: str | Path,  # The YAML file
+    ):
         self.path = Path(path)
         self.location = str(self.path)
 
-    def raw(self) -> dict:
+    def raw(self) -> dict:  # The configuration as the file holds it
+        """Read and check the file. ConfigError when it is missing or bad."""
         import yaml
 
         if not self.path.is_file():
@@ -251,7 +280,11 @@ class YamlConfig(ConfigSource):
 class EtcdConfig(ConfigSource):
     """Configuration in etcd, addressed as ``etcd://host:port/prefix``."""
 
-    def __init__(self, url: str, timeout: float = 5.0):
+    def __init__(
+        self,
+        url: str,  # etcd://host:port/prefix; the port defaults to 2379, and the prefix may be empty
+        timeout: float = 5.0,  # Seconds to wait for each request to etcd
+    ):
         if not url.startswith("etcd://"):
             raise ConfigError(f"etcd config must start with etcd://, got {url!r}")
         hostport, _, prefix = url[len("etcd://"):].partition("/")
@@ -285,7 +318,11 @@ class EtcdConfig(ConfigSource):
     def _b64(text: str) -> str:
         return base64.b64encode(text.encode()).decode()
 
-    def get(self, key: str) -> str | None:
+    def get(
+        self,
+        key: str,  # The full etcd key, prefix included
+    ) -> str | None:  # The value stored under the key; None when there is none or it is empty
+        """Read one key from etcd."""
         out = self._call("range", {"key": self._b64(key)})
         kvs = out.get("kvs") or []
         if not kvs:
@@ -340,7 +377,8 @@ class EtcdConfig(ConfigSource):
                 cfg[section] = value
         return cfg
 
-    def raw(self) -> dict:
+    def raw(self) -> dict:  # The shared sections, every tenant's part and the admin part, checked
+        """Read the whole configuration from etcd."""
         cfg = self._shared()
         names = self._tenant_names()
         if names:
@@ -350,7 +388,11 @@ class EtcdConfig(ConfigSource):
             cfg["admin"] = admin
         return check(cfg, self.location)
 
-    def raw_for(self, tenant: str | None) -> dict:
+    def raw_for(
+        self,
+        tenant: str | None,  # The tenant to read for; None for the admin, who reads everything
+    ) -> dict:  # The shared sections and the tenant's part alone, checked
+        """Read only the shared keys and the tenant's, so etcd's access control can keep the tenants apart."""
         if tenant is None:
             return self.raw()
         # Only the shared keys and this tenant's, so that etcd's access control
@@ -362,7 +404,13 @@ class EtcdConfig(ConfigSource):
         cfg["tenants"] = {tenant: part} if part is not None else {}
         return check(cfg, self.location)
 
-    def save(self, cfg: dict) -> None:
+    def save(
+        self,
+        cfg: dict,  # The whole configuration, as written, with any ${...} left in
+    ) -> None:  # Writes it to etcd
+        """Replace every section in one etcd transaction, and delete the sections and tenants that cfg does not have.
+
+        The configuration must load again for every tenant. ConfigError when etcd refuses."""
         cfg = check(cfg, "config to save")
         view(cfg, None, "config to save")  # every part must load again
         ops = []
@@ -405,7 +453,9 @@ class EtcdConfig(ConfigSource):
             raise ConfigError(f"etcd at {self.base} refused the update")
 
 
-def open_config(spec: str | None = None) -> ConfigSource:
+def open_config(
+    spec: str | None = None,  # A YAML path or an etcd://host:port/prefix URL
+) -> ConfigSource:  # An EtcdConfig, a YamlConfig or an EmptyConfig
     """Pick a config source.
 
     The order is: the given spec, then PROVCAT_CONFIG, then ./provcat.yaml if it

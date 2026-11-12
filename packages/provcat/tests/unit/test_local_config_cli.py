@@ -66,6 +66,20 @@ def test_yaml_interpolates_environment(tmp_path, monkeypatch):
     assert YamlConfig(f).load()["stores"]["s3"]["endpoint_url"] == "http://e:1"
 
 
+
+def test_yaml_interpolates_any_reference_not_only_the_environment(tmp_path):
+    # The load() docment says every ${...} is filled in.
+    f = tmp_path / "c.yaml"
+    f.write_text("cache:\n  root: /tmp/x\nstores:\n  data:\n    driver: file\n    root: ${cache.root}\n")
+    assert YamlConfig(f).load()["stores"]["data"]["root"] == "/tmp/x"
+
+
+def test_bad_arguments_exit_with_status_2(capsys):
+    # The main() docment says argparse raises SystemExit(2).
+    with pytest.raises(SystemExit) as e:
+        main(["no-such-command"])
+    assert e.value.code == 2
+
 def test_ls_into_a_closed_pipe(tmp_path):
     # Second review, finding 9: only cat handled a closed pipe.
     import subprocess

@@ -21,6 +21,8 @@ from ..errors import NotFound, StoreError, UriError
 from ..uri import Uri
 from . import Entry, Store, register_driver
 
+__all__ = []
+
 
 @register_driver
 class LocalStore(Store):

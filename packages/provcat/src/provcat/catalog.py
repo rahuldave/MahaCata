@@ -39,6 +39,7 @@ import os
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from . import hooks as _hooks
 from .cache import LocalCache, snapshot
@@ -50,26 +51,44 @@ from .resolver import Resolution, Resolver, TemplateResolver
 from .stores import DEFAULT_STORES, Entry, Store, make_store
 from .uri import Selector, Uri, parse
 
+if TYPE_CHECKING:
+    from .fs import CatalogFileSystem
+
+__all__ = ["Catalog", "Snapshot"]
+
 
 @dataclass(frozen=True)
 class Snapshot:
     """A read-only copy of one pinned version of a file or a folder."""
 
-    uri: Uri  # as asked for
-    pinned: Uri  # the physical URI, pinned to a version where the store has versions
-    path: Path
-    digest: str  # the SHA-256 of the file, or of the folder (see cache.tree_digest)
+    uri: Uri  # The URI as asked for, logical or physical
+    pinned: Uri  # The physical URI, pinned to a fixed version; a file:// URI pins to itself
+    path: Path  # The read-only copy, at .provcat/snapshots/KIND/DIGEST/NAME in the cache
+    digest: str  # The SHA-256 of the file, or of the folder (see cache.tree_digest)
     kind: str  # "file" or "folder"
 
 
 class Catalog:
-    def __init__(self, config: dict | None = None, *, cache_root: str | Path | None = None,
-                 offline: bool = False, resolver: Resolver | None = None, tenant: str | None = None,
-                 app: str | None = None, hooks: Hooks | Proxy | dict | None = None,
-                 principal: str | None = None):
+    """Resolve, read and write catalog URIs, through the stores, the cache and the hooks.
+
+    Most code opens one with ``Catalog.open``, which reads a configuration
+    source. The constructor takes the configuration as a dict."""
+
+    def __init__(
+        self,
+        config: dict | None = None,  # The configuration: stores, schemes, stages, entries, cache, tenants; None for the default stores alone
+        *,
+        cache_root: str | Path | None = None,  # The cache folder; None takes the app's cache_root, then cache.root, then the default
+        offline: bool = False,  # Work from the cache alone: what it does not hold raises OfflineMiss
+        resolver: Resolver | None = None,  # The resolver of logical URIs; None makes a TemplateResolver from the configuration
+        tenant: str | None = None,  # The tenant whose view of the configuration to use; None for the admin
+        app: str | None = None,  # The app whose hooks run. Without hooks= or principal=, it must be the process's app, from PROVCAT_APP, or None for that app. With hooks= or principal=, it names the caller's app; an app that the hooks file names needs its Proxy from hooks.load
+        hooks: Hooks | Proxy | dict | None = None,  # A caller's own hooks: a Hooks, a Proxy from hooks.load, or a dict of spot to hooks; the process's hooks run after them
+        principal: str | None = None,  # Who uses the catalog, as the hooks see it; None for the user of the process. As with hooks=, a process launched with PROVCAT_APP refuses it with ConfigError
+    ):
         tenant = tenant or None
         if hooks is not None or principal is not None:
-            # A caller such as an orchestrator brings hooks or a principal; the process's hooks run first.
+            # A caller such as an orchestrator brings hooks or a principal; the process's hooks run last.
             proxy = _hooks.given(hooks, app)
             self.app = proxy.app
         else:
@@ -112,7 +131,7 @@ class Catalog:
         store = self.stores.get(name)
         return None if store is None else getattr(store, "refs_in_path", True)
 
-    def close(self) -> None:
+    def close(self) -> None:  # Nothing; a hook at close may still raise
         """End the session: the hooks at the session spot see event close."""
         self._run("session", None, None, lambda r: None, event="close")
 
@@ -132,18 +151,30 @@ class Catalog:
         return self.hooks.run(self.context, Request(spot, logical, physical, args), work)
 
     @classmethod
-    def open(cls, spec: str | ConfigSource | None = None, *, tenant: str | None = None, **kw) -> Catalog:
-        """Open a configuration source. The tenant comes from the argument or
-        PROVCAT_TENANT; with none, the catalog is the admin's."""
+    def open(
+        cls,
+        spec: str | ConfigSource | None = None,  # A YAML path, an etcd:// URL or a ConfigSource; None takes PROVCAT_CONFIG, then ./provcat.yaml, then the defaults
+        *,
+        tenant: str | None = None,  # The tenant; None takes PROVCAT_TENANT, and with none the catalog is the admin's
+        **kw: Any,  # The other arguments of Catalog, such as offline, cache_root, app and hooks
+    ) -> Catalog:  # A catalog over the configuration that the source loads for the tenant
+        """Open a catalog over a configuration source: a YAML file, etcd, or the defaults.
+
+        The other keyword arguments go to Catalog, such as offline, cache_root,
+        resolver, app, hooks and principal."""
         if tenant is None:
             tenant = os.environ.get("PROVCAT_TENANT")
         tenant = tenant or None
         source = spec if isinstance(spec, ConfigSource) else open_config(spec)
         return cls(source.load(tenant), tenant=tenant, **kw)
 
-    def resolve(self, uri: str | Uri) -> Resolution:
-        """The physical URI of uri. A logical URI runs the resolve spot; a
-        physical one is its own answer."""
+    def resolve(
+        self,
+        uri: str | Uri,  # The URI to resolve, logical or physical
+    ) -> Resolution:  # The logical URI, the physical URI it names, and the steps between
+        """Find the physical URI that a URI names.
+
+        A logical URI runs the resolve spot; a physical one is its own answer."""
         u = parse(uri)
         if u.scheme in self.stores:
             return Resolution(u, u)
@@ -186,24 +217,43 @@ class Catalog:
             u = self._pin(logical, u)
         return self._run("fetch", logical, u, lambda r: self._driver(r.physical).fetch(r.physical, self.cache))
 
-    def pin(self, uri: str | Uri) -> Uri:
+    def pin(
+        self,
+        uri: str | Uri,  # The URI to pin, logical or physical
+    ) -> Uri:  # The physical URI, with any branch or time replaced by a fixed version; StoreError where the store cannot pin, as for a file in a bucket without versioning or a bucket folder with no provcat commit
+        """Resolve uri and replace its moving name with a fixed version. It runs the pin spot."""
         return self._pin(*self._store(uri))
 
-    def stat(self, uri: str | Uri) -> Entry:
+    def stat(
+        self,
+        uri: str | Uri,  # The URI of a file or a folder, logical or physical
+    ) -> Entry:  # The file or the folder; NotFound when there is none
+        """Describe one file or folder: its kind, size and version. It runs the stat spot."""
         logical, u = self._store(uri)
         return self._run("stat", logical, u, lambda r: self._driver(r.physical).stat(r.physical, self.cache))
 
-    def list(self, uri: str | Uri) -> list[Entry]:
+    def list(
+        self,
+        uri: str | Uri,  # The URI of a folder, logical or physical
+    ) -> list[Entry]:  # The files and folders directly inside it
+        """List a folder, one level deep. It runs the list spot."""
         logical, u = self._store(uri)
         return self._run("list", logical, u, lambda r: self._driver(r.physical).list(r.physical, self.cache))
 
-    def fetch(self, uri: str | Uri) -> Path:
+    def fetch(
+        self,
+        uri: str | Uri,  # The URI of a file or a folder, logical or physical
+    ) -> Path:  # A local path that holds it: a copy in the cache, or for file:// the file itself
         """Return a local path that holds the file or folder."""
         return self._fetch(*self._store(uri))
 
-    def snapshot(self, uri: str | Uri) -> Snapshot:
-        """Pin uri, fetch that version, and copy it into a read-only folder of
-        the cache that no later fetch changes. The URI must be pinnable: a file
+    def snapshot(
+        self,
+        uri: str | Uri,  # The URI of a file or a folder, logical or physical
+    ) -> Snapshot:  # The pinned URI, the read-only copy, its digest and its kind
+        """Pin a URI, fetch that version, and copy it into a read-only folder of the cache.
+
+        No later fetch changes the copy. The URI must be pinnable: a file
         or folder in lakeFS or GitHub, a file in a versioned bucket, a folder
         with a provcat commit, or a local file or folder. The file store pins a URI to
         itself; the digest still names the bytes. An object store without
@@ -221,13 +271,22 @@ class Catalog:
 
         return self._run("snapshot", logical, physical, work)
 
-    def read(self, uri: str | Uri) -> bytes:
+    def read(
+        self,
+        uri: str | Uri,  # The URI of a file, logical or physical
+    ) -> bytes:  # The bytes of the file; IsADirectoryError for a folder
+        """Fetch a file and return its bytes."""
         p = self.fetch(uri)
         if p.is_dir():
             raise IsADirectoryError(f"{uri} is a folder")
         return p.read_bytes()
 
-    def open_file(self, uri: str | Uri, mode: str = "rb", autocommit: bool = True) -> CatalogReader | CatalogWriter:
+    def open_file(
+        self,
+        uri: str | Uri,  # The URI of the file, logical or physical; a write takes a branch
+        mode: str = "rb",  # "rb" to read, "wb" to write; any other mode raises ValueError
+        autocommit: bool = True,  # For a write: True puts the file at close; False puts nothing until the caller calls the handle's commit()
+    ) -> CatalogReader | CatalogWriter:  # A CatalogReader for "rb", a CatalogWriter for "wb"
         """Open a file to read ("rb") or to write ("wb").
 
         A read looks up and pins uri once, at open, and then reads only that
@@ -282,11 +341,15 @@ class Catalog:
                 h.abandon()
             raise
 
-    def fs(self, register: bool = True, replace: bool = False):
-        """An fsspec file system over this catalog; it needs provcat[fs].
-        With register, the logical schemes become fsspec protocols, so
-        fsspec.open and pandas take logical URIs. replace takes a scheme over
-        from a catalog with another context or other hooks (see provcat.fs)."""
+    def fs(
+        self,
+        register: bool = True,  # Register the logical schemes of the catalog as fsspec protocols
+        replace: bool = False,  # Take a scheme over from a catalog that registered it with another context or other hooks
+    ) -> CatalogFileSystem:  # A file system that reads and writes through this catalog
+        """Make an fsspec file system over this catalog; it needs provcat[fs].
+
+        Once the logical schemes are fsspec protocols, fsspec.open and pandas
+        take logical URIs (see provcat.fs)."""
         from .fs import CatalogFileSystem
 
         return CatalogFileSystem.over(self, register=register, replace=replace)
@@ -312,10 +375,15 @@ class Catalog:
     def _put(self, logical: Uri | None, u: Uri, f: Path) -> Entry:
         return self._run("put", logical, u, lambda r: self._driver(r.physical).put(r.physical, f, self.cache))
 
-    def put(self, uri: str | Uri, src: str | Path | bytes) -> list[Entry]:
-        """Write a local file, a local folder or bytes at uri, and return the
-        Entries written. A folder is written file by file under uri, and each
-        file runs the put spot."""
+    def put(
+        self,
+        uri: str | Uri,  # Where to write, logical or physical, on a branch
+        src: str | Path | bytes,  # A local file, a local folder, or the bytes to write
+    ) -> list[Entry]:  # One Entry for each file written
+        """Write a local file, a local folder or bytes at a URI on a branch.
+
+        A folder is written file by file under the URI, and each file runs the
+        put spot."""
         logical, u = self._writable(uri)
         if isinstance(src, bytes):
             with tempfile.TemporaryDirectory() as d:
@@ -338,7 +406,11 @@ class Catalog:
             plan.append((name, target, f))
         return [self._put(name, target, f) for name, target, f in plan]
 
-    def delete(self, uri: str | Uri) -> None:
+    def delete(
+        self,
+        uri: str | Uri,  # The file to delete, logical or physical, on a branch
+    ) -> None:  # Nothing; it runs the delete spot
+        """Delete a file on a branch."""
         logical, u = self._writable(uri)
         self._run("delete", logical, u, lambda r: self._driver(r.physical).delete(r.physical, self.cache))
 
@@ -348,10 +420,16 @@ class Catalog:
             raise StoreError(f"{u}: store {store.name} ({store.driver}) has no {what}")
         return store
 
-    def commit(self, uri: str | Uri, message: str, metadata: dict[str, str] | None = None) -> Uri:
-        """Commit the branch that uri is on, and return the physical URI pinned
-        to the new commit. The metadata records where the commit came from: a
-        logical URI adds provcat.uri."""
+    def commit(
+        self,
+        uri: str | Uri,  # A URI on the branch to commit, logical or physical
+        message: str,  # The commit message
+        metadata: dict[str, str] | None = None,  # Key-value pairs stored with the commit
+    ) -> Uri:  # The physical URI of uri, pinned to the new commit
+        """Commit the branch that a URI is on. It runs the commit spot.
+
+        The metadata records where the commit came from: a logical URI adds
+        provcat.uri. A store without commits raises StoreError."""
         logical, u = self._writable(uri)
         self._history("commit", u, "commits")
         meta = dict(metadata or {})
@@ -360,18 +438,29 @@ class Catalog:
         return self._run("commit", logical, u, lambda r: self._driver(r.physical).commit(
             r.physical, r.args["message"], r.args["metadata"]), message=message, metadata=meta)
 
-    def branch(self, uri: str | Uri, source: str) -> Uri:
-        """Make the branch that uri names, from source: a branch, a tag or a commit."""
+    def branch(
+        self,
+        uri: str | Uri,  # A URI on the branch to make, logical or physical
+        source: str,  # The branch, tag or commit that the new branch starts from
+    ) -> Uri:  # The physical URI of the new branch
+        """Make the branch that a URI names. A store without branches raises StoreError."""
         logical, u = self._writable(uri)
         self._history("branch", u, "branches")
         return self._run("branch", logical, u, lambda r: self._driver(r.physical).branch(
             r.physical, r.args["source"]), source=source)
 
-    def merge(self, uri: str | Uri, source: str, message: str = "", metadata: dict[str, str] | None = None,
-              strategy: str | None = None) -> Uri:
-        """Merge source, a branch, a tag or a commit, into the branch that uri
-        is on, and return the physical URI pinned to the merge commit. As with
-        commit, a logical URI adds provcat.uri to the metadata."""
+    def merge(
+        self,
+        uri: str | Uri,  # A URI on the branch to merge into, logical or physical
+        source: str,  # The branch, tag or commit to merge from
+        message: str = "",  # The message of the merge commit
+        metadata: dict[str, str] | None = None,  # Key-value pairs stored with the merge commit
+        strategy: str | None = None,  # How a conflict is settled: None fails, "source-wins" or "dest-wins"
+    ) -> Uri:  # The physical URI of uri, pinned to the merge commit
+        """Merge a branch, a tag or a commit into the branch that a URI is on.
+
+        As with commit, a logical URI adds provcat.uri to the metadata. A store
+        without merges raises StoreError."""
         logical, u = self._writable(uri)
         self._history("merge", u, "merges")
         meta = dict(metadata or {})
